@@ -1,24 +1,21 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
-import { ChatOut, MessageOut, UserOut, chatApi, getFileUrl } from "../services/api";
+import React, { useEffect, useRef, useState } from "react";
+import { ChatOut, MessageOut, UserOut, chatApi } from "../services/api";
 import { wsService } from "../services/ws";
 import { playMessageSound } from "../services/sounds";
-import VideoCall from "./VideoCall";
 import EmojiPicker from "./EmojiPicker";
 
 interface Props {
   chat: ChatOut;
   currentUser: UserOut;
-  incomingCall: { chatId: number; fromUserId: number } | null;
-  onCallEnd: () => void;
+  onStartCall: () => void;
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-export default function ChatArea({ chat, currentUser, incomingCall, onCallEnd }: Props) {
+export default function ChatArea({ chat, currentUser, onStartCall }: Props) {
   const [messages, setMessages] = useState<MessageOut[]>([]);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
-  const [inCall, setInCall] = useState(false);
   const [typingUsers, setTypingUsers] = useState<Map<number, string>>(new Map());
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<MessageOut[] | null>(null);
@@ -35,7 +32,6 @@ export default function ChatArea({ chat, currentUser, incomingCall, onCallEnd }:
 
   useEffect(() => {
     setMessages([]);
-    setInCall(false);
     setReplyTo(null);
     setEditingMsg(null);
     setSearchResults(null);
@@ -43,13 +39,6 @@ export default function ChatArea({ chat, currentUser, incomingCall, onCallEnd }:
     setTypingUsers(new Map());
     loadMessages();
   }, [chat.id]);
-
-  // Auto-open call when incoming call is accepted
-  useEffect(() => {
-    if (incomingCall) {
-      setInCall((prev) => prev ? prev : true);
-    }
-  }, [incomingCall]);
 
   useEffect(() => {
     const handler = (data: any) => {
@@ -246,7 +235,7 @@ export default function ChatArea({ chat, currentUser, incomingCall, onCallEnd }:
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button style={s.headerBtn} title="Поиск" onClick={() => setShowSearch(!showSearch)}>🔍</button>
-          <button style={s.headerBtn} title="Видеозвонок" onClick={() => setInCall(true)}>📹</button>
+          <button style={s.headerBtn} title="Видеозвонок" onClick={onStartCall}>📹</button>
         </div>
       </div>
 
@@ -264,16 +253,6 @@ export default function ChatArea({ chat, currentUser, incomingCall, onCallEnd }:
             <button style={s.searchClose} onClick={() => { setSearchResults(null); setSearchQuery(""); }}>✕</button>
           )}
         </div>
-      )}
-
-      {/* Video call overlay */}
-      {inCall && (
-        <VideoCall
-          chat={chat}
-          currentUser={currentUser}
-          initiator={!incomingCall}
-          onEnd={() => { setInCall(false); onCallEnd(); }}
-        />
       )}
 
       {/* Messages */}

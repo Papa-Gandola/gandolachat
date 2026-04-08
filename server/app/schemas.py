@@ -48,6 +48,7 @@ class ChatOut(BaseModel):
     id: int
     name: str | None
     is_group: bool
+    created_by: int | None = None
     members: list[UserOut]
     last_message: MessageOut | None = None
 

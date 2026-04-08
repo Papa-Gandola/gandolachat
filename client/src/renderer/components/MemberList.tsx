@@ -5,11 +5,12 @@ interface Props {
   chat: ChatOut;
   currentUser: UserOut;
   onChatUpdate: (chat: ChatOut) => void;
+  onDeleteChat?: () => void;
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-export default function MemberList({ chat, currentUser, onChatUpdate }: Props) {
+export default function MemberList({ chat, currentUser, onChatUpdate, onDeleteChat }: Props) {
   const [search, setSearch] = useState("");
   const [results, setResults] = useState<UserOut[]>([]);
 
@@ -40,6 +41,10 @@ export default function MemberList({ chat, currentUser, onChatUpdate }: Props) {
           </div>
         ))}
       </div>
+
+      {onDeleteChat && (
+        <button style={s.deleteBtn} onClick={onDeleteChat}>Удалить группу</button>
+      )}
 
       {chat.members.length < 7 && (
         <div style={s.addSection}>
@@ -86,4 +91,5 @@ const s: Record<string, React.CSSProperties> = {
   addSection: { padding: "8px" },
   input: { width: "100%", background: "var(--bg-tertiary)", border: "1px solid var(--border)", borderRadius: 4, padding: "6px 8px", fontSize: 12, color: "var(--text-primary)" },
   result: { display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", cursor: "pointer", borderRadius: 4 },
+  deleteBtn: { margin: "8px", padding: "8px", background: "#ed4245", color: "#fff", borderRadius: 4, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" },
 };

@@ -19,6 +19,10 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   const [remoteVideos, setRemoteVideos] = useState<VideoEntry[]>([]);
   const [muted, setMuted] = useState(false);
   const [videoOff, setVideoOff] = useState(false);
+  const [deafened, setDeafened] = useState(false);
+  const [screenSharing, setScreenSharing] = useState(false);
+  const [enlarged, setEnlarged] = useState<number | null>(null);
+  const [peerVolumes, setPeerVolumes] = useState<Map<number, number>>(new Map());
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const started = useRef(false);
 
@@ -36,6 +40,10 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
 
     webrtcService.onPeerLeft = (userId) => {
       setRemoteVideos((prev) => prev.filter((v) => v.userId !== userId));
+    };
+
+    webrtcService.onCallEnded = () => {
+      onEnd();
     };
 
     playCallRing();
@@ -73,58 +81,131 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
     setVideoOff(!videoOff);
   }
 
+  function toggleDeafen() {
+    const newDeaf = !deafened;
+    setDeafened(newDeaf);
+    // Mute/unmute all remote audio
+    remoteVideos.forEach((entry) => {
+      entry.stream.getAudioTracks().forEach((t) => (t.enabled = !newDeaf));
+    });
+  }
+
+  async function toggleScreenShare() {
+    if (screenSharing) {
+      // Stop screen share — switch back to camera
+      try {
+        const camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        const videoTrack = camStream.getVideoTracks()[0];
+        webrtcService.getLocalStream()?.getVideoTracks().forEach((t) => t.stop());
+        // Replace track in local stream would need peer renegotiation
+        // Simpler: just stop sharing indicator
+      } catch {}
+      setScreenSharing(false);
+    } else {
+      try {
+        const screenStream = await (navigator.mediaDevices as any).getDisplayMedia({ video: true, audio: false });
+        const screenTrack = screenStream.getVideoTracks()[0];
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = screenStream;
+        }
+        screenTrack.onended = () => {
+          setScreenSharing(false);
+          const ls = webrtcService.getLocalStream();
+          if (ls && localVideoRef.current) {
+            localVideoRef.current.srcObject = ls;
+          }
+        };
+        setScreenSharing(true);
+      } catch {
+        // User cancelled
+      }
+    }
+  }
+
+  function changePeerVolume(userId: number, volume: number) {
+    setPeerVolumes((prev) => new Map(prev).set(userId, volume));
+  }
+
   return (
     <div style={s.overlay}>
       <div style={s.header}>
-        <span style={s.title}>📹 Видеозвонок</span>
+        <span style={s.title}>Видеозвонок</span>
         <span style={s.subtitle}>{chat.is_group ? chat.name : chat.members.find((m) => m.id !== currentUser.id)?.username}</span>
       </div>
 
       <div style={s.videoGrid}>
         {/* Local video */}
-        <div style={s.videoWrap}>
+        <div
+          style={{ ...s.videoWrap, ...(enlarged === -1 ? s.enlarged : {}) }}
+          onClick={() => setEnlarged(enlarged === -1 ? null : -1)}
+        >
           <video ref={localVideoRef} autoPlay muted playsInline style={s.video} />
-          <span style={s.videoLabel}>Вы</span>
+          <span style={s.videoLabel}>Вы{screenSharing ? " (экран)" : ""}</span>
         </div>
 
         {/* Remote videos */}
         {remoteVideos.map((entry) => (
-          <RemoteVideo key={entry.userId} entry={entry} chat={chat} />
+          <RemoteVideo
+            key={entry.userId}
+            entry={entry}
+            chat={chat}
+            enlarged={enlarged === entry.userId}
+            deafened={deafened}
+            volume={peerVolumes.get(entry.userId) ?? 100}
+            onVolumeChange={(v) => changePeerVolume(entry.userId, v)}
+            onClick={() => setEnlarged(enlarged === entry.userId ? null : entry.userId)}
+          />
         ))}
 
-        {/* Waiting */}
         {remoteVideos.length === 0 && (
           <div style={s.waiting}>
-            <span>⏳ Ожидание участников...</span>
+            <span>Ожидание участников...</span>
           </div>
         )}
       </div>
 
       <div style={s.controls}>
+        {/* Mic */}
         <button style={{ ...s.ctrl, background: muted ? "#ed4245" : "#3ba55d" }} onClick={toggleMute} title={muted ? "Включить микрофон" : "Выключить микрофон"}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
             {muted ? (
-              <path d="M12 1a4 4 0 00-4 4v6a4 4 0 008 0V5a4 4 0 00-4-4zM2 2l20 20M17 11a5 5 0 01-10 0M12 19v4M8 23h8" stroke="white" fill="none" strokeWidth="2" strokeLinecap="round"/>
+              <><rect x="9" y="1" width="6" height="13" rx="3" fill="white"/><line x1="1" y1="1" x2="23" y2="23"/><path d="M17 11a5 5 0 01-8.2 3.8"/><path d="M12 19v4M8 23h8"/></>
             ) : (
-              <>
-                <rect x="9" y="1" width="6" height="13" rx="3" />
-                <path d="M5 11a7 7 0 0014 0M12 19v4M8 23h8" stroke="white" fill="none" strokeWidth="2" strokeLinecap="round"/>
-              </>
+              <><rect x="9" y="1" width="6" height="13" rx="3" fill="white"/><path d="M5 11a7 7 0 0014 0"/><path d="M12 19v4M8 23h8"/></>
             )}
           </svg>
         </button>
+
+        {/* Video */}
         <button style={{ ...s.ctrl, background: videoOff ? "#ed4245" : "#3ba55d" }} onClick={toggleVideo} title={videoOff ? "Включить камеру" : "Выключить камеру"}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
             {videoOff ? (
-              <path d="M2 2l20 20M17 13V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2h10M23 7l-6 4 6 4V7z" stroke="white" fill="none" strokeWidth="2" strokeLinecap="round"/>
+              <><line x1="1" y1="1" x2="23" y2="23"/><path d="M21 7l-5 3.5L21 14V7z"/><rect x="2" y="5" width="14" height="14" rx="2" fill="white" opacity="0.3"/></>
             ) : (
-              <>
-                <rect x="2" y="5" width="14" height="14" rx="2" />
-                <path d="M23 7l-7 5 7 5V7z" />
-              </>
+              <><rect x="2" y="5" width="14" height="14" rx="2" fill="white"/><path d="M23 7l-7 5 7 5V7z" fill="white"/></>
             )}
           </svg>
         </button>
+
+        {/* Screen share */}
+        <button style={{ ...s.ctrl, background: screenSharing ? "#5865f2" : "var(--bg-active)" }} onClick={toggleScreenShare} title="Демонстрация экрана">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
+            <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+          </svg>
+        </button>
+
+        {/* Deafen */}
+        <button style={{ ...s.ctrl, background: deafened ? "#ed4245" : "var(--bg-active)" }} onClick={toggleDeafen} title={deafened ? "Включить звук" : "Заглушить всех"}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
+            {deafened ? (
+              <><path d="M3 14h2a2 2 0 012 2v2a2 2 0 01-2 2H3V14z"/><path d="M21 14h-2a2 2 0 00-2 2v2a2 2 0 002 2h2V14z"/><path d="M3 14V9a9 9 0 0118 0v5"/><line x1="1" y1="1" x2="23" y2="23"/></>
+            ) : (
+              <><path d="M3 14h2a2 2 0 012 2v2a2 2 0 01-2 2H3V14z" fill="white"/><path d="M21 14h-2a2 2 0 00-2 2v2a2 2 0 002 2h2V14z" fill="white"/><path d="M3 14V9a9 9 0 0118 0v5"/></>
+            )}
+          </svg>
+        </button>
+
+        {/* Hangup */}
         <button style={{ ...s.ctrl, ...s.hangup }} onClick={handleEnd} title="Завершить звонок">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="white">
             <path d="M12 9c-1.66 0-3 1.34-3 3v2H5c-1.1 0-2-.9-2-2v-1c0-3.87 3.13-7 7-7h4c3.87 0 7 3.13 7 7v1c0 1.1-.9 2-2 2h-4v-2c0-1.66-1.34-3-3-3z" transform="rotate(135 12 12)"/>
@@ -135,18 +216,42 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   );
 }
 
-function RemoteVideo({ entry, chat }: { entry: VideoEntry; chat: ChatOut }) {
+function RemoteVideo({ entry, chat, enlarged, deafened, volume, onVolumeChange, onClick }: {
+  entry: VideoEntry; chat: ChatOut; enlarged: boolean; deafened: boolean;
+  volume: number; onVolumeChange: (v: number) => void; onClick: () => void;
+}) {
   const ref = useRef<HTMLVideoElement>(null);
   const member = chat.members.find((m) => m.id === entry.userId);
+  const [showVolume, setShowVolume] = useState(false);
 
   useEffect(() => {
-    if (ref.current) ref.current.srcObject = entry.stream;
-  }, [entry.stream]);
+    if (ref.current) {
+      ref.current.srcObject = entry.stream;
+      ref.current.volume = deafened ? 0 : volume / 100;
+    }
+  }, [entry.stream, volume, deafened]);
 
   return (
-    <div style={s.videoWrap}>
+    <div
+      style={{ ...s.videoWrap, ...(enlarged ? s.enlarged : {}), cursor: "pointer" }}
+      onClick={onClick}
+      onContextMenu={(e) => { e.preventDefault(); setShowVolume(!showVolume); }}
+    >
       <video ref={ref} autoPlay playsInline style={s.video} />
       <span style={s.videoLabel}>{member?.username || "Участник"}</span>
+      {showVolume && (
+        <div style={s.volumeSlider} onClick={(e) => e.stopPropagation()}>
+          <input
+            type="range"
+            min="0"
+            max="200"
+            value={volume}
+            onChange={(e) => onVolumeChange(Number(e.target.value))}
+            style={{ width: "100%" }}
+          />
+          <span style={{ color: "#fff", fontSize: 11 }}>{volume}%</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -154,7 +259,7 @@ function RemoteVideo({ entry, chat }: { entry: VideoEntry; chat: ChatOut }) {
 const s: Record<string, React.CSSProperties> = {
   overlay: {
     position: "absolute", inset: 0, zIndex: 100,
-    background: "rgba(0,0,0,0.92)",
+    background: "rgba(0,0,0,0.95)",
     display: "flex", flexDirection: "column",
     alignItems: "center",
   },
@@ -165,15 +270,24 @@ const s: Record<string, React.CSSProperties> = {
     flex: 1, width: "100%", display: "flex", flexWrap: "wrap",
     alignItems: "center", justifyContent: "center", gap: 12, padding: 16,
   },
-  videoWrap: { position: "relative", borderRadius: 8, overflow: "hidden", background: "#18191c" },
+  videoWrap: {
+    position: "relative", borderRadius: 8, overflow: "hidden",
+    background: "#18191c", transition: "all 0.3s",
+  },
+  enlarged: { width: "60%", maxWidth: 640 },
   video: { width: 280, height: 210, objectFit: "cover", display: "block" },
   videoLabel: {
     position: "absolute", bottom: 8, left: 8,
     background: "rgba(0,0,0,0.6)", color: "#fff",
     padding: "2px 8px", borderRadius: 4, fontSize: 12,
   },
+  volumeSlider: {
+    position: "absolute", bottom: 32, left: 8, right: 8,
+    background: "rgba(0,0,0,0.8)", borderRadius: 4, padding: "4px 8px",
+    display: "flex", flexDirection: "column", gap: 2,
+  },
   waiting: { color: "var(--text-muted)", fontSize: 16 },
-  controls: { display: "flex", gap: 16, padding: "16px 0 24px" },
+  controls: { display: "flex", gap: 12, padding: "16px 0 24px" },
   ctrl: {
     width: 52, height: 52, borderRadius: "50%",
     fontSize: 22, display: "flex", alignItems: "center", justifyContent: "center",

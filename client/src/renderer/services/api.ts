@@ -37,6 +37,7 @@ export interface ChatOut {
   id: number;
   name: string | null;
   is_group: boolean;
+  created_by?: number;
   members: UserOut[];
   last_message: MessageOut | null;
 }
@@ -72,6 +73,7 @@ export const chatApi = {
     api.get<MessageOut[]>(
       `/api/chats/${chatId}/messages?limit=${limit}${beforeId ? `&before_id=${beforeId}` : ""}`
     ),
+  deleteChat: (chatId: number) => api.delete(`/api/chats/${chatId}`),
   searchMessages: (chatId: number, q: string) =>
     api.get<MessageOut[]>(`/api/chats/${chatId}/search?q=${encodeURIComponent(q)}`),
   uploadFile: (chatId: number, file: File) => {

@@ -64,6 +64,7 @@ async def get_chats(
             id=chat.id,
             name=chat.name,
             is_group=chat.is_group,
+            created_by=chat.created_by,
             members=[UserOut.model_validate(m) for m in chat.members],
             last_message=last,
         ))
@@ -202,6 +203,33 @@ async def add_member(
     await db.commit()
     manager.join_chat(data.user_id, chat_id)
     await manager.send_to_user(data.user_id, {"type": "new_chat", "chat_id": chat_id})
+    return {"ok": True}
+
+
+@router.delete("/{chat_id}")
+async def delete_chat(
+    chat_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(Chat).options(selectinload(Chat.members)).where(Chat.id == chat_id)
+    )
+    chat = result.scalar_one_or_none()
+    if not chat:
+        raise HTTPException(404, "Chat not found")
+    if not chat.is_group:
+        raise HTTPException(400, "Cannot delete DM chats")
+    if chat.created_by != current_user.id:
+        raise HTTPException(403, "Only the creator can delete the group")
+
+    member_ids = [m.id for m in chat.members]
+    await db.delete(chat)
+    await db.commit()
+
+    for uid in member_ids:
+        if uid != current_user.id:
+            await manager.send_to_user(uid, {"type": "chat_deleted", "chat_id": chat_id})
     return {"ok": True}
 
 
