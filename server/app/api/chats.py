@@ -105,6 +105,7 @@ async def create_dm(
                 id=chat.id,
                 name=chat.name,
                 is_group=False,
+                created_by=chat.created_by,
                 members=[UserOut.model_validate(m) for m in chat.members],
                 last_message=await _get_last_message(chat.id, db),
             )
@@ -131,6 +132,7 @@ async def create_dm(
         id=chat.id,
         name=chat.name,
         is_group=False,
+        created_by=chat.created_by,
         members=[UserOut.model_validate(m) for m in chat.members],
         last_message=None,
     )
@@ -172,6 +174,7 @@ async def create_group(
         id=chat.id,
         name=chat.name,
         is_group=True,
+        created_by=chat.created_by,
         members=[UserOut.model_validate(m) for m in chat.members],
         last_message=None,
     )

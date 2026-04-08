@@ -153,6 +153,7 @@ async def handle_message(data: dict, sender_id: int, db: AsyncSession):
         "content": content,
         "file_url": None,
         "file_name": None,
+        "is_edited": False,
         "created_at": msg.created_at.isoformat(),
         "reply_to_id": reply_to_id,
         "reply_to_username": reply_to_username,
