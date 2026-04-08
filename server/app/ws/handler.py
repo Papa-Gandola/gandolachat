@@ -40,6 +40,15 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                     "chat_id": chat_id,
                 }, exclude_user=user_id)
 
+            elif event == "mute_status":
+                chat_id = data.get("chat_id")
+                await manager.broadcast_to_chat(chat_id, {
+                    "type": "mute_status",
+                    "user_id": user_id,
+                    "chat_id": chat_id,
+                    "muted": data.get("muted", False),
+                }, exclude_user=user_id)
+
             elif event == "edit_message":
                 await handle_edit_message(data, user_id, db)
 

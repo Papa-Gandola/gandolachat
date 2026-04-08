@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ChatOut, UserOut } from "../services/api";
 import { webrtcService } from "../services/webrtc";
+import { wsService } from "../services/ws";
 import { playCallRing, playCallEndSound } from "../services/sounds";
 
 interface Props {
@@ -24,6 +25,8 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   const [enlarged, setEnlarged] = useState<number | null>(null);
   const [minimized, setMinimized] = useState(false);
   const [peerVolumes, setPeerVolumes] = useState<Map<number, number>>(new Map());
+  const [selfSpeaking, setSelfSpeaking] = useState(false);
+  const [mutedPeers, setMutedPeers] = useState<Set<number>>(new Set());
   const [showSettings, setShowSettings] = useState(false);
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
@@ -31,6 +34,37 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   const [micGain, setMicGain] = useState(100);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const started = useRef(false);
+
+  // Listen for mute status from other users
+  useEffect(() => {
+    const handler = (data: any) => {
+      setMutedPeers((prev) => {
+        const next = new Set(prev);
+        data.muted ? next.add(data.user_id) : next.delete(data.user_id);
+        return next;
+      });
+    };
+    wsService.on("mute_status", handler);
+    return () => wsService.off("mute_status", handler);
+  }, []);
+
+  // Own voice activity detection
+  useEffect(() => {
+    const ls = webrtcService.getLocalStream();
+    if (!ls) return;
+    const ac = new AudioContext();
+    const source = ac.createMediaStreamSource(ls);
+    const analyser = ac.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    const interval = setInterval(() => {
+      analyser.getByteFrequencyData(data);
+      const avg = data.reduce((a, b) => a + b, 0) / data.length;
+      setSelfSpeaking(avg > 15);
+    }, 100);
+    return () => { clearInterval(interval); ac.close(); };
+  }, [remoteVideos.length]); // re-run when call connects
 
   // Load available devices
   useEffect(() => {
@@ -87,7 +121,9 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   function toggleMute() {
     const stream = webrtcService.getLocalStream();
     stream?.getAudioTracks().forEach((t) => (t.enabled = muted));
-    setMuted(!muted);
+    const newMuted = !muted;
+    setMuted(newMuted);
+    wsService.send({ type: "mute_status", chat_id: chat.id, muted: newMuted });
   }
 
   function toggleVideo() {
@@ -107,33 +143,29 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
 
   async function toggleScreenShare() {
     if (screenSharing) {
-      // Stop screen share — switch back to camera
       try {
         const camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-        const videoTrack = camStream.getVideoTracks()[0];
-        webrtcService.getLocalStream()?.getVideoTracks().forEach((t) => t.stop());
-        // Replace track in local stream would need peer renegotiation
-        // Simpler: just stop sharing indicator
+        const camTrack = camStream.getVideoTracks()[0];
+        webrtcService.replaceVideoTrack(camTrack);
+        const ls = webrtcService.getLocalStream();
+        if (ls) {
+          ls.getVideoTracks().forEach((t) => t.stop());
+          ls.addTrack(camTrack);
+        }
+        if (localVideoRef.current) localVideoRef.current.srcObject = ls;
       } catch {}
       setScreenSharing(false);
     } else {
       try {
         const screenStream = await (navigator.mediaDevices as any).getDisplayMedia({ video: true, audio: false });
         const screenTrack = screenStream.getVideoTracks()[0];
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = screenStream;
-        }
+        webrtcService.replaceVideoTrack(screenTrack);
+        if (localVideoRef.current) localVideoRef.current.srcObject = screenStream;
         screenTrack.onended = () => {
-          setScreenSharing(false);
-          const ls = webrtcService.getLocalStream();
-          if (ls && localVideoRef.current) {
-            localVideoRef.current.srcObject = ls;
-          }
+          toggleScreenShare(); // Switch back to camera
         };
         setScreenSharing(true);
-      } catch {
-        // User cancelled
-      }
+      } catch {}
     }
   }
 
@@ -145,17 +177,23 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
 
   if (minimized) {
     return (
-      <div style={s.miniBar} onClick={() => setMinimized(false)}>
-        <span style={s.miniText}>📞 {callName} — {remoteVideos.length + 1} участник(ов)</span>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button style={s.miniBtn} onClick={(e) => { e.stopPropagation(); toggleMute(); }}>
-            {muted ? "🔇" : "🎤"}
-          </button>
-          <button style={{ ...s.miniBtn, background: "#ed4245" }} onClick={(e) => { e.stopPropagation(); handleEnd(); }}>
-            ✕
-          </button>
+      <>
+        {/* Hidden audio elements to keep remote streams playing */}
+        {remoteVideos.map((entry) => (
+          <HiddenAudio key={entry.userId} stream={entry.stream} deafened={deafened} volume={peerVolumes.get(entry.userId) ?? 100} />
+        ))}
+        <div style={s.miniBar} onClick={() => setMinimized(false)}>
+          <span style={s.miniText}>📞 {callName} — {remoteVideos.length + 1} участник(ов)</span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button style={s.miniBtn} onClick={(e) => { e.stopPropagation(); toggleMute(); }}>
+              {muted ? "🔇" : "🎤"}
+            </button>
+            <button style={{ ...s.miniBtn, background: "#ed4245" }} onClick={(e) => { e.stopPropagation(); handleEnd(); }}>
+              ✕
+            </button>
+          </div>
         </div>
-      </div>
+      </>
     );
   }
 
@@ -170,7 +208,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
       <div style={s.videoGrid}>
         {/* Local video */}
         <div
-          style={{ ...s.videoWrap, ...(enlarged === -1 ? s.enlarged : {}) }}
+          style={{ ...s.videoWrap, ...(enlarged === -1 ? s.enlarged : {}), boxShadow: selfSpeaking && !muted ? "0 0 0 3px #57f287" : "none", transition: "box-shadow 0.15s" }}
           onClick={() => setEnlarged(enlarged === -1 ? null : -1)}
         >
           <video ref={localVideoRef} autoPlay muted playsInline style={s.video} />
@@ -185,6 +223,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
             chat={chat}
             enlarged={enlarged === entry.userId}
             deafened={deafened}
+            peerMuted={mutedPeers.has(entry.userId)}
             volume={peerVolumes.get(entry.userId) ?? 100}
             onVolumeChange={(v) => changePeerVolume(entry.userId, v)}
             onClick={() => setEnlarged(enlarged === entry.userId ? null : entry.userId)}
@@ -326,8 +365,8 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   );
 }
 
-function RemoteVideo({ entry, chat, enlarged, deafened, volume, onVolumeChange, onClick }: {
-  entry: VideoEntry; chat: ChatOut; enlarged: boolean; deafened: boolean;
+function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, volume, onVolumeChange, onClick }: {
+  entry: VideoEntry; chat: ChatOut; enlarged: boolean; deafened: boolean; peerMuted: boolean;
   volume: number; onVolumeChange: (v: number) => void; onClick: () => void;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
@@ -338,7 +377,7 @@ function RemoteVideo({ entry, chat, enlarged, deafened, volume, onVolumeChange, 
   useEffect(() => {
     if (ref.current) {
       ref.current.srcObject = entry.stream;
-      ref.current.volume = deafened ? 0 : volume / 100;
+      ref.current.volume = deafened ? 0 : Math.min(volume / 100, 1);
     }
   }, [entry.stream, volume, deafened]);
 
@@ -379,13 +418,13 @@ function RemoteVideo({ entry, chat, enlarged, deafened, volume, onVolumeChange, 
       onContextMenu={(e) => { e.preventDefault(); setShowVolume(!showVolume); }}
     >
       <video ref={ref} autoPlay playsInline style={s.video} />
-      <span style={s.videoLabel}>{member?.username || "Участник"}</span>
+      <span style={s.videoLabel}>{peerMuted ? "🔇 " : ""}{member?.username || "Участник"}</span>
       {showVolume && (
         <div style={s.volumeSlider} onClick={(e) => e.stopPropagation()}>
           <input
             type="range"
             min="0"
-            max="200"
+            max="100"
             value={volume}
             onChange={(e) => onVolumeChange(Number(e.target.value))}
             style={{ width: "100%" }}
@@ -397,12 +436,23 @@ function RemoteVideo({ entry, chat, enlarged, deafened, volume, onVolumeChange, 
   );
 }
 
+function HiddenAudio({ stream, deafened, volume }: { stream: MediaStream; deafened: boolean; volume: number }) {
+  const ref = useRef<HTMLAudioElement>(null);
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.srcObject = stream;
+      ref.current.volume = deafened ? 0 : Math.min(volume / 100, 1);
+    }
+  }, [stream, volume, deafened]);
+  return <audio ref={ref} autoPlay style={{ display: "none" }} />;
+}
+
 const s: Record<string, React.CSSProperties> = {
   miniBar: {
-    position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 100,
+    position: "absolute", bottom: 56, left: 240, right: 0, zIndex: 100,
     background: "#3ba55d", display: "flex", alignItems: "center",
     justifyContent: "space-between", padding: "8px 16px",
-    cursor: "pointer", borderRadius: "8px 8px 0 0",
+    cursor: "pointer",
   },
   miniText: { color: "#fff", fontWeight: 600, fontSize: 13 },
   miniBtn: {

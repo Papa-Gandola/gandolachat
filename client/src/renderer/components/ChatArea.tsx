@@ -26,6 +26,7 @@ export default function ChatArea({ chat, currentUser, onStartCall }: Props) {
   const [showSearch, setShowSearch] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout>>();
@@ -342,8 +343,9 @@ export default function ChatArea({ chat, currentUser, onStartCall }: Props) {
                       isImage(msg.file_url) ? (
                         <img
                           src={`${BASE_URL}${msg.file_url}`}
-                          style={s.msgImage}
+                          style={{ ...s.msgImage, cursor: "pointer" }}
                           alt={msg.file_name || "image"}
+                          onClick={() => setPreviewImage(`${BASE_URL}${msg.file_url}`)}
                         />
                       ) : (
                         <a href={`${BASE_URL}${msg.file_url}`} target="_blank" rel="noreferrer" style={s.fileLink}>
@@ -381,6 +383,13 @@ export default function ChatArea({ chat, currentUser, onStartCall }: Props) {
         <div style={s.replyBar}>
           <span>Ответ для <b>{replyTo.sender_username}</b>: {replyTo.content?.slice(0, 50)}</span>
           <button style={s.replyBarClose} onClick={() => setReplyTo(null)}>✕</button>
+        </div>
+      )}
+
+      {/* Image preview modal */}
+      {previewImage && (
+        <div style={s.imageOverlay} onClick={() => setPreviewImage(null)}>
+          <img src={previewImage} style={s.imagePreview} alt="preview" />
         </div>
       )}
 
@@ -458,6 +467,8 @@ const s: Record<string, React.CSSProperties> = {
   editedTag: { color: "var(--text-muted)", fontSize: 10, fontStyle: "italic" },
   msgText: { color: "var(--text-primary)", lineHeight: 1.5, wordBreak: "break-word" as const },
   msgImage: { maxWidth: 360, maxHeight: 280, borderRadius: 4, marginTop: 4, display: "block" },
+  imageOverlay: { position: "fixed" as const, inset: 0, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, cursor: "pointer" },
+  imagePreview: { maxWidth: "90%", maxHeight: "90%", borderRadius: 8, objectFit: "contain" as const },
   fileLink: { color: "var(--text-link)", display: "inline-flex", alignItems: "center", gap: 4, marginTop: 4 },
   replyPreview: { background: "var(--bg-secondary)", borderLeft: "3px solid var(--accent)", padding: "4px 8px", borderRadius: 4, marginBottom: 4, fontSize: 12 },
   replyAuthor: { color: "var(--accent)", fontWeight: 600, marginRight: 6 },

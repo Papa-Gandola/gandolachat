@@ -100,7 +100,17 @@ class WebRTCService {
         iceServers: [
           { urls: "stun:stun.l.google.com:19302" },
           { urls: "stun:stun1.l.google.com:19302" },
-          { urls: "stun:stun2.l.google.com:19302" },
+          { urls: "stun:stun.cloudflare.com:3478" },
+          {
+            urls: "turn:openrelay.metered.ca:80",
+            username: "openrelayproject",
+            credential: "openrelayproject",
+          },
+          {
+            urls: "turn:openrelay.metered.ca:443",
+            username: "openrelayproject",
+            credential: "openrelayproject",
+          },
         ],
       },
     });
@@ -187,6 +197,15 @@ class WebRTCService {
     this.localStream = null;
     this.currentChatId = null;
     this.pendingSignals.clear();
+  }
+
+  replaceVideoTrack(newTrack: MediaStreamTrack) {
+    this.peers.forEach((peer) => {
+      const sender = (peer as any)._pc?.getSenders?.()?.find((s: any) => s.track?.kind === "video");
+      if (sender) {
+        sender.replaceTrack(newTrack);
+      }
+    });
   }
 
   getLocalStream() {
