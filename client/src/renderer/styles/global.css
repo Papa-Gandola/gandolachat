@@ -1,0 +1,93 @@
+/* Discord-like dark theme */
+:root {
+  --bg-primary: #36393f;
+  --bg-secondary: #2f3136;
+  --bg-tertiary: #202225;
+  --bg-hover: #32353b;
+  --bg-active: #393c43;
+  --bg-message: #32353b;
+  --bg-input: #40444b;
+  --bg-modal: #36393f;
+
+  --text-primary: #dcddde;
+  --text-secondary: #96989d;
+  --text-muted: #72767d;
+  --text-header: #ffffff;
+  --text-link: #00b0f4;
+
+  --accent: #5865f2;
+  --accent-hover: #4752c4;
+  --accent-active: #3c45a5;
+
+  --danger: #ed4245;
+  --danger-hover: #c03537;
+  --success: #57f287;
+  --warning: #fee75c;
+
+  --scrollbar: #202225;
+  --scrollbar-thumb: #484c52;
+
+  --border: #42454a;
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+  --radius: 8px;
+  --radius-sm: 4px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: "Inter", sans-serif;
+  font-size: 14px;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  outline: none;
+  transition: background 0.15s, transform 0.1s;
+}
+button:active { transform: scale(0.97); }
+
+input, textarea {
+  font-family: inherit;
+  outline: none;
+  border: none;
+  background: none;
+  color: var(--text-primary);
+}
+
+a { color: var(--text-link); text-decoration: none; }
+
+/* Utility */
+.flex { display: flex; }
+.flex-col { flex-direction: column; }
+.items-center { align-items: center; }
+.justify-center { justify-content: center; }
+.gap-8 { gap: 8px; }
+.gap-12 { gap: 12px; }
+.gap-16 { gap: 16px; }
+.flex-1 { flex: 1; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -1,0 +1,68 @@
+import React, { useState } from "react";
+
+const CATEGORIES: Record<string, string[]> = {
+  "Частые": ["😀", "😂", "🤣", "😊", "😍", "🥰", "😎", "🤔", "😭", "😡", "🥺", "😱", "🤮", "💀", "🤡", "👍", "👎", "❤️", "🔥", "💯"],
+  "Люди": ["😀", "😁", "😂", "🤣", "😃", "😄", "😅", "😆", "😉", "😊", "😋", "😎", "😍", "😘", "🥰", "😗", "😙", "🥲", "😚", "😛", "😜", "🤪", "😝", "🤑", "🤗", "🤭", "🤫", "🤔", "😐", "😑", "😶", "😏", "😒", "🙄", "😬", "🤥", "😌", "😔", "😪", "🤤", "😴", "😷"],
+  "Жесты": ["👋", "🤚", "🖐️", "✋", "🖖", "👌", "🤌", "🤏", "✌️", "🤞", "🤟", "🤘", "🤙", "👈", "👉", "👆", "👇", "☝️", "👍", "👎", "✊", "👊", "🤛", "🤜", "👏", "🙌", "👐", "🤲", "🙏", "💪"],
+  "Природа": ["🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯", "🦁", "🐮", "🐷", "🐸", "🐵", "🌸", "🌹", "🌺", "🌻", "🌼", "🌲", "🌴", "🌵", "⭐", "🌙", "☀️", "🌈"],
+  "Еда": ["🍎", "🍐", "🍊", "🍋", "🍌", "🍉", "🍇", "🍓", "🍒", "🍑", "🥝", "🍕", "🍔", "🌭", "🌮", "🍟", "🍿", "🍩", "🍪", "🎂", "🍰", "☕", "🍺", "🍷", "🥤"],
+  "Символы": ["❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "💔", "❣️", "💕", "💞", "💓", "💗", "💖", "💘", "💝", "⭐", "🌟", "✨", "💫", "🔥", "💥", "💯", "✅", "❌", "⚠️", "🎵", "🎶"],
+};
+
+interface Props {
+  onSelect: (emoji: string) => void;
+  onClose: () => void;
+}
+
+export default function EmojiPicker({ onSelect, onClose }: Props) {
+  const [category, setCategory] = useState("Частые");
+
+  return (
+    <div style={s.overlay} onClick={onClose}>
+      <div style={s.picker} onClick={(e) => e.stopPropagation()}>
+        <div style={s.tabs}>
+          {Object.keys(CATEGORIES).map((cat) => (
+            <button
+              key={cat}
+              style={{ ...s.tab, ...(cat === category ? s.tabActive : {}) }}
+              onClick={() => setCategory(cat)}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+        <div style={s.grid}>
+          {CATEGORIES[category].map((emoji, i) => (
+            <button key={i} style={s.emoji} onClick={() => onSelect(emoji)}>
+              {emoji}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const s: Record<string, React.CSSProperties> = {
+  overlay: { position: "fixed", inset: 0, zIndex: 150 },
+  picker: {
+    position: "absolute", bottom: 80, right: 20,
+    width: 320, background: "var(--bg-tertiary)",
+    borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+    overflow: "hidden",
+  },
+  tabs: { display: "flex", overflowX: "auto", borderBottom: "1px solid var(--border)", padding: "4px 4px 0" },
+  tab: {
+    background: "none", color: "var(--text-muted)", fontSize: 11, padding: "6px 8px",
+    borderBottom: "2px solid transparent", whiteSpace: "nowrap",
+  },
+  tabActive: { color: "var(--accent)", borderBottomColor: "var(--accent)" },
+  grid: {
+    display: "grid", gridTemplateColumns: "repeat(8, 1fr)",
+    gap: 2, padding: 8, maxHeight: 220, overflowY: "auto",
+  },
+  emoji: {
+    background: "none", fontSize: 22, padding: 4,
+    borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center",
+  },
+};
