@@ -38,6 +38,12 @@ export default function ChatArea({ chat, currentUser, onStartCall }: Props) {
     setShowSearch(false);
     setTypingUsers(new Map());
     loadMessages();
+    return () => {
+      if (typingTimerRef.current) {
+        clearTimeout(typingTimerRef.current);
+        typingTimerRef.current = undefined;
+      }
+    };
   }, [chat.id]);
 
   useEffect(() => {

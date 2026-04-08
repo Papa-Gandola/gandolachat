@@ -80,6 +80,11 @@ class WebRTCService {
   }
 
   private _createPeer(targetUserId: number, initiator: boolean) {
+    if (!this.localStream) {
+      console.error("[WebRTC] Cannot create peer - no local stream");
+      return;
+    }
+
     // Destroy existing peer if any (reconnect case)
     const existing = this.peers.get(targetUserId);
     if (existing) {
@@ -89,7 +94,7 @@ class WebRTCService {
 
     const peer = new SimplePeer({
       initiator,
-      stream: this.localStream!,
+      stream: this.localStream,
       trickle: true,
       config: {
         iceServers: [

@@ -67,12 +67,22 @@ async def cleanup_expired_messages():
         await db.commit()
 
 
+_scheduler = None
+
 @app.on_event("startup")
 async def startup():
+    global _scheduler
     await init_db()
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(cleanup_expired_messages, "interval", hours=1)
-    scheduler.start()
+    _scheduler = AsyncIOScheduler()
+    _scheduler.add_job(cleanup_expired_messages, "interval", hours=1)
+    _scheduler.start()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    global _scheduler
+    if _scheduler:
+        _scheduler.shutdown()
 
 
 @app.get("/health")

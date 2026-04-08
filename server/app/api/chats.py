@@ -17,6 +17,11 @@ router = APIRouter(prefix="/api/chats", tags=["chats"])
 
 
 def _message_out(msg: Message) -> MessageOut:
+    reply_username = None
+    reply_content = None
+    if msg.reply_to_id and msg.reply_to:
+        reply_username = msg.reply_to.sender.username if msg.reply_to.sender else None
+        reply_content = msg.reply_to.content
     return MessageOut(
         id=msg.id,
         chat_id=msg.chat_id,
@@ -28,6 +33,8 @@ def _message_out(msg: Message) -> MessageOut:
         file_name=msg.file_name,
         is_edited=msg.is_edited,
         reply_to_id=msg.reply_to_id,
+        reply_to_username=reply_username,
+        reply_to_content=reply_content,
         created_at=msg.created_at,
     )
 
@@ -35,7 +42,7 @@ def _message_out(msg: Message) -> MessageOut:
 async def _get_last_message(chat_id: int, db: AsyncSession) -> MessageOut | None:
     result = await db.execute(
         select(Message)
-        .options(selectinload(Message.sender))
+        .options(selectinload(Message.sender), selectinload(Message.reply_to).selectinload(Message.sender))
         .where(Message.chat_id == chat_id)
         .order_by(Message.created_at.desc())
         .limit(1)
@@ -116,7 +123,6 @@ async def create_dm(
         "chat_id": chat.id,
     })
 
-    await db.execute(select(Chat).options(selectinload(Chat.members)).where(Chat.id == chat.id))
     result2 = await db.execute(
         select(Chat).options(selectinload(Chat.members)).where(Chat.id == chat.id)
     )
@@ -250,7 +256,7 @@ async def get_messages(
 
     query = (
         select(Message)
-        .options(selectinload(Message.sender))
+        .options(selectinload(Message.sender), selectinload(Message.reply_to).selectinload(Message.sender))
         .where(Message.chat_id == chat_id)
         .order_by(Message.created_at.desc())
         .limit(limit)
@@ -302,7 +308,7 @@ async def upload_file(
     await db.commit()
 
     result2 = await db.execute(
-        select(Message).options(selectinload(Message.sender)).where(Message.id == msg.id)
+        select(Message).options(selectinload(Message.sender), selectinload(Message.reply_to).selectinload(Message.sender)).where(Message.id == msg.id)
     )
     msg = result2.scalar_one()
     out = _message_out(msg)
@@ -332,7 +338,7 @@ async def search_messages(
 
     result = await db.execute(
         select(Message)
-        .options(selectinload(Message.sender))
+        .options(selectinload(Message.sender), selectinload(Message.reply_to).selectinload(Message.sender))
         .where(Message.chat_id == chat_id, Message.content.ilike(f"%{q}%"))
         .order_by(Message.created_at.desc())
         .limit(20)

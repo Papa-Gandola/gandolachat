@@ -6,16 +6,22 @@ class WSService {
   private ws: WebSocket | null = null;
   private handlers: Map<string, Handler[]> = new Map();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempts = 0;
   private token: string | null = null;
 
   connect(token: string) {
     this.token = token;
+    this.reconnectAttempts = 0;
     this._connect();
   }
 
   private _connect() {
     if (!this.token) return;
     this.ws = new WebSocket(`${WS_URL}/ws?token=${this.token}`);
+
+    this.ws.onopen = () => {
+      this.reconnectAttempts = 0;
+    };
 
     this.ws.onmessage = (e) => {
       try {
@@ -26,7 +32,9 @@ class WSService {
     };
 
     this.ws.onclose = () => {
-      this.reconnectTimer = setTimeout(() => this._connect(), 3000);
+      const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+      this.reconnectAttempts++;
+      this.reconnectTimer = setTimeout(() => this._connect(), delay);
     };
 
     this.ws.onerror = () => {
@@ -55,6 +63,7 @@ class WSService {
     this.ws?.close();
     this.ws = null;
     this.token = null;
+    this.reconnectAttempts = 0;
     this.handlers.clear();
   }
 }
