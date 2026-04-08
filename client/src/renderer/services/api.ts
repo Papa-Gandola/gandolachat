@@ -42,10 +42,12 @@ export interface ChatOut {
 }
 
 export const authApi = {
-  register: (username: string, email: string, password: string) =>
-    api.post("/api/auth/register", { username, email, password }),
-  login: (email: string, password: string) =>
-    api.post("/api/auth/login", { email, password }),
+  register: (username: string, password: string) =>
+    api.post("/api/auth/register", { username, password }),
+  login: (username: string, password: string) =>
+    api.post("/api/auth/login", { username, password }),
+  changePassword: (oldPassword: string, newPassword: string) =>
+    api.post("/api/auth/change-password", { old_password: oldPassword, new_password: newPassword }),
 };
 
 export const userApi = {

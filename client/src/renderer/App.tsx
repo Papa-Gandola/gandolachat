@@ -9,11 +9,11 @@ export default function App() {
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
-    const saved = localStorage.getItem("token");
+    const saved = localStorage.getItem("token") || sessionStorage.getItem("token");
     if (!saved) { setChecking(false); return; }
     userApi.me()
       .then((res) => { setToken(saved); setUser(res.data); })
-      .catch(() => localStorage.removeItem("token"))
+      .catch(() => { localStorage.removeItem("token"); sessionStorage.removeItem("token"); })
       .finally(() => setChecking(false));
   }, []);
 

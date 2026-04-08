@@ -3,7 +3,19 @@ import { autoUpdater } from "electron-updater";
 import path from "path";
 const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
 
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+}
+
 let mainWindow: BrowserWindow | null = null;
+
+app.on("second-instance", () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+});
 
 function createWindow() {
   mainWindow = new BrowserWindow({

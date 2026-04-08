@@ -9,6 +9,8 @@ class ConnectionManager:
         self.active: dict[int, WebSocket] = {}
         # chat_id -> set of user_ids
         self.chat_users: dict[int, set[int]] = defaultdict(set)
+        # chat_id -> set of user_ids currently in a call
+        self.active_calls: dict[int, set[int]] = defaultdict(set)
 
     async def connect(self, websocket: WebSocket, user_id: int, chat_ids: list[int]):
         await websocket.accept()

@@ -296,10 +296,8 @@ export default function ChatArea({ chat, currentUser, incomingCall, onCallEnd }:
                   key={msg.id}
                   style={{ ...s.msgRow, marginTop: isGrouped ? 2 : 16 }}
                   onContextMenu={(e) => {
-                    if (isMine) {
-                      e.preventDefault();
-                      setContextMenu({ x: e.clientX, y: e.clientY, msg });
-                    }
+                    e.preventDefault();
+                    setContextMenu({ x: e.clientX, y: e.clientY, msg });
                   }}
                 >
                   {!isGrouped ? (
@@ -346,7 +344,7 @@ export default function ChatArea({ chat, currentUser, incomingCall, onCallEnd }:
                       <>
                         {msg.content && <p style={s.msgText}>{msg.content}</p>}
                         {/* Reply button (inline) */}
-                        {!isMine && msg.content && (
+                        {msg.content && (
                           <button style={s.replyBtn} onClick={() => setReplyTo(msg)} title="Ответить">↩</button>
                         )}
                       </>
@@ -377,8 +375,12 @@ export default function ChatArea({ chat, currentUser, incomingCall, onCallEnd }:
       {contextMenu && (
         <div style={{ ...s.ctxMenu, left: contextMenu.x, top: contextMenu.y }}>
           <button style={s.ctxItem} onClick={() => { setReplyTo(contextMenu.msg); setContextMenu(null); }}>↩ Ответить</button>
-          <button style={s.ctxItem} onClick={() => { setEditingMsg(contextMenu.msg); setEditText(contextMenu.msg.content || ""); setContextMenu(null); }}>✏️ Редактировать</button>
-          <button style={{ ...s.ctxItem, color: "var(--danger)" }} onClick={() => { handleDelete(contextMenu.msg.id); setContextMenu(null); }}>🗑 Удалить</button>
+          {contextMenu.msg.sender_id === currentUser.id && (
+            <>
+              <button style={s.ctxItem} onClick={() => { setEditingMsg(contextMenu.msg); setEditText(contextMenu.msg.content || ""); setContextMenu(null); }}>✏️ Редактировать</button>
+              <button style={{ ...s.ctxItem, color: "var(--danger)" }} onClick={() => { handleDelete(contextMenu.msg.id); setContextMenu(null); }}>🗑 Удалить</button>
+            </>
+          )}
         </div>
       )}
 

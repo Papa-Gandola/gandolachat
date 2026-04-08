@@ -48,16 +48,41 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
 
             elif event == "call_signal":
                 target_id = data.get("target_user_id")
-                if target_id:
+                chat_id = data.get("chat_id")
+                if target_id and chat_id:
+                    # Verify target is a member of the chat
+                    if target_id not in manager.chat_users.get(chat_id, set()):
+                        continue
+                    # Check DM call limit (max 2 participants)
+                    chat_result = await db.execute(
+                        select(Chat).where(Chat.id == chat_id)
+                    )
+                    chat_obj = chat_result.scalar_one_or_none()
+                    if chat_obj and not chat_obj.is_group:
+                        active = manager.active_calls.get(chat_id, set())
+                        if len(active) >= 2 and user_id not in active:
+                            continue  # DM call full, reject
+                    was_empty = len(manager.active_calls.get(chat_id, set())) == 0
+                    manager.active_calls[chat_id].add(user_id)
+                    # Broadcast call_active to chat members not in the call
+                    if was_empty and chat_obj and chat_obj.is_group:
+                        await manager.broadcast_to_chat(chat_id, {
+                            "type": "call_active",
+                            "chat_id": chat_id,
+                            "participants": list(manager.active_calls[chat_id]),
+                        })
                     await manager.send_to_user(target_id, {
                         "type": "call_signal",
                         "from_user_id": user_id,
-                        "chat_id": data.get("chat_id"),
+                        "chat_id": chat_id,
                         "signal": data.get("signal"),
                     })
 
             elif event == "call_end":
                 chat_id = data.get("chat_id")
+                manager.active_calls.get(chat_id, set()).discard(user_id)
+                if not manager.active_calls.get(chat_id):
+                    manager.active_calls.pop(chat_id, None)
                 await manager.broadcast_to_chat(chat_id, {
                     "type": "call_end",
                     "from_user_id": user_id,

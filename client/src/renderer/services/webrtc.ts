@@ -145,6 +145,13 @@ class WebRTCService {
     this.peers.get(fromId)?.destroy();
     this.peers.delete(fromId);
     this.onPeerLeft?.(fromId);
+
+    // If no peers left, stop local stream (release camera/mic)
+    if (this.peers.size === 0 && this.localStream) {
+      this.localStream.getTracks().forEach((t) => t.stop());
+      this.localStream = null;
+      this.currentChatId = null;
+    }
   };
 
   endCall() {

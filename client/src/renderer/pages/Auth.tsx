@@ -8,8 +8,8 @@ interface Props {
 export default function Auth({ onLogin }: Props) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [username, setUsername] = useState("");
-  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -20,12 +20,16 @@ export default function Auth({ onLogin }: Props) {
     try {
       let res;
       if (mode === "register") {
-        res = await authApi.register(username, email, password);
+        res = await authApi.register(username, password);
       } else {
-        res = await authApi.login(email, password);
+        res = await authApi.login(username, password);
       }
       const { access_token, user } = res.data;
-      localStorage.setItem("token", access_token);
+      if (rememberMe) {
+        localStorage.setItem("token", access_token);
+      } else {
+        sessionStorage.setItem("token", access_token);
+      }
       onLogin(access_token, user);
     } catch (err: any) {
       setError(err.response?.data?.detail || "Ошибка. Попробуй снова.");
@@ -54,30 +58,16 @@ export default function Auth({ onLogin }: Props) {
         </p>
 
         <form onSubmit={handleSubmit} style={styles.form}>
-          {mode === "register" && (
-            <div style={styles.field}>
-              <label style={styles.label}>ИМЯ ПОЛЬЗОВАТЕЛЯ</label>
-              <input
-                style={styles.input}
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="gandola"
-                required
-                minLength={2}
-                maxLength={50}
-              />
-            </div>
-          )}
-
           <div style={styles.field}>
-            <label style={styles.label}>ЭЛЕКТРОННАЯ ПОЧТА</label>
+            <label style={styles.label}>ИМЯ ПОЛЬЗОВАТЕЛЯ</label>
             <input
               style={styles.input}
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="gandola"
               required
+              minLength={2}
+              maxLength={50}
             />
           </div>
 
@@ -90,9 +80,19 @@ export default function Auth({ onLogin }: Props) {
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
               required
-              minLength={6}
+              minLength={4}
             />
           </div>
+
+          <label style={styles.checkboxRow}>
+            <input
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              style={styles.checkbox}
+            />
+            <span style={styles.checkboxLabel}>Запомнить меня</span>
+          </label>
 
           {error && <p style={styles.error}>{error}</p>}
 
@@ -124,92 +124,21 @@ export default function Auth({ onLogin }: Props) {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  root: {
-    width: "100%",
-    height: "100%",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    background: "var(--bg-tertiary)",
-  },
-  card: {
-    background: "var(--bg-primary)",
-    borderRadius: 8,
-    padding: "32px 40px",
-    width: 440,
-    boxShadow: "var(--shadow)",
-  },
-  logo: {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-    marginBottom: 24,
-    justifyContent: "center",
-  },
-  appName: {
-    color: "var(--text-header)",
-    fontSize: 24,
-    fontWeight: 700,
-  },
-  title: {
-    color: "var(--text-header)",
-    fontSize: 24,
-    fontWeight: 700,
-    textAlign: "center",
-    marginBottom: 8,
-  },
-  subtitle: {
-    color: "var(--text-secondary)",
-    textAlign: "center",
-    marginBottom: 24,
-  },
-  form: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 16,
-  },
-  field: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 8,
-  },
-  label: {
-    fontSize: 12,
-    fontWeight: 700,
-    color: "var(--text-secondary)",
-    letterSpacing: "0.05em",
-  },
-  input: {
-    background: "var(--bg-tertiary)",
-    border: "1px solid var(--border)",
-    borderRadius: 4,
-    padding: "10px 12px",
-    fontSize: 16,
-    color: "var(--text-primary)",
-    width: "100%",
-  },
-  error: {
-    color: "var(--danger)",
-    fontSize: 13,
-  },
-  btn: {
-    background: "var(--accent)",
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: 600,
-    padding: "12px",
-    borderRadius: 4,
-    width: "100%",
-    marginTop: 8,
-  },
-  toggle: {
-    color: "var(--text-secondary)",
-    textAlign: "center",
-    marginTop: 16,
-    fontSize: 13,
-  },
-  link: {
-    color: "var(--text-link)",
-    cursor: "pointer",
-  },
+  root: { width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg-tertiary)" },
+  card: { background: "var(--bg-primary)", borderRadius: 8, padding: "32px 40px", width: 440, boxShadow: "var(--shadow)" },
+  logo: { display: "flex", alignItems: "center", gap: 12, marginBottom: 24, justifyContent: "center" },
+  appName: { color: "var(--text-header)", fontSize: 24, fontWeight: 700 },
+  title: { color: "var(--text-header)", fontSize: 24, fontWeight: 700, textAlign: "center", marginBottom: 8 },
+  subtitle: { color: "var(--text-secondary)", textAlign: "center", marginBottom: 24 },
+  form: { display: "flex", flexDirection: "column", gap: 16 },
+  field: { display: "flex", flexDirection: "column", gap: 8 },
+  label: { fontSize: 12, fontWeight: 700, color: "var(--text-secondary)", letterSpacing: "0.05em" },
+  input: { background: "var(--bg-tertiary)", border: "1px solid var(--border)", borderRadius: 4, padding: "10px 12px", fontSize: 16, color: "var(--text-primary)", width: "100%" },
+  checkboxRow: { display: "flex", alignItems: "center", gap: 8, cursor: "pointer" },
+  checkbox: { width: 16, height: 16, accentColor: "var(--accent)" },
+  checkboxLabel: { color: "var(--text-secondary)", fontSize: 13 },
+  error: { color: "var(--danger)", fontSize: 13 },
+  btn: { background: "var(--accent)", color: "#fff", fontSize: 16, fontWeight: 600, padding: "12px", borderRadius: 4, width: "100%", marginTop: 8 },
+  toggle: { color: "var(--text-secondary)", textAlign: "center", marginTop: 16, fontSize: 13 },
+  link: { color: "var(--text-link)", cursor: "pointer" },
 };
