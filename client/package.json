@@ -1,6 +1,6 @@
 {
   "name": "gandola-chat",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "GandolaChat — a simple Discord-like desktop messenger",
   "main": "dist/main/main.js",
   "scripts": {
