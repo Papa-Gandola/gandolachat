@@ -22,6 +22,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   const [deafened, setDeafened] = useState(false);
   const [screenSharing, setScreenSharing] = useState(false);
   const [enlarged, setEnlarged] = useState<number | null>(null);
+  const [minimized, setMinimized] = useState(false);
   const [peerVolumes, setPeerVolumes] = useState<Map<number, number>>(new Map());
   const [showSettings, setShowSettings] = useState(false);
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
@@ -140,11 +141,30 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
     setPeerVolumes((prev) => new Map(prev).set(userId, volume));
   }
 
+  const callName = chat.is_group ? chat.name : chat.members.find((m) => m.id !== currentUser.id)?.username;
+
+  if (minimized) {
+    return (
+      <div style={s.miniBar} onClick={() => setMinimized(false)}>
+        <span style={s.miniText}>📞 {callName} — {remoteVideos.length + 1} участник(ов)</span>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button style={s.miniBtn} onClick={(e) => { e.stopPropagation(); toggleMute(); }}>
+            {muted ? "🔇" : "🎤"}
+          </button>
+          <button style={{ ...s.miniBtn, background: "#ed4245" }} onClick={(e) => { e.stopPropagation(); handleEnd(); }}>
+            ✕
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={s.overlay}>
       <div style={s.header}>
         <span style={s.title}>Видеозвонок</span>
-        <span style={s.subtitle}>{chat.is_group ? chat.name : chat.members.find((m) => m.id !== currentUser.id)?.username}</span>
+        <span style={s.subtitle}>{callName}</span>
+        <button style={s.minimizeBtn} onClick={() => setMinimized(true)} title="Свернуть">▼</button>
       </div>
 
       <div style={s.videoGrid}>
@@ -378,15 +398,31 @@ function RemoteVideo({ entry, chat, enlarged, deafened, volume, onVolumeChange, 
 }
 
 const s: Record<string, React.CSSProperties> = {
+  miniBar: {
+    position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 100,
+    background: "#3ba55d", display: "flex", alignItems: "center",
+    justifyContent: "space-between", padding: "8px 16px",
+    cursor: "pointer", borderRadius: "8px 8px 0 0",
+  },
+  miniText: { color: "#fff", fontWeight: 600, fontSize: 13 },
+  miniBtn: {
+    background: "rgba(0,0,0,0.3)", color: "#fff", border: "none",
+    borderRadius: 4, padding: "4px 10px", fontSize: 14, cursor: "pointer",
+  },
   overlay: {
     position: "absolute", inset: 0, zIndex: 100,
     background: "rgba(0,0,0,0.95)",
     display: "flex", flexDirection: "column",
     alignItems: "center",
   },
-  header: { padding: "16px 0 8px", textAlign: "center" },
+  header: { padding: "16px 0 8px", textAlign: "center", position: "relative" as const, width: "100%" },
   title: { color: "#fff", fontWeight: 700, fontSize: 18, display: "block" },
   subtitle: { color: "var(--text-muted)", fontSize: 14 },
+  minimizeBtn: {
+    position: "absolute" as const, right: 16, top: 16,
+    background: "rgba(255,255,255,0.1)", color: "#fff", border: "none",
+    borderRadius: 4, padding: "4px 12px", fontSize: 14, cursor: "pointer",
+  },
   videoGrid: {
     flex: 1, width: "100%", display: "flex", flexWrap: "wrap",
     alignItems: "center", justifyContent: "center", gap: 12, padding: 16,
