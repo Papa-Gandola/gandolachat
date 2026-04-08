@@ -26,11 +26,28 @@ async def search_users(
 ):
     result = await db.execute(
         select(User).where(
-            (User.username.ilike(f"%{q}%") | User.email.ilike(f"%{q}%")),
+            User.username.ilike(f"%{q}%"),
             User.id != current_user.id,
         ).limit(20)
     )
     return result.scalars().all()
+
+
+@router.patch("/me", response_model=UserOut)
+async def update_profile(
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    new_username = data.get("username")
+    if new_username and new_username != current_user.username:
+        existing = await db.execute(select(User).where(User.username == new_username))
+        if existing.scalar_one_or_none():
+            raise HTTPException(400, "Username already taken")
+        current_user.username = new_username
+    await db.commit()
+    await db.refresh(current_user)
+    return current_user
 
 
 @router.post("/avatar", response_model=UserOut)

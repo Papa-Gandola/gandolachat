@@ -54,6 +54,8 @@ export const authApi = {
 export const userApi = {
   me: () => api.get<UserOut>("/api/users/me"),
   search: (q: string) => api.get<UserOut[]>(`/api/users/search?q=${encodeURIComponent(q)}`),
+  updateProfile: (data: { username?: string }) =>
+    api.patch<UserOut>("/api/users/me", data),
   uploadAvatar: (file: File) => {
     const form = new FormData();
     form.append("file", file);

@@ -23,8 +23,22 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   const [screenSharing, setScreenSharing] = useState(false);
   const [enlarged, setEnlarged] = useState<number | null>(null);
   const [peerVolumes, setPeerVolumes] = useState<Map<number, number>>(new Map());
+  const [showSettings, setShowSettings] = useState(false);
+  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
+  const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
+  const [outputDevices, setOutputDevices] = useState<MediaDeviceInfo[]>([]);
+  const [micGain, setMicGain] = useState(100);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const started = useRef(false);
+
+  // Load available devices
+  useEffect(() => {
+    navigator.mediaDevices.enumerateDevices().then((devices) => {
+      setAudioDevices(devices.filter((d) => d.kind === "audioinput"));
+      setVideoDevices(devices.filter((d) => d.kind === "videoinput"));
+      setOutputDevices(devices.filter((d) => d.kind === "audiooutput"));
+    });
+  }, []);
 
   useEffect(() => {
     if (started.current) return;
@@ -164,6 +178,75 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
         )}
       </div>
 
+      {/* Settings panel */}
+      {showSettings && (
+        <div style={s.settingsPanel}>
+          <div style={s.settingRow}>
+            <label style={s.settingLabel}>Микрофон</label>
+            <select style={s.settingSelect} onChange={async (e) => {
+              try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: e.target.value }, video: false });
+                const newTrack = stream.getAudioTracks()[0];
+                const ls = webrtcService.getLocalStream();
+                if (ls) {
+                  const oldTrack = ls.getAudioTracks()[0];
+                  ls.removeTrack(oldTrack);
+                  oldTrack.stop();
+                  ls.addTrack(newTrack);
+                }
+              } catch {}
+            }}>
+              {audioDevices.map((d) => <option key={d.deviceId} value={d.deviceId}>{d.label || "Микрофон"}</option>)}
+            </select>
+          </div>
+          <div style={s.settingRow}>
+            <label style={s.settingLabel}>Камера</label>
+            <select style={s.settingSelect} onChange={async (e) => {
+              try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: e.target.value }, audio: false });
+                const newTrack = stream.getVideoTracks()[0];
+                const ls = webrtcService.getLocalStream();
+                if (ls && localVideoRef.current) {
+                  const oldTrack = ls.getVideoTracks()[0];
+                  if (oldTrack) { ls.removeTrack(oldTrack); oldTrack.stop(); }
+                  ls.addTrack(newTrack);
+                  localVideoRef.current.srcObject = ls;
+                }
+              } catch {}
+            }}>
+              {videoDevices.map((d) => <option key={d.deviceId} value={d.deviceId}>{d.label || "Камера"}</option>)}
+            </select>
+          </div>
+          {outputDevices.length > 0 && (
+            <div style={s.settingRow}>
+              <label style={s.settingLabel}>Динамик</label>
+              <select style={s.settingSelect} onChange={(e) => {
+                document.querySelectorAll("video, audio").forEach((el: any) => {
+                  if (el.setSinkId) el.setSinkId(e.target.value);
+                });
+              }}>
+                {outputDevices.map((d) => <option key={d.deviceId} value={d.deviceId}>{d.label || "Динамик"}</option>)}
+              </select>
+            </div>
+          )}
+          <div style={s.settingRow}>
+            <label style={s.settingLabel}>Громкость микрофона: {micGain}%</label>
+            <input type="range" min="0" max="200" value={micGain} style={{ width: "100%" }}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                setMicGain(val);
+                const ls = webrtcService.getLocalStream();
+                ls?.getAudioTracks().forEach((t) => {
+                  if ((t as any).applyConstraints) {
+                    // Volume isn't a standard constraint but we can try gain
+                  }
+                });
+              }}
+            />
+          </div>
+        </div>
+      )}
+
       <div style={s.controls}>
         {/* Mic */}
         <button style={{ ...s.ctrl, background: muted ? "#ed4245" : "#3ba55d" }} onClick={toggleMute} title={muted ? "Включить микрофон" : "Выключить микрофон"}>
@@ -205,6 +288,13 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
           </svg>
         </button>
 
+        {/* Settings */}
+        <button style={{ ...s.ctrl, background: showSettings ? "#5865f2" : "var(--bg-active)" }} onClick={() => setShowSettings(!showSettings)} title="Настройки">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
+            <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+          </svg>
+        </button>
+
         {/* Hangup */}
         <button style={{ ...s.ctrl, ...s.hangup }} onClick={handleEnd} title="Завершить звонок">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="white">
@@ -223,6 +313,7 @@ function RemoteVideo({ entry, chat, enlarged, deafened, volume, onVolumeChange, 
   const ref = useRef<HTMLVideoElement>(null);
   const member = chat.members.find((m) => m.id === entry.userId);
   const [showVolume, setShowVolume] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
 
   useEffect(() => {
     if (ref.current) {
@@ -231,9 +322,39 @@ function RemoteVideo({ entry, chat, enlarged, deafened, volume, onVolumeChange, 
     }
   }, [entry.stream, volume, deafened]);
 
+  // Voice activity detection
+  useEffect(() => {
+    const audioTracks = entry.stream.getAudioTracks();
+    if (audioTracks.length === 0) return;
+
+    const ac = new AudioContext();
+    const source = ac.createMediaStreamSource(entry.stream);
+    const analyser = ac.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+
+    const interval = setInterval(() => {
+      analyser.getByteFrequencyData(data);
+      const avg = data.reduce((a, b) => a + b, 0) / data.length;
+      setSpeaking(avg > 15);
+    }, 100);
+
+    return () => {
+      clearInterval(interval);
+      ac.close();
+    };
+  }, [entry.stream]);
+
   return (
     <div
-      style={{ ...s.videoWrap, ...(enlarged ? s.enlarged : {}), cursor: "pointer" }}
+      style={{
+        ...s.videoWrap,
+        ...(enlarged ? s.enlarged : {}),
+        cursor: "pointer",
+        boxShadow: speaking ? "0 0 0 3px #57f287" : "none",
+        transition: "box-shadow 0.15s",
+      }}
       onClick={onClick}
       onContextMenu={(e) => { e.preventDefault(); setShowVolume(!showVolume); }}
     >
@@ -295,5 +416,15 @@ const s: Record<string, React.CSSProperties> = {
   },
   hangup: {
     background: "#ed4245", width: 60, height: 52, borderRadius: 26,
+  },
+  settingsPanel: {
+    background: "rgba(30,31,34,0.95)", borderRadius: 8, padding: 16,
+    width: 320, maxWidth: "90%",
+  },
+  settingRow: { marginBottom: 12 },
+  settingLabel: { color: "var(--text-muted)", fontSize: 12, fontWeight: 600, display: "block", marginBottom: 4 },
+  settingSelect: {
+    width: "100%", background: "var(--bg-tertiary)", color: "var(--text-primary)",
+    border: "1px solid var(--border)", borderRadius: 4, padding: "6px 8px", fontSize: 13,
   },
 };

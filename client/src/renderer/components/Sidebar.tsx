@@ -22,6 +22,7 @@ export default function Sidebar({
   const [selectedForGroup, setSelectedForGroup] = useState<UserOut[]>([]);
   const [onlineUsers, setOnlineUsers] = useState<Set<number>>(new Set());
   const [unread, setUnread] = useState<Map<number, number>>(new Map());
+  const [activeCalls, setActiveCalls] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     chatApi.getOnlineUsers().then((res) => setOnlineUsers(new Set(res.data.online_user_ids)));
@@ -34,13 +35,20 @@ export default function Sidebar({
       }
     };
 
+    const onCallActive = (data: any) => setActiveCalls((prev) => new Set([...prev, data.chat_id]));
+    const onCallEnd = (data: any) => setActiveCalls((prev) => { const n = new Set(prev); n.delete(data.chat_id); return n; });
+
     wsService.on("user_online", onOnline);
     wsService.on("user_offline", onOffline);
     wsService.on("message", onMsg);
+    wsService.on("call_active", onCallActive);
+    wsService.on("call_end", onCallEnd);
     return () => {
       wsService.off("user_online", onOnline);
       wsService.off("user_offline", onOffline);
       wsService.off("message", onMsg);
+      wsService.off("call_active", onCallActive);
+      wsService.off("call_end", onCallEnd);
     };
   }, [activeChatId, currentUser.id]);
 
@@ -108,6 +116,7 @@ export default function Sidebar({
     const isActive = chat.id === activeChatId;
     const online = isOtherOnline(chat);
     const unreadCount = unread.get(chat.id) || 0;
+    const hasActiveCall = activeCalls.has(chat.id);
     return (
       <div
         key={chat.id}
@@ -120,11 +129,13 @@ export default function Sidebar({
         </div>
         <div style={s.chatInfo}>
           <span style={s.chatName}>{name}</span>
-          {chat.last_message && (
+          {hasActiveCall ? (
+            <span style={s.callIndicator}>📞 Звонок...</span>
+          ) : chat.last_message ? (
             <span style={s.chatPreview}>
               {chat.last_message.content || chat.last_message.file_name || "Файл"}
             </span>
-          )}
+          ) : null}
         </div>
         {unreadCount > 0 && <span style={s.unreadBadge}>{unreadCount}</span>}
       </div>
@@ -233,8 +244,14 @@ export default function Sidebar({
         </label>
         <div style={s.userInfo}>
           <span style={s.userName}>{currentUser.username}</span>
-          <span style={s.userEmail}>{currentUser.email}</span>
+          <span style={s.userSub}>Нажми на аватар для смены</span>
         </div>
+        <button style={s.settingsBtn} title="Профиль" onClick={() => {
+          const newName = prompt("Новый никнейм:", currentUser.username);
+          if (newName && newName.trim() && newName !== currentUser.username) {
+            userApi.updateProfile({ username: newName.trim() }).then((res) => onAvatarUpdate(res.data));
+          }
+        }}>✏️</button>
         <button style={s.logoutBtn} title="Выйти" onClick={onLogout}>⎋</button>
       </div>
     </div>
@@ -293,9 +310,11 @@ const s: Record<string, React.CSSProperties> = {
   chatInfo: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column" },
   chatName: { color: "var(--text-primary)", fontSize: 14, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   chatPreview: { color: "var(--text-muted)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  callIndicator: { color: "#57f287", fontSize: 12, fontWeight: 600 },
   userPanel: { display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", background: "var(--bg-tertiary)", borderTop: "1px solid var(--border)" },
   userInfo: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column" },
   userName: { color: "var(--text-header)", fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-  userEmail: { color: "var(--text-muted)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  userSub: { color: "var(--text-muted)", fontSize: 10 },
+  settingsBtn: { background: "none", color: "var(--text-muted)", fontSize: 14, padding: "2px", cursor: "pointer" },
   logoutBtn: { background: "none", color: "var(--text-muted)", fontSize: 18 },
 };
