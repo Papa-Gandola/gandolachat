@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { autoUpdater } from "electron-updater";
 import path from "path";
 const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
 
@@ -36,7 +37,12 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+  if (!isDev) {
+    autoUpdater.checkForUpdatesAndNotify();
+  }
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
