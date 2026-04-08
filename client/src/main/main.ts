@@ -31,7 +31,7 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      webSecurity: false, // allow local file access for uploads
+      webSecurity: false,
     },
   });
 
@@ -42,12 +42,50 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
   }
 
-  // Open external links in browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: "deny" };
   });
 }
+
+// Auto-updater events
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
+
+autoUpdater.on("update-available", (info) => {
+  mainWindow?.webContents.send("update:status", "available", info);
+});
+
+autoUpdater.on("update-not-available", () => {
+  mainWindow?.webContents.send("update:status", "not-available");
+});
+
+autoUpdater.on("download-progress", (progress) => {
+  mainWindow?.webContents.send("update:status", "downloading", { percent: Math.round(progress.percent) });
+});
+
+autoUpdater.on("update-downloaded", () => {
+  mainWindow?.webContents.send("update:status", "ready");
+});
+
+autoUpdater.on("error", (err) => {
+  mainWindow?.webContents.send("update:status", "error", { message: err.message });
+});
+
+// IPC handlers
+ipcMain.handle("update:check", async () => {
+  if (isDev) return { status: "dev" };
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    return { status: "checking" };
+  } catch (err: any) {
+    return { status: "error", message: err.message };
+  }
+});
+
+ipcMain.on("update:install", () => {
+  autoUpdater.quitAndInstall();
+});
 
 app.whenReady().then(() => {
   createWindow();

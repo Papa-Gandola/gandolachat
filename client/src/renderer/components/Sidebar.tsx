@@ -21,10 +21,27 @@ export default function Sidebar({
   const [groupName, setGroupName] = useState("");
   const [selectedForGroup, setSelectedForGroup] = useState<UserOut[]>([]);
   const [editingName, setEditingName] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+  const [updatePercent, setUpdatePercent] = useState(0);
+  const [showUpdateBanner, setShowUpdateBanner] = useState(false);
   const [newName, setNewName] = useState("");
   const [onlineUsers, setOnlineUsers] = useState<Set<number>>(new Set());
   const [unread, setUnread] = useState<Map<number, number>>(new Map());
   const [activeCalls, setActiveCalls] = useState<Set<number>>(new Set());
+
+  useEffect(() => {
+    const electron = (window as any).electron;
+    if (electron?.onUpdateStatus) {
+      electron.onUpdateStatus((status: string, info?: any) => {
+        setUpdateStatus(status);
+        if (status === "downloading") setUpdatePercent(info?.percent || 0);
+        if (status === "not-available") {
+          setShowUpdateBanner(true);
+          setTimeout(() => setShowUpdateBanner(false), 3000);
+        }
+      });
+    }
+  }, []);
 
   useEffect(() => {
     chatApi.getOnlineUsers().then((res) => setOnlineUsers(new Set(res.data.online_user_ids)));
@@ -238,6 +255,20 @@ export default function Sidebar({
         {chats.filter((c) => !c.is_group).map((chat) => renderChatItem(chat))}
       </div>
 
+      {/* Update banner */}
+      {showUpdateBanner && updateStatus === "not-available" && (
+        <div style={s.updateBanner}>У вас последняя версия, че ты тут забыл</div>
+      )}
+      {updateStatus === "downloading" && (
+        <div style={s.updateBannerDownload}>Загрузка обновления... {updatePercent}%</div>
+      )}
+      {updateStatus === "ready" && (
+        <div style={s.updateBannerReady}>
+          <span>Обновление готово!</span>
+          <button style={s.updateInstallBtn} onClick={() => (window as any).electron?.installUpdate()}>Обновить сейчас</button>
+        </div>
+      )}
+
       {/* User panel */}
       <div style={s.userPanel}>
         <label style={{ cursor: "pointer" }}>
@@ -280,6 +311,11 @@ export default function Sidebar({
             <button style={s.settingsBtn} title="Изменить никнейм" onClick={() => { setNewName(currentUser.username); setEditingName(true); }}>✏️</button>
           </>
         )}
+        <button style={s.settingsBtn} title="Проверить обновления" onClick={() => {
+          setUpdateStatus(null);
+          setShowUpdateBanner(false);
+          (window as any).electron?.checkForUpdates();
+        }}>🔄</button>
         <button style={s.logoutBtn} title="Выйти" onClick={onLogout}>⎋</button>
       </div>
     </div>
@@ -347,4 +383,8 @@ const s: Record<string, React.CSSProperties> = {
   editNameInput: { flex: 1, background: "var(--bg-tertiary)", border: "1px solid var(--accent)", borderRadius: 4, padding: "4px 6px", fontSize: 12, color: "var(--text-primary)", minWidth: 0 },
   editNameSave: { background: "var(--accent)", color: "#fff", border: "none", borderRadius: 4, padding: "4px 8px", fontSize: 12, cursor: "pointer" },
   logoutBtn: { background: "none", color: "var(--text-muted)", fontSize: 18 },
+  updateBanner: { background: "#5865f2", color: "#fff", padding: "8px 12px", fontSize: 11, textAlign: "center" as const, fontWeight: 600 },
+  updateBannerDownload: { background: "#faa61a", color: "#000", padding: "8px 12px", fontSize: 11, textAlign: "center" as const, fontWeight: 600 },
+  updateBannerReady: { background: "#3ba55d", color: "#fff", padding: "8px 12px", fontSize: 11, textAlign: "center" as const, display: "flex", alignItems: "center", justifyContent: "space-between" },
+  updateInstallBtn: { background: "#fff", color: "#3ba55d", border: "none", borderRadius: 4, padding: "4px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer" },
 };

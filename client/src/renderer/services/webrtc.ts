@@ -96,7 +96,9 @@ class WebRTCService {
       initiator,
       stream: this.localStream,
       trickle: true,
+      channelConfig: { ordered: false, maxRetransmits: 0 },
       config: {
+        iceCandidatePoolSize: 10,
         iceServers: [
           { urls: "stun:stun.l.google.com:19302" },
           { urls: "stun:stun1.l.google.com:19302" },
