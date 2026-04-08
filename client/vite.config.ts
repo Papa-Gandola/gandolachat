@@ -7,6 +7,7 @@ export default defineConfig({
   plugins: [react(), nodePolyfills()],
   root: "src/renderer",
   base: "./",
+  envDir: "../../",
   build: {
     outDir: "../../dist/renderer",
     emptyOutDir: true,
