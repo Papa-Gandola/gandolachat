@@ -20,6 +20,8 @@ export default function Sidebar({
   const [showNewGroup, setShowNewGroup] = useState(false);
   const [groupName, setGroupName] = useState("");
   const [selectedForGroup, setSelectedForGroup] = useState<UserOut[]>([]);
+  const [editingName, setEditingName] = useState(false);
+  const [newName, setNewName] = useState("");
   const [onlineUsers, setOnlineUsers] = useState<Set<number>>(new Set());
   const [unread, setUnread] = useState<Map<number, number>>(new Map());
   const [activeCalls, setActiveCalls] = useState<Set<number>>(new Set());
@@ -242,16 +244,42 @@ export default function Sidebar({
           <Avatar url={currentUser.avatar_url} name={currentUser.username} size={32} />
           <input type="file" accept="image/*" style={{ display: "none" }} onChange={uploadAvatar} />
         </label>
-        <div style={s.userInfo}>
-          <span style={s.userName}>{currentUser.username}</span>
-          <span style={s.userSub}>Нажми на аватар для смены</span>
-        </div>
-        <button style={s.settingsBtn} title="Профиль" onClick={() => {
-          const newName = prompt("Новый никнейм:", currentUser.username);
-          if (newName && newName.trim() && newName !== currentUser.username) {
-            userApi.updateProfile({ username: newName.trim() }).then((res) => onAvatarUpdate(res.data));
-          }
-        }}>✏️</button>
+        {editingName ? (
+          <div style={{ flex: 1, display: "flex", gap: 4 }}>
+            <input
+              style={s.editNameInput}
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && newName.trim() && newName !== currentUser.username) {
+                  userApi.updateProfile({ username: newName.trim() }).then((res) => {
+                    onAvatarUpdate(res.data);
+                    setEditingName(false);
+                  });
+                }
+                if (e.key === "Escape") setEditingName(false);
+              }}
+              autoFocus
+              maxLength={50}
+            />
+            <button style={s.editNameSave} onClick={() => {
+              if (newName.trim() && newName !== currentUser.username) {
+                userApi.updateProfile({ username: newName.trim() }).then((res) => {
+                  onAvatarUpdate(res.data);
+                  setEditingName(false);
+                });
+              }
+            }}>✓</button>
+          </div>
+        ) : (
+          <>
+            <div style={s.userInfo}>
+              <span style={s.userName}>{currentUser.username}</span>
+              <span style={s.userSub}>Нажми на аватар для смены</span>
+            </div>
+            <button style={s.settingsBtn} title="Изменить никнейм" onClick={() => { setNewName(currentUser.username); setEditingName(true); }}>✏️</button>
+          </>
+        )}
         <button style={s.logoutBtn} title="Выйти" onClick={onLogout}>⎋</button>
       </div>
     </div>
@@ -316,5 +344,7 @@ const s: Record<string, React.CSSProperties> = {
   userName: { color: "var(--text-header)", fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   userSub: { color: "var(--text-muted)", fontSize: 10 },
   settingsBtn: { background: "none", color: "var(--text-muted)", fontSize: 14, padding: "2px", cursor: "pointer" },
+  editNameInput: { flex: 1, background: "var(--bg-tertiary)", border: "1px solid var(--accent)", borderRadius: 4, padding: "4px 6px", fontSize: 12, color: "var(--text-primary)", minWidth: 0 },
+  editNameSave: { background: "var(--accent)", color: "#fff", border: "none", borderRadius: 4, padding: "4px 8px", fontSize: 12, cursor: "pointer" },
   logoutBtn: { background: "none", color: "var(--text-muted)", fontSize: 18 },
 };
