@@ -101,14 +101,34 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
       </div>
 
       <div style={s.controls}>
-        <button style={{ ...s.ctrl, background: muted ? "var(--danger)" : "var(--bg-active)" }} onClick={toggleMute}>
-          {muted ? "🔇" : "🎤"}
+        <button style={{ ...s.ctrl, background: muted ? "#ed4245" : "#3ba55d" }} onClick={toggleMute} title={muted ? "Включить микрофон" : "Выключить микрофон"}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
+            {muted ? (
+              <path d="M12 1a4 4 0 00-4 4v6a4 4 0 008 0V5a4 4 0 00-4-4zM2 2l20 20M17 11a5 5 0 01-10 0M12 19v4M8 23h8" stroke="white" fill="none" strokeWidth="2" strokeLinecap="round"/>
+            ) : (
+              <>
+                <rect x="9" y="1" width="6" height="13" rx="3" />
+                <path d="M5 11a7 7 0 0014 0M12 19v4M8 23h8" stroke="white" fill="none" strokeWidth="2" strokeLinecap="round"/>
+              </>
+            )}
+          </svg>
         </button>
-        <button style={{ ...s.ctrl, background: videoOff ? "var(--danger)" : "var(--bg-active)" }} onClick={toggleVideo}>
-          {videoOff ? "📵" : "📹"}
+        <button style={{ ...s.ctrl, background: videoOff ? "#ed4245" : "#3ba55d" }} onClick={toggleVideo} title={videoOff ? "Включить камеру" : "Выключить камеру"}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
+            {videoOff ? (
+              <path d="M2 2l20 20M17 13V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2h10M23 7l-6 4 6 4V7z" stroke="white" fill="none" strokeWidth="2" strokeLinecap="round"/>
+            ) : (
+              <>
+                <rect x="2" y="5" width="14" height="14" rx="2" />
+                <path d="M23 7l-7 5 7 5V7z" />
+              </>
+            )}
+          </svg>
         </button>
-        <button style={{ ...s.ctrl, background: "var(--danger)" }} onClick={handleEnd}>
-          📵
+        <button style={{ ...s.ctrl, ...s.hangup }} onClick={handleEnd} title="Завершить звонок">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="white">
+            <path d="M12 9c-1.66 0-3 1.34-3 3v2H5c-1.1 0-2-.9-2-2v-1c0-3.87 3.13-7 7-7h4c3.87 0 7 3.13 7 7v1c0 1.1-.9 2-2 2h-4v-2c0-1.66-1.34-3-3-3z" transform="rotate(135 12 12)"/>
+          </svg>
         </button>
       </div>
     </div>
@@ -155,7 +175,11 @@ const s: Record<string, React.CSSProperties> = {
   waiting: { color: "var(--text-muted)", fontSize: 16 },
   controls: { display: "flex", gap: 16, padding: "16px 0 24px" },
   ctrl: {
-    width: 56, height: 56, borderRadius: "50%",
+    width: 52, height: 52, borderRadius: "50%",
     fontSize: 22, display: "flex", alignItems: "center", justifyContent: "center",
+    border: "none", cursor: "pointer", transition: "opacity 0.15s",
+  },
+  hangup: {
+    background: "#ed4245", width: 60, height: 52, borderRadius: 26,
   },
 };

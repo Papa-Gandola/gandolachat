@@ -102,6 +102,35 @@ export default function Sidebar({
     return name.charAt(0).toUpperCase();
   }
 
+  function renderChatItem(chat: ChatOut) {
+    const name = getChatName(chat);
+    const avatarUrl = getChatAvatar(chat);
+    const isActive = chat.id === activeChatId;
+    const online = isOtherOnline(chat);
+    const unreadCount = unread.get(chat.id) || 0;
+    return (
+      <div
+        key={chat.id}
+        style={{ ...s.chatItem, background: isActive ? "var(--bg-active)" : "transparent" }}
+        onClick={() => selectChat(chat)}
+      >
+        <div style={{ position: "relative", flexShrink: 0 }}>
+          <Avatar url={avatarUrl} name={name} size={32} isGroup={chat.is_group} />
+          {online && <div style={s.onlineDot} />}
+        </div>
+        <div style={s.chatInfo}>
+          <span style={s.chatName}>{name}</span>
+          {chat.last_message && (
+            <span style={s.chatPreview}>
+              {chat.last_message.content || chat.last_message.file_name || "Файл"}
+            </span>
+          )}
+        </div>
+        {unreadCount > 0 && <span style={s.unreadBadge}>{unreadCount}</span>}
+      </div>
+    );
+  }
+
   return (
     <div style={s.root}>
       {/* Header */}
@@ -130,12 +159,6 @@ export default function Sidebar({
           ))}
         </div>
       )}
-
-      {/* New group button */}
-      <div style={s.sectionHeader}>
-        <span style={s.sectionTitle}>ЛИЧНЫЕ СООБЩЕНИЯ</span>
-        <button style={s.newGroupBtn} title="Создать группу" onClick={() => setShowNewGroup(true)}>+</button>
-      </div>
 
       {/* New group form */}
       {showNewGroup && (
@@ -186,34 +209,20 @@ export default function Sidebar({
 
       {/* Chat list */}
       <div style={s.chatList}>
-        {chats.map((chat) => {
-          const name = getChatName(chat);
-          const avatarUrl = getChatAvatar(chat);
-          const isActive = chat.id === activeChatId;
-          const online = isOtherOnline(chat);
-          const unreadCount = unread.get(chat.id) || 0;
-          return (
-            <div
-              key={chat.id}
-              style={{ ...s.chatItem, background: isActive ? "var(--bg-active)" : "transparent" }}
-              onClick={() => selectChat(chat)}
-            >
-              <div style={{ position: "relative", flexShrink: 0 }}>
-                <Avatar url={avatarUrl} name={name} size={32} isGroup={chat.is_group} />
-                {online && <div style={s.onlineDot} />}
-              </div>
-              <div style={s.chatInfo}>
-                <span style={s.chatName}>{name}</span>
-                {chat.last_message && (
-                  <span style={s.chatPreview}>
-                    {chat.last_message.content || chat.last_message.file_name || "Файл"}
-                  </span>
-                )}
-              </div>
-              {unreadCount > 0 && <span style={s.unreadBadge}>{unreadCount}</span>}
-            </div>
-          );
-        })}
+        {/* Groups section */}
+        {chats.some((c) => c.is_group) && (
+          <div style={s.sectionHeader}>
+            <span style={s.sectionTitle}>ГРУППЫ</span>
+          </div>
+        )}
+        {chats.filter((c) => c.is_group).map((chat) => renderChatItem(chat))}
+
+        {/* DMs section */}
+        <div style={s.sectionHeader}>
+          <span style={s.sectionTitle}>ЛИЧНЫЕ СООБЩЕНИЯ</span>
+          <button style={s.newGroupBtn} title="Создать группу" onClick={() => setShowNewGroup(true)}>+</button>
+        </div>
+        {chats.filter((c) => !c.is_group).map((chat) => renderChatItem(chat))}
       </div>
 
       {/* User panel */}

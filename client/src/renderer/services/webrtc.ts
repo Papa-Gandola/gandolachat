@@ -9,6 +9,7 @@ export interface PeerEntry {
 
 type OnStreamCallback = (userId: number, stream: MediaStream) => void;
 type OnPeerLeftCallback = (userId: number) => void;
+type OnCallEndedCallback = () => void;
 
 class WebRTCService {
   private peers: Map<number, SimplePeer.Instance> = new Map();
@@ -19,6 +20,7 @@ class WebRTCService {
 
   onStream: OnStreamCallback | null = null;
   onPeerLeft: OnPeerLeftCallback | null = null;
+  onCallEnded: OnCallEndedCallback | null = null;
 
   private _initialized = false;
 
@@ -32,20 +34,8 @@ class WebRTCService {
 
   async startCall(chatId: number, memberIds: number[], video: boolean) {
     this.currentChatId = chatId;
-    try {
-      this.localStream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video,
-      });
-    } catch {
-      // Camera busy — fallback to audio only
-      this.localStream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: false,
-      });
-    }
+    this.localStream = await this._getMedia(video);
 
-    // Initiate connection with each member
     for (const uid of memberIds) {
       if (uid === this.myUserId) continue;
       this._createPeer(uid, true);
@@ -56,17 +46,7 @@ class WebRTCService {
 
   async joinCall(chatId: number, initiatorId: number, video: boolean) {
     this.currentChatId = chatId;
-    try {
-      this.localStream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video,
-      });
-    } catch {
-      this.localStream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: false,
-      });
-    }
+    this.localStream = await this._getMedia(video);
     this._createPeer(initiatorId, false);
 
     // Flush signals that arrived before we joined
@@ -76,10 +56,37 @@ class WebRTCService {
     }
     this.pendingSignals.delete(initiatorId);
 
+    // Also flush signals from other users (group call - multiple people may have sent signals)
+    for (const [userId, signals] of this.pendingSignals.entries()) {
+      if (!this.peers.has(userId)) {
+        // In a group call, if someone else sent signals, we're the non-initiator
+        this._createPeer(userId, false);
+      }
+      for (const sig of signals) {
+        this.peers.get(userId)?.signal(sig);
+      }
+    }
+    this.pendingSignals.clear();
+
     return this.localStream;
   }
 
+  private async _getMedia(video: boolean): Promise<MediaStream> {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ audio: true, video });
+    } catch {
+      return await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    }
+  }
+
   private _createPeer(targetUserId: number, initiator: boolean) {
+    // Destroy existing peer if any (reconnect case)
+    const existing = this.peers.get(targetUserId);
+    if (existing) {
+      existing.destroy();
+      this.peers.delete(targetUserId);
+    }
+
     const peer = new SimplePeer({
       initiator,
       stream: this.localStream!,
@@ -88,6 +95,7 @@ class WebRTCService {
         iceServers: [
           { urls: "stun:stun.l.google.com:19302" },
           { urls: "stun:stun1.l.google.com:19302" },
+          { urls: "stun:stun2.l.google.com:19302" },
         ],
       },
     });
@@ -117,6 +125,7 @@ class WebRTCService {
     peer.on("error", (err) => {
       console.error("[WebRTC] Peer error with", targetUserId, err);
       this.peers.delete(targetUserId);
+      this.onPeerLeft?.(targetUserId);
     });
 
     this.peers.set(targetUserId, peer);
@@ -126,7 +135,6 @@ class WebRTCService {
     const fromId = data.from_user_id;
 
     if (!this.localStream) {
-      // Buffer signals until joinCall is called
       if (!this.pendingSignals.has(fromId)) {
         this.pendingSignals.set(fromId, []);
       }
@@ -135,9 +143,19 @@ class WebRTCService {
     }
 
     if (!this.peers.has(fromId)) {
+      // New participant joining — they initiated, we respond
       this._createPeer(fromId, false);
     }
-    this.peers.get(fromId)?.signal(data.signal);
+
+    try {
+      this.peers.get(fromId)?.signal(data.signal);
+    } catch (err) {
+      console.error("[WebRTC] Signal error, recreating peer", fromId, err);
+      this._createPeer(fromId, false);
+      try {
+        this.peers.get(fromId)?.signal(data.signal);
+      } catch {}
+    }
   };
 
   private _handleCallEnd = (data: any) => {
@@ -146,11 +164,11 @@ class WebRTCService {
     this.peers.delete(fromId);
     this.onPeerLeft?.(fromId);
 
-    // If no peers left, stop local stream (release camera/mic)
     if (this.peers.size === 0 && this.localStream) {
       this.localStream.getTracks().forEach((t) => t.stop());
       this.localStream = null;
       this.currentChatId = null;
+      this.onCallEnded?.();
     }
   };
 
@@ -172,6 +190,15 @@ class WebRTCService {
 
   isInCall() {
     return this.localStream !== null;
+  }
+
+  getCurrentChatId() {
+    return this.currentChatId;
+  }
+
+  // Set output device on all remote audio elements
+  async setOutputDevice(deviceId: string) {
+    // This needs to be called on HTMLAudioElement — handled by VideoCall component
   }
 }
 

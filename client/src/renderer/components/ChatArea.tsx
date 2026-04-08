@@ -230,6 +230,10 @@ export default function ChatArea({ chat, currentUser, incomingCall, onCallEnd }:
       onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
       onDragLeave={() => setDragOver(false)}
       onDrop={handleDrop}
+      onPaste={(e) => {
+        const file = e.clipboardData?.files?.[0];
+        if (file) { e.preventDefault(); sendFile(file); }
+      }}
     >
       {/* Header */}
       <div style={s.header}>
