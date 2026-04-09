@@ -141,6 +141,7 @@ export default function Main({ token, user, onLogout }: Props) {
                 chat={activeChat}
                 currentUser={currentUser}
                 onStartCall={() => startCall(activeChat)}
+                allChats={chats}
               />
             </div>
             {activeChat.is_group && (

@@ -40,6 +40,41 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                     "chat_id": chat_id,
                 }, exclude_user=user_id)
 
+            elif event == "forward_message":
+                target_chat_id = data.get("target_chat_id")
+                original_content = data.get("content", "")
+                original_author = data.get("original_author", "")
+                if target_chat_id and original_content:
+                    sender_result = await db.execute(select(User).where(User.id == user_id))
+                    sender = sender_result.scalar_one()
+                    expires_at = datetime.now(timezone.utc) + timedelta(days=settings.MESSAGE_TTL_DAYS)
+                    fwd_content = f"[Переслано от {original_author}]\n{original_content}"
+                    msg = Message(
+                        chat_id=target_chat_id,
+                        sender_id=user_id,
+                        content=fwd_content,
+                        expires_at=expires_at,
+                    )
+                    db.add(msg)
+                    await db.commit()
+                    await db.refresh(msg)
+                    await manager.broadcast_to_chat(target_chat_id, {
+                        "type": "message",
+                        "id": msg.id,
+                        "chat_id": target_chat_id,
+                        "sender_id": user_id,
+                        "sender_username": sender.username,
+                        "sender_avatar": sender.avatar_url,
+                        "content": fwd_content,
+                        "file_url": None,
+                        "file_name": None,
+                        "is_edited": False,
+                        "created_at": msg.created_at.isoformat(),
+                        "reply_to_id": None,
+                        "reply_to_username": None,
+                        "reply_to_content": None,
+                    })
+
             elif event == "reaction":
                 msg_id = data.get("message_id")
                 emoji = data.get("emoji", "")

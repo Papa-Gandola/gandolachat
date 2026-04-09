@@ -8,11 +8,12 @@ interface Props {
   chat: ChatOut;
   currentUser: UserOut;
   onStartCall: () => void;
+  allChats?: ChatOut[];
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-export default function ChatArea({ chat, currentUser, onStartCall }: Props) {
+export default function ChatArea({ chat, currentUser, onStartCall, allChats = [] }: Props) {
   const [messages, setMessages] = useState<MessageOut[]>([]);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
@@ -29,6 +30,7 @@ export default function ChatArea({ chat, currentUser, onStartCall }: Props) {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [reactions, setReactions] = useState<Map<number, Array<{ emoji: string; userId: number }>>>(new Map());
   const [showReactionPicker, setShowReactionPicker] = useState<number | null>(null);
+  const [forwardMsg, setForwardMsg] = useState<MessageOut | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout>>();
@@ -123,14 +125,38 @@ export default function ChatArea({ chat, currentUser, onStartCall }: Props) {
     return () => document.removeEventListener("click", close);
   }, []);
 
+  const [hasMore, setHasMore] = useState(true);
+  const messagesRef = useRef<HTMLDivElement>(null);
+
   async function loadMessages() {
     setLoading(true);
+    setHasMore(true);
     try {
       const res = await chatApi.getMessages(chat.id);
       setMessages(res.data);
+      setHasMore(res.data.length >= 50);
       setTimeout(() => bottomRef.current?.scrollIntoView(), 100);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadOlderMessages() {
+    if (!hasMore || loading || messages.length === 0) return;
+    const oldest = messages[0];
+    setLoading(true);
+    try {
+      const res = await chatApi.getMessages(chat.id, 50, oldest.id);
+      if (res.data.length < 50) setHasMore(false);
+      if (res.data.length > 0) setMessages((prev) => [...res.data, ...prev]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function handleMessagesScroll(e: React.UIEvent<HTMLDivElement>) {
+    if (e.currentTarget.scrollTop === 0 && hasMore) {
+      loadOlderMessages();
     }
   }
 
@@ -299,7 +325,7 @@ export default function ChatArea({ chat, currentUser, onStartCall }: Props) {
       )}
 
       {/* Messages */}
-      <div style={s.messages}>
+      <div style={s.messages} ref={messagesRef} onScroll={handleMessagesScroll}>
         {loading && <p style={s.loadingText}>Загрузка...</p>}
         {searchResults && <p style={s.searchLabel}>Найдено: {searchResults.length}</p>}
         {dragOver && <div style={s.dropOverlay}>Перетащите файл сюда</div>}
@@ -426,6 +452,7 @@ export default function ChatArea({ chat, currentUser, onStartCall }: Props) {
       {contextMenu && (
         <div style={{ ...s.ctxMenu, left: contextMenu.x, top: contextMenu.y }}>
           <button style={s.ctxItem} onClick={() => { setReplyTo(contextMenu.msg); setContextMenu(null); }}>↩ Ответить</button>
+          <button style={s.ctxItem} onClick={() => { setForwardMsg(contextMenu.msg); setContextMenu(null); }}>➡ Переслать</button>
           {contextMenu.msg.sender_id === currentUser.id && (
             <>
               <button style={s.ctxItem} onClick={() => { setEditingMsg(contextMenu.msg); setEditText(contextMenu.msg.content || ""); setContextMenu(null); }}>✏️ Редактировать</button>
@@ -443,6 +470,32 @@ export default function ChatArea({ chat, currentUser, onStartCall }: Props) {
         <div style={s.replyBar}>
           <span>Ответ для <b>{replyTo.sender_username}</b>: {replyTo.content?.slice(0, 50)}</span>
           <button style={s.replyBarClose} onClick={() => setReplyTo(null)}>✕</button>
+        </div>
+      )}
+
+      {/* Forward message modal */}
+      {forwardMsg && (
+        <div style={s.imageOverlay} onClick={() => setForwardMsg(null)}>
+          <div style={s.forwardModal} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ color: "var(--text-header)", margin: "0 0 12px" }}>Переслать сообщение</h3>
+            <p style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 12 }}>"{forwardMsg.content?.slice(0, 80)}"</p>
+            {allChats.filter((c) => c.id !== chat.id).map((c) => {
+              const name = c.is_group ? c.name : c.members.find((m) => m.id !== currentUser.id)?.username;
+              return (
+                <div key={c.id} style={s.forwardChatItem} onClick={() => {
+                  wsService.send({
+                    type: "forward_message",
+                    target_chat_id: c.id,
+                    content: forwardMsg.content,
+                    original_author: forwardMsg.sender_username,
+                  });
+                  setForwardMsg(null);
+                }}>
+                  <span>{c.is_group ? "#" : "@"} {name}</span>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -529,6 +582,8 @@ const s: Record<string, React.CSSProperties> = {
   msgImage: { maxWidth: 360, maxHeight: 280, borderRadius: 4, marginTop: 4, display: "block" },
   imageOverlay: { position: "fixed" as const, inset: 0, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, cursor: "pointer" },
   imagePreview: { maxWidth: "90%", maxHeight: "90%", borderRadius: 8, objectFit: "contain" as const },
+  forwardModal: { background: "var(--bg-primary)", borderRadius: 8, padding: 20, width: 320, maxHeight: "60%", overflowY: "auto" as const, cursor: "default" },
+  forwardChatItem: { padding: "10px 12px", borderRadius: 4, cursor: "pointer", color: "var(--text-primary)", fontSize: 14, background: "var(--bg-secondary)", marginBottom: 4 },
   fileLink: { color: "var(--text-link)", display: "inline-flex", alignItems: "center", gap: 4, marginTop: 4 },
   replyPreview: { background: "var(--bg-secondary)", borderLeft: "3px solid var(--accent)", padding: "4px 8px", borderRadius: 4, marginBottom: 4, fontSize: 12 },
   replyAuthor: { color: "var(--accent)", fontWeight: 600, marginRight: 6 },
