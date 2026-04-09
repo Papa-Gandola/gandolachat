@@ -151,19 +151,49 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
 
   async function toggleScreenShare() {
     if (screenSharing) {
+      // Stop screen share — restore camera track to peers
       screenStream?.getTracks().forEach((t) => t.stop());
       setScreenStream(null);
       setScreenSharing(false);
+      try {
+        const camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        const camTrack = camStream.getVideoTracks()[0];
+        webrtcService.replaceVideoTrack(camTrack);
+        const ls = webrtcService.getLocalStream();
+        if (ls) {
+          const oldTrack = ls.getVideoTracks()[0];
+          if (oldTrack) { ls.removeTrack(oldTrack); oldTrack.stop(); }
+          ls.addTrack(camTrack);
+        }
+        if (localVideoRef.current) localVideoRef.current.srcObject = webrtcService.getLocalStream();
+      } catch {}
     } else {
       try {
         const stream = await (navigator.mediaDevices as any).getDisplayMedia({ video: true, audio: false });
-        const track = stream.getVideoTracks()[0];
-        track.onended = () => {
-          setScreenStream(null);
-          setScreenSharing(false);
-        };
+        const screenTrack = stream.getVideoTracks()[0];
+        // Replace camera track with screen track in all peers
+        webrtcService.replaceVideoTrack(screenTrack);
+        // Show screen locally
         setScreenStream(stream);
         setScreenSharing(true);
+        // Update local video to show screen
+        if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+        screenTrack.onended = () => {
+          setScreenStream(null);
+          setScreenSharing(false);
+          // Restore camera
+          navigator.mediaDevices.getUserMedia({ video: true, audio: false }).then((camStream) => {
+            const camTrack = camStream.getVideoTracks()[0];
+            webrtcService.replaceVideoTrack(camTrack);
+            const ls = webrtcService.getLocalStream();
+            if (ls) {
+              const oldTrack = ls.getVideoTracks()[0];
+              if (oldTrack) { ls.removeTrack(oldTrack); oldTrack.stop(); }
+              ls.addTrack(camTrack);
+            }
+            if (localVideoRef.current) localVideoRef.current.srcObject = webrtcService.getLocalStream();
+          }).catch(() => {});
+        };
       } catch {}
     }
   }

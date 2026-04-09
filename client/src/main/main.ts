@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, ipcMain, shell, desktopCapturer, session } from "electron";
 import { autoUpdater } from "electron-updater";
 import path from "path";
 const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
@@ -88,6 +88,13 @@ ipcMain.on("update:install", () => {
 });
 
 app.whenReady().then(() => {
+  // Allow screen sharing in Electron
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    desktopCapturer.getSources({ types: ["screen", "window"] }).then((sources) => {
+      callback({ video: sources[0], audio: "loopback" });
+    });
+  });
+
   createWindow();
   if (!isDev) {
     autoUpdater.checkForUpdatesAndNotify();
