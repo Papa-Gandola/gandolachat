@@ -31,6 +31,10 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   const [reactions, setReactions] = useState<Map<number, Array<{ emoji: string; userId: number }>>>(new Map());
   const [showReactionPicker, setShowReactionPicker] = useState<number | null>(null);
   const [forwardMsg, setForwardMsg] = useState<MessageOut | null>(null);
+  const [chatMuted, setChatMuted] = useState(() => {
+    const muted = JSON.parse(localStorage.getItem("mutedChats") || "[]");
+    return muted.includes(chat.id);
+  });
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout>>();
@@ -42,6 +46,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     setSearchResults(null);
     setShowSearch(false);
     setTypingUsers(new Map());
+    setChatMuted(JSON.parse(localStorage.getItem("mutedChats") || "[]").includes(chat.id));
     loadMessages();
     return () => {
       if (typingTimerRef.current) {
@@ -56,8 +61,8 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
       if (data.chat_id !== chat.id) return;
       setMessages((prev) => [...prev, data as MessageOut]);
       if (data.sender_id !== currentUser.id) {
-        const mutedChats = JSON.parse(localStorage.getItem("mutedChats") || "[]");
-        if (!mutedChats.includes(chat.id)) {
+        const isMuted = JSON.parse(localStorage.getItem("mutedChats") || "[]").includes(chat.id);
+        if (!isMuted) {
           playMessageSound();
           showNotification(data.sender_username, data.content || "Sent a file");
         }
@@ -284,19 +289,18 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
           )}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button style={s.headerBtn} title={JSON.parse(localStorage.getItem("mutedChats") || "[]").includes(chat.id) ? "Включить уведомления" : "Выключить уведомления"} onClick={() => {
+          <button style={s.headerBtn} title={chatMuted ? "Включить уведомления" : "Выключить уведомления"} onClick={() => {
             const muted = JSON.parse(localStorage.getItem("mutedChats") || "[]");
-            if (muted.includes(chat.id)) {
+            if (chatMuted) {
               localStorage.setItem("mutedChats", JSON.stringify(muted.filter((id: number) => id !== chat.id)));
             } else {
               localStorage.setItem("mutedChats", JSON.stringify([...muted, chat.id]));
             }
-            // Force re-render
-            setText((t) => t);
+            setChatMuted(!chatMuted);
           }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={JSON.parse(localStorage.getItem("mutedChats") || "[]").includes(chat.id) ? "#ed4245" : "currentColor"} strokeWidth="2" strokeLinecap="round">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={chatMuted ? "#ed4245" : "currentColor"} strokeWidth="2" strokeLinecap="round">
               <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/>
-              {JSON.parse(localStorage.getItem("mutedChats") || "[]").includes(chat.id) && <line x1="1" y1="1" x2="23" y2="23"/>}
+              {chatMuted && <line x1="1" y1="1" x2="23" y2="23"/>}
             </svg>
           </button>
           <button style={s.headerBtn} title="Поиск" onClick={() => setShowSearch(!showSearch)}>

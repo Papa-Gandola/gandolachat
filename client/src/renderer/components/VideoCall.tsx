@@ -41,8 +41,11 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   // Restore local video when un-minimized
   useEffect(() => {
     if (!minimized && localVideoRef.current) {
-      const ls = screenSharing ? screenStream : webrtcService.getLocalStream();
+      const ls = webrtcService.getLocalStream();
       if (ls) localVideoRef.current.srcObject = ls;
+    }
+    if (!minimized && screenVideoRef.current && screenStream) {
+      screenVideoRef.current.srcObject = screenStream;
     }
   }, [minimized]);
 
@@ -184,10 +187,11 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
         },
       });
       const screenTrack = stream.getVideoTracks()[0];
+      // Send screen to peers but keep local webcam running
       webrtcService.replaceVideoTrack(screenTrack);
       setScreenStream(stream);
       setScreenSharing(true);
-      if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+      // Don't change localVideoRef — keep showing webcam
       screenTrack.onended = () => stopScreenShare();
     } catch {}
   }
@@ -196,17 +200,12 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
     screenStream?.getTracks().forEach((t) => t.stop());
     setScreenStream(null);
     setScreenSharing(false);
-    navigator.mediaDevices.getUserMedia({ video: true, audio: false }).then((camStream) => {
-      const camTrack = camStream.getVideoTracks()[0];
+    // Restore webcam track to peers
+    const ls = webrtcService.getLocalStream();
+    const camTrack = ls?.getVideoTracks()[0];
+    if (camTrack) {
       webrtcService.replaceVideoTrack(camTrack);
-      const ls = webrtcService.getLocalStream();
-      if (ls) {
-        const oldTrack = ls.getVideoTracks()[0];
-        if (oldTrack) { ls.removeTrack(oldTrack); oldTrack.stop(); }
-        ls.addTrack(camTrack);
-      }
-      if (localVideoRef.current) localVideoRef.current.srcObject = webrtcService.getLocalStream();
-    }).catch(() => {});
+    }
   }
 
   function changePeerVolume(userId: number, volume: number) {
@@ -549,10 +548,11 @@ function HiddenAudio({ stream, deafened, volume }: { stream: MediaStream; deafen
 
 const s: Record<string, React.CSSProperties> = {
   miniBar: {
-    position: "fixed", bottom: 0, left: 240, right: 0, zIndex: 100,
+    position: "fixed", bottom: 60, right: 16, zIndex: 100,
     background: "#3ba55d", display: "flex", alignItems: "center",
-    justifyContent: "space-between", padding: "10px 16px",
-    cursor: "pointer",
+    gap: 12, padding: "8px 14px",
+    cursor: "pointer", borderRadius: 8,
+    boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
   },
   miniText: { color: "#fff", fontWeight: 600, fontSize: 13 },
   miniBtn: {
