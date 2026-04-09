@@ -84,7 +84,7 @@ ipcMain.handle("update:check", async () => {
 });
 
 ipcMain.on("update:install", () => {
-  autoUpdater.quitAndInstall();
+  autoUpdater.quitAndInstall(true, true);
 });
 
 app.whenReady().then(() => {

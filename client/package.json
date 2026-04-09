@@ -1,6 +1,6 @@
 {
   "name": "gandola-chat",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "GandolaChat — a simple Discord-like desktop messenger",
   "main": "dist/main/main.js",
   "scripts": {
@@ -50,8 +50,7 @@
       "icon": "assets/icon.ico"
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
+      "oneClick": true,
       "installerIcon": "assets/icon.ico",
       "installerHeaderIcon": "assets/icon.ico",
       "createDesktopShortcut": true,
