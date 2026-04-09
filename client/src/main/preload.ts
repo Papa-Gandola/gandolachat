@@ -9,4 +9,5 @@ contextBridge.exposeInMainWorld("electron", {
   onUpdateStatus: (callback: (status: string, info?: any) => void) => {
     ipcRenderer.on("update:status", (_e, status, info) => callback(status, info));
   },
+  getScreenSources: () => ipcRenderer.invoke("screen:getSources"),
 });

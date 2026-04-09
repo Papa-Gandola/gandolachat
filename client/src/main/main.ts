@@ -88,12 +88,7 @@ ipcMain.on("update:install", () => {
 });
 
 app.whenReady().then(() => {
-  // Allow screen sharing in Electron
-  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
-    desktopCapturer.getSources({ types: ["screen", "window"] }).then((sources) => {
-      callback({ video: sources[0], audio: "loopback" });
-    });
-  });
+  // Screen sharing handled via IPC for source selection
 
   createWindow();
   if (!isDev) {
@@ -107,6 +102,19 @@ app.on("window-all-closed", () => {
 
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
+});
+
+// Screen sources for screen sharing
+ipcMain.handle("screen:getSources", async () => {
+  const sources = await desktopCapturer.getSources({
+    types: ["screen", "window"],
+    thumbnailSize: { width: 320, height: 180 },
+  });
+  return sources.map((s) => ({
+    id: s.id,
+    name: s.name,
+    thumbnail: s.thumbnail.toDataURL(),
+  }));
 });
 
 // Window controls

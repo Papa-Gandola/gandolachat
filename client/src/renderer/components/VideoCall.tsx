@@ -23,6 +23,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   const [deafened, setDeafened] = useState(false);
   const [screenSharing, setScreenSharing] = useState(false);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
+  const [screenSources, setScreenSources] = useState<any[] | null>(null);
   const [enlarged, setEnlarged] = useState<string | null>(null);
   const screenVideoRef = useRef<HTMLVideoElement>(null);
   const [minimized, setMinimized] = useState(false);
@@ -151,51 +152,53 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
 
   async function toggleScreenShare() {
     if (screenSharing) {
-      // Stop screen share — restore camera track to peers
-      screenStream?.getTracks().forEach((t) => t.stop());
-      setScreenStream(null);
-      setScreenSharing(false);
-      try {
-        const camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-        const camTrack = camStream.getVideoTracks()[0];
-        webrtcService.replaceVideoTrack(camTrack);
-        const ls = webrtcService.getLocalStream();
-        if (ls) {
-          const oldTrack = ls.getVideoTracks()[0];
-          if (oldTrack) { ls.removeTrack(oldTrack); oldTrack.stop(); }
-          ls.addTrack(camTrack);
-        }
-        if (localVideoRef.current) localVideoRef.current.srcObject = webrtcService.getLocalStream();
-      } catch {}
+      stopScreenShare();
     } else {
-      try {
-        const stream = await (navigator.mediaDevices as any).getDisplayMedia({ video: true, audio: false });
-        const screenTrack = stream.getVideoTracks()[0];
-        // Replace camera track with screen track in all peers
-        webrtcService.replaceVideoTrack(screenTrack);
-        // Show screen locally
-        setScreenStream(stream);
-        setScreenSharing(true);
-        // Update local video to show screen
-        if (localVideoRef.current) localVideoRef.current.srcObject = stream;
-        screenTrack.onended = () => {
-          setScreenStream(null);
-          setScreenSharing(false);
-          // Restore camera
-          navigator.mediaDevices.getUserMedia({ video: true, audio: false }).then((camStream) => {
-            const camTrack = camStream.getVideoTracks()[0];
-            webrtcService.replaceVideoTrack(camTrack);
-            const ls = webrtcService.getLocalStream();
-            if (ls) {
-              const oldTrack = ls.getVideoTracks()[0];
-              if (oldTrack) { ls.removeTrack(oldTrack); oldTrack.stop(); }
-              ls.addTrack(camTrack);
-            }
-            if (localVideoRef.current) localVideoRef.current.srcObject = webrtcService.getLocalStream();
-          }).catch(() => {});
-        };
-      } catch {}
+      // Show source picker
+      const electron = (window as any).electron;
+      if (electron?.getScreenSources) {
+        const sources = await electron.getScreenSources();
+        setScreenSources(sources);
+      }
     }
+  }
+
+  async function startScreenShare(sourceId: string) {
+    setScreenSources(null);
+    try {
+      const stream = await (navigator.mediaDevices as any).getUserMedia({
+        audio: false,
+        video: {
+          mandatory: {
+            chromeMediaSource: "desktop",
+            chromeMediaSourceId: sourceId,
+          },
+        },
+      });
+      const screenTrack = stream.getVideoTracks()[0];
+      webrtcService.replaceVideoTrack(screenTrack);
+      setScreenStream(stream);
+      setScreenSharing(true);
+      if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+      screenTrack.onended = () => stopScreenShare();
+    } catch {}
+  }
+
+  function stopScreenShare() {
+    screenStream?.getTracks().forEach((t) => t.stop());
+    setScreenStream(null);
+    setScreenSharing(false);
+    navigator.mediaDevices.getUserMedia({ video: true, audio: false }).then((camStream) => {
+      const camTrack = camStream.getVideoTracks()[0];
+      webrtcService.replaceVideoTrack(camTrack);
+      const ls = webrtcService.getLocalStream();
+      if (ls) {
+        const oldTrack = ls.getVideoTracks()[0];
+        if (oldTrack) { ls.removeTrack(oldTrack); oldTrack.stop(); }
+        ls.addTrack(camTrack);
+      }
+      if (localVideoRef.current) localVideoRef.current.srcObject = webrtcService.getLocalStream();
+    }).catch(() => {});
   }
 
   function changePeerVolume(userId: number, volume: number) {
@@ -278,6 +281,22 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
           </div>
         )}
       </div>
+
+      {/* Screen source picker */}
+      {screenSources && (
+        <div style={s.sourcePicker}>
+          <div style={s.sourceTitle}>Выберите экран для демонстрации</div>
+          <div style={s.sourceGrid}>
+            {screenSources.map((src: any) => (
+              <div key={src.id} style={s.sourceItem} onClick={() => startScreenShare(src.id)}>
+                <img src={src.thumbnail} style={s.sourceThumbnail} alt={src.name} />
+                <span style={s.sourceName}>{src.name}</span>
+              </div>
+            ))}
+          </div>
+          <button style={s.sourceCancel} onClick={() => setScreenSources(null)}>Отмена</button>
+        </div>
+      )}
 
       {/* Settings panel */}
       {showSettings && (
@@ -545,6 +564,19 @@ const s: Record<string, React.CSSProperties> = {
   hangup: {
     background: "#ed4245", width: 60, height: 52, borderRadius: 26,
   },
+  sourcePicker: {
+    background: "rgba(30,31,34,0.98)", borderRadius: 12, padding: 20,
+    width: 500, maxWidth: "90%", maxHeight: "70%", overflowY: "auto" as const,
+  },
+  sourceTitle: { color: "#fff", fontSize: 16, fontWeight: 700, marginBottom: 16, textAlign: "center" as const },
+  sourceGrid: { display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 },
+  sourceItem: {
+    background: "var(--bg-tertiary)", borderRadius: 8, padding: 8, cursor: "pointer",
+    border: "2px solid transparent", transition: "border-color 0.15s",
+  },
+  sourceThumbnail: { width: "100%", borderRadius: 4, display: "block", marginBottom: 6 },
+  sourceName: { color: "var(--text-primary)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const, display: "block" },
+  sourceCancel: { marginTop: 12, width: "100%", background: "var(--bg-active)", color: "#fff", border: "none", borderRadius: 6, padding: "8px", fontSize: 13, cursor: "pointer" },
   settingsPanel: {
     background: "rgba(30,31,34,0.95)", borderRadius: 8, padding: 16,
     width: 320, maxWidth: "90%",
