@@ -241,8 +241,12 @@ export default function ChatArea({ chat, currentUser, onStartCall }: Props) {
           )}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button style={s.headerBtn} title="Поиск" onClick={() => setShowSearch(!showSearch)}>🔍</button>
-          <button style={s.headerBtn} title="Видеозвонок" onClick={onStartCall}>📹</button>
+          <button style={s.headerBtn} title="Поиск" onClick={() => setShowSearch(!showSearch)}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </button>
+          <button style={s.headerBtn} title="Видеозвонок" onClick={onStartCall}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+          </button>
         </div>
       </div>
 

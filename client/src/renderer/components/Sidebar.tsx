@@ -276,7 +276,7 @@ export default function Sidebar({
           <input type="file" accept="image/*" style={{ display: "none" }} onChange={uploadAvatar} />
         </label>
         {editingName ? (
-          <div style={{ flex: 1, display: "flex", gap: 4 }}>
+          <div style={{ flex: 1, display: "flex", gap: 4, minWidth: 0, overflow: "hidden" }}>
             <input
               style={s.editNameInput}
               value={newName}
@@ -380,8 +380,8 @@ const s: Record<string, React.CSSProperties> = {
   userName: { color: "var(--text-header)", fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   userSub: { color: "var(--text-muted)", fontSize: 10 },
   settingsBtn: { background: "none", color: "var(--text-muted)", fontSize: 14, padding: "2px", cursor: "pointer" },
-  editNameInput: { flex: 1, background: "var(--bg-tertiary)", border: "1px solid var(--accent)", borderRadius: 4, padding: "4px 6px", fontSize: 12, color: "var(--text-primary)", minWidth: 0 },
-  editNameSave: { background: "var(--accent)", color: "#fff", border: "none", borderRadius: 4, padding: "4px 8px", fontSize: 12, cursor: "pointer" },
+  editNameInput: { flex: 1, background: "var(--bg-tertiary)", border: "1px solid var(--accent)", borderRadius: 4, padding: "4px 6px", fontSize: 12, color: "var(--text-primary)", minWidth: 0, width: "100%" },
+  editNameSave: { background: "var(--accent)", color: "#fff", border: "none", borderRadius: 4, padding: "4px 6px", fontSize: 12, cursor: "pointer", flexShrink: 0 },
   logoutBtn: { background: "none", color: "var(--text-muted)", fontSize: 18 },
   updateBanner: { background: "#5865f2", color: "#fff", padding: "8px 12px", fontSize: 11, textAlign: "center" as const, fontWeight: 600 },
   updateBannerDownload: { background: "#faa61a", color: "#000", padding: "8px 12px", fontSize: 11, textAlign: "center" as const, fontWeight: 600 },

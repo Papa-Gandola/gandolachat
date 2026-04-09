@@ -22,7 +22,9 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   const [videoOff, setVideoOff] = useState(false);
   const [deafened, setDeafened] = useState(false);
   const [screenSharing, setScreenSharing] = useState(false);
-  const [enlarged, setEnlarged] = useState<number | null>(null);
+  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
+  const [enlarged, setEnlarged] = useState<string | null>(null);
+  const screenVideoRef = useRef<HTMLVideoElement>(null);
   const [minimized, setMinimized] = useState(false);
   const [peerVolumes, setPeerVolumes] = useState<Map<number, number>>(new Map());
   const [selfSpeaking, setSelfSpeaking] = useState(false);
@@ -34,6 +36,12 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   const [micGain, setMicGain] = useState(100);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const started = useRef(false);
+
+  useEffect(() => {
+    if (screenVideoRef.current && screenStream) {
+      screenVideoRef.current.srcObject = screenStream;
+    }
+  }, [screenStream]);
 
   // Listen for mute status from other users
   useEffect(() => {
@@ -143,27 +151,18 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
 
   async function toggleScreenShare() {
     if (screenSharing) {
-      try {
-        const camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-        const camTrack = camStream.getVideoTracks()[0];
-        webrtcService.replaceVideoTrack(camTrack);
-        const ls = webrtcService.getLocalStream();
-        if (ls) {
-          ls.getVideoTracks().forEach((t) => t.stop());
-          ls.addTrack(camTrack);
-        }
-        if (localVideoRef.current) localVideoRef.current.srcObject = ls;
-      } catch {}
+      screenStream?.getTracks().forEach((t) => t.stop());
+      setScreenStream(null);
       setScreenSharing(false);
     } else {
       try {
-        const screenStream = await (navigator.mediaDevices as any).getDisplayMedia({ video: true, audio: false });
-        const screenTrack = screenStream.getVideoTracks()[0];
-        webrtcService.replaceVideoTrack(screenTrack);
-        if (localVideoRef.current) localVideoRef.current.srcObject = screenStream;
-        screenTrack.onended = () => {
-          toggleScreenShare(); // Switch back to camera
+        const stream = await (navigator.mediaDevices as any).getDisplayMedia({ video: true, audio: false });
+        const track = stream.getVideoTracks()[0];
+        track.onended = () => {
+          setScreenStream(null);
+          setScreenSharing(false);
         };
+        setScreenStream(stream);
         setScreenSharing(true);
       } catch {}
     }
@@ -202,18 +201,31 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
       <div style={s.header}>
         <span style={s.title}>Видеозвонок</span>
         <span style={s.subtitle}>{callName}</span>
-        <button style={s.minimizeBtn} onClick={() => setMinimized(true)} title="Свернуть">▼</button>
+        <button style={s.minimizeBtn} onClick={() => setMinimized(true)} title="Свернуть">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><polyline points="4 14 10 20 16 14"/><line x1="10" y1="20" x2="10" y2="4"/></svg>
+        </button>
       </div>
 
       <div style={s.videoGrid}>
         {/* Local video */}
         <div
-          style={{ ...s.videoWrap, ...(enlarged === -1 ? s.enlarged : {}), boxShadow: selfSpeaking && !muted ? "0 0 0 3px #57f287" : "none", transition: "box-shadow 0.15s" }}
-          onClick={() => setEnlarged(enlarged === -1 ? null : -1)}
+          style={{ ...s.videoWrap, ...(enlarged === "self" ? s.enlarged : {}), boxShadow: selfSpeaking && !muted ? "0 0 0 3px #57f287" : "none", transition: "box-shadow 0.15s", cursor: "pointer" }}
+          onClick={() => setEnlarged(enlarged === "self" ? null : "self")}
         >
           <video ref={localVideoRef} autoPlay muted playsInline style={s.video} />
-          <span style={s.videoLabel}>Вы{screenSharing ? " (экран)" : ""}</span>
+          <span style={s.videoLabel}>Вы</span>
         </div>
+
+        {/* Screen share tile */}
+        {screenStream && (
+          <div
+            style={{ ...s.videoWrap, ...(enlarged === "screen" ? s.enlarged : {}), cursor: "pointer", border: "2px solid #5865f2" }}
+            onClick={() => setEnlarged(enlarged === "screen" ? null : "screen")}
+          >
+            <video ref={screenVideoRef} autoPlay muted playsInline style={s.video} />
+            <span style={s.videoLabel}>Ваш экран</span>
+          </div>
+        )}
 
         {/* Remote videos */}
         {remoteVideos.map((entry) => (
@@ -221,12 +233,12 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
             key={entry.userId}
             entry={entry}
             chat={chat}
-            enlarged={enlarged === entry.userId}
+            enlarged={enlarged === String(entry.userId)}
             deafened={deafened}
             peerMuted={mutedPeers.has(entry.userId)}
             volume={peerVolumes.get(entry.userId) ?? 100}
             onVolumeChange={(v) => changePeerVolume(entry.userId, v)}
-            onClick={() => setEnlarged(enlarged === entry.userId ? null : entry.userId)}
+            onClick={() => setEnlarged(enlarged === String(entry.userId) ? null : String(entry.userId))}
           />
         ))}
 
