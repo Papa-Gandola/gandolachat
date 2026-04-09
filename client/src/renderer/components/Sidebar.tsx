@@ -306,7 +306,7 @@ export default function Sidebar({
           <>
             <div style={s.userInfo}>
               <span style={s.userName}>{currentUser.username}</span>
-              <span style={s.userSub}>Нажми на аватар для смены</span>
+              <span style={s.userSub}>v1.0.7</span>
             </div>
             <button style={s.settingsBtn} title="Изменить никнейм" onClick={() => { setNewName(currentUser.username); setEditingName(true); }}>✏️</button>
           </>

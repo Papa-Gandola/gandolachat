@@ -27,6 +27,8 @@ export default function ChatArea({ chat, currentUser, onStartCall }: Props) {
   const [dragOver, setDragOver] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [reactions, setReactions] = useState<Map<number, Array<{ emoji: string; userId: number }>>>(new Map());
+  const [showReactionPicker, setShowReactionPicker] = useState<number | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout>>();
@@ -52,8 +54,11 @@ export default function ChatArea({ chat, currentUser, onStartCall }: Props) {
       if (data.chat_id !== chat.id) return;
       setMessages((prev) => [...prev, data as MessageOut]);
       if (data.sender_id !== currentUser.id) {
-        playMessageSound();
-        showNotification(data.sender_username, data.content || "Sent a file");
+        const mutedChats = JSON.parse(localStorage.getItem("mutedChats") || "[]");
+        if (!mutedChats.includes(chat.id)) {
+          playMessageSound();
+          showNotification(data.sender_username, data.content || "Sent a file");
+        }
       }
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
     };
@@ -87,15 +92,27 @@ export default function ChatArea({ chat, currentUser, onStartCall }: Props) {
       setMessages((prev) => prev.filter((m) => m.id !== data.message_id));
     };
 
+    const reactionHandler = (data: any) => {
+      if (data.chat_id !== chat.id) return;
+      setReactions((prev) => {
+        const next = new Map(prev);
+        const list = next.get(data.message_id) || [];
+        next.set(data.message_id, [...list, { emoji: data.emoji, userId: data.user_id }]);
+        return next;
+      });
+    };
+
     wsService.on("message", handler);
     wsService.on("typing", typingHandler);
     wsService.on("message_edited", editHandler);
     wsService.on("message_deleted", deleteHandler);
+    wsService.on("reaction", reactionHandler);
     return () => {
       wsService.off("message", handler);
       wsService.off("typing", typingHandler);
       wsService.off("message_edited", editHandler);
       wsService.off("message_deleted", deleteHandler);
+      wsService.off("reaction", reactionHandler);
     };
   }, [chat.id, currentUser.id]);
 
@@ -241,6 +258,21 @@ export default function ChatArea({ chat, currentUser, onStartCall }: Props) {
           )}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
+          <button style={s.headerBtn} title={JSON.parse(localStorage.getItem("mutedChats") || "[]").includes(chat.id) ? "Включить уведомления" : "Выключить уведомления"} onClick={() => {
+            const muted = JSON.parse(localStorage.getItem("mutedChats") || "[]");
+            if (muted.includes(chat.id)) {
+              localStorage.setItem("mutedChats", JSON.stringify(muted.filter((id: number) => id !== chat.id)));
+            } else {
+              localStorage.setItem("mutedChats", JSON.stringify([...muted, chat.id]));
+            }
+            // Force re-render
+            setText((t) => t);
+          }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={JSON.parse(localStorage.getItem("mutedChats") || "[]").includes(chat.id) ? "#ed4245" : "currentColor"} strokeWidth="2" strokeLinecap="round">
+              <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/>
+              {JSON.parse(localStorage.getItem("mutedChats") || "[]").includes(chat.id) && <line x1="1" y1="1" x2="23" y2="23"/>}
+            </svg>
+          </button>
           <button style={s.headerBtn} title="Поиск" onClick={() => setShowSearch(!showSearch)}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           </button>
@@ -341,6 +373,30 @@ export default function ChatArea({ chat, currentUser, onStartCall }: Props) {
                         {msg.content && (
                           <button style={s.replyBtn} onClick={() => setReplyTo(msg)} title="Ответить">↩</button>
                         )}
+                        <button style={s.reactionBtn} onClick={() => setShowReactionPicker(showReactionPicker === msg.id ? null : msg.id)} title="Реакция">😀</button>
+                        {showReactionPicker === msg.id && (
+                          <div style={s.reactionPicker}>
+                            {["🤡", "💀", "🗿", "😭", "💩", "🤮", "👺", "🫠", "🤯", "😈", "👻", "🤓"].map((e) => (
+                              <button key={e} style={s.reactionEmoji} onClick={() => {
+                                wsService.send({ type: "reaction", message_id: msg.id, chat_id: chat.id, emoji: e });
+                                setShowReactionPicker(null);
+                              }}>{e}</button>
+                            ))}
+                          </div>
+                        )}
+                        {/* Reactions display */}
+                        {reactions.get(msg.id)?.length ? (
+                          <div style={s.reactionsRow}>
+                            {Object.entries(
+                              reactions.get(msg.id)!.reduce((acc: Record<string, number>, r) => {
+                                acc[r.emoji] = (acc[r.emoji] || 0) + 1;
+                                return acc;
+                              }, {})
+                            ).map(([emoji, count]) => (
+                              <span key={emoji} style={s.reactionBadge}>{emoji} {count}</span>
+                            ))}
+                          </div>
+                        ) : null}
                       </>
                     )}
                     {msg.file_url && (
@@ -477,7 +533,12 @@ const s: Record<string, React.CSSProperties> = {
   replyPreview: { background: "var(--bg-secondary)", borderLeft: "3px solid var(--accent)", padding: "4px 8px", borderRadius: 4, marginBottom: 4, fontSize: 12 },
   replyAuthor: { color: "var(--accent)", fontWeight: 600, marginRight: 6 },
   replyText: { color: "var(--text-muted)" },
-  replyBtn: { background: "none", color: "var(--text-muted)", fontSize: 14, padding: "2px 6px", opacity: 0.5, position: "absolute" as const, right: 0, top: 0 },
+  replyBtn: { background: "none", color: "var(--text-muted)", fontSize: 14, padding: "2px 6px", opacity: 0.5, position: "absolute" as const, right: 24, top: 0 },
+  reactionBtn: { background: "none", color: "var(--text-muted)", fontSize: 14, padding: "2px 6px", opacity: 0.5, position: "absolute" as const, right: 0, top: 0 },
+  reactionPicker: { position: "absolute" as const, right: 0, top: -36, background: "var(--bg-tertiary)", borderRadius: 8, padding: 4, display: "flex", gap: 2, zIndex: 50, boxShadow: "0 4px 12px rgba(0,0,0,0.4)" },
+  reactionEmoji: { background: "none", fontSize: 20, padding: 4, borderRadius: 4, cursor: "pointer" },
+  reactionsRow: { display: "flex", gap: 4, marginTop: 4, flexWrap: "wrap" as const },
+  reactionBadge: { background: "var(--bg-tertiary)", borderRadius: 10, padding: "2px 8px", fontSize: 13 },
   replyBar: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 16px", background: "var(--bg-secondary)", borderTop: "1px solid var(--border)", fontSize: 13, color: "var(--text-secondary)" },
   replyBarClose: { background: "none", color: "var(--text-muted)", fontSize: 16, padding: "2px 8px" },
   typingBar: { padding: "4px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" },

@@ -215,6 +215,26 @@ async def add_member(
     return {"ok": True}
 
 
+@router.post("/{chat_id}/leave")
+async def leave_chat(
+    chat_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(Chat).options(selectinload(Chat.members)).where(Chat.id == chat_id)
+    )
+    chat = result.scalar_one_or_none()
+    if not chat or not chat.is_group:
+        raise HTTPException(400, "Can only leave group chats")
+    if current_user not in chat.members:
+        raise HTTPException(400, "Not a member")
+    chat.members.remove(current_user)
+    manager.chat_users.get(chat_id, set()).discard(current_user.id)
+    await db.commit()
+    return {"ok": True}
+
+
 @router.delete("/{chat_id}")
 async def delete_chat(
     chat_id: int,

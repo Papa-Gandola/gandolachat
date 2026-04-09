@@ -40,6 +40,19 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                     "chat_id": chat_id,
                 }, exclude_user=user_id)
 
+            elif event == "reaction":
+                msg_id = data.get("message_id")
+                emoji = data.get("emoji", "")
+                chat_id = data.get("chat_id")
+                if msg_id and emoji and chat_id:
+                    await manager.broadcast_to_chat(chat_id, {
+                        "type": "reaction",
+                        "message_id": msg_id,
+                        "chat_id": chat_id,
+                        "user_id": user_id,
+                        "emoji": emoji,
+                    })
+
             elif event == "mute_status":
                 chat_id = data.get("chat_id")
                 await manager.broadcast_to_chat(chat_id, {
@@ -71,10 +84,9 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                         active = manager.active_calls.get(chat_id, set())
                         if len(active) >= 2 and user_id not in active:
                             continue  # DM call full, reject
-                    was_empty = len(manager.active_calls.get(chat_id, set())) == 0
                     manager.active_calls[chat_id].add(user_id)
-                    # Broadcast call_active to chat members not in the call
-                    if was_empty and chat_obj and chat_obj.is_group:
+                    # Always broadcast updated participants
+                    if chat_obj and chat_obj.is_group:
                         await manager.broadcast_to_chat(chat_id, {
                             "type": "call_active",
                             "chat_id": chat_id,

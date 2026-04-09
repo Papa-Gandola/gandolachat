@@ -42,6 +42,11 @@ export default function MemberList({ chat, currentUser, onChatUpdate, onDeleteCh
         ))}
       </div>
 
+      <button style={s.leaveBtn} onClick={async () => {
+        await chatApi.leaveChat(chat.id);
+        window.location.reload();
+      }}>Покинуть группу</button>
+
       {onDeleteChat && (
         <button style={s.deleteBtn} onClick={onDeleteChat}>Удалить группу</button>
       )}
@@ -91,5 +96,6 @@ const s: Record<string, React.CSSProperties> = {
   addSection: { padding: "8px" },
   input: { width: "100%", background: "var(--bg-tertiary)", border: "1px solid var(--border)", borderRadius: 4, padding: "6px 8px", fontSize: 12, color: "var(--text-primary)" },
   result: { display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", cursor: "pointer", borderRadius: 4 },
-  deleteBtn: { margin: "8px", padding: "8px", background: "#ed4245", color: "#fff", borderRadius: 4, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" },
+  leaveBtn: { margin: "8px 8px 4px", padding: "8px", background: "var(--bg-active)", color: "var(--text-primary)", borderRadius: 4, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" },
+  deleteBtn: { margin: "4px 8px 8px", padding: "8px", background: "#ed4245", color: "#fff", borderRadius: 4, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" },
 };

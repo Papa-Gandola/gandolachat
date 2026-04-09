@@ -75,6 +75,7 @@ export const chatApi = {
     api.get<MessageOut[]>(
       `/api/chats/${chatId}/messages?limit=${limit}${beforeId ? `&before_id=${beforeId}` : ""}`
     ),
+  leaveChat: (chatId: number) => api.post(`/api/chats/${chatId}/leave`),
   deleteChat: (chatId: number) => api.delete(`/api/chats/${chatId}`),
   searchMessages: (chatId: number, q: string) =>
     api.get<MessageOut[]>(`/api/chats/${chatId}/search?q=${encodeURIComponent(q)}`),

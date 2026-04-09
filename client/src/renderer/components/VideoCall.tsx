@@ -38,6 +38,14 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const started = useRef(false);
 
+  // Restore local video when un-minimized
+  useEffect(() => {
+    if (!minimized && localVideoRef.current) {
+      const ls = screenSharing ? screenStream : webrtcService.getLocalStream();
+      if (ls) localVideoRef.current.srcObject = ls;
+    }
+  }, [minimized]);
+
   useEffect(() => {
     if (screenVideoRef.current && screenStream) {
       screenVideoRef.current.srcObject = screenStream;
@@ -218,10 +226,18 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
           <span style={s.miniText}>📞 {callName} — {remoteVideos.length + 1} участник(ов)</span>
           <div style={{ display: "flex", gap: 8 }}>
             <button style={s.miniBtn} onClick={(e) => { e.stopPropagation(); toggleMute(); }}>
-              {muted ? "🔇" : "🎤"}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
+                {muted ? (
+                  <><rect x="9" y="1" width="6" height="13" rx="3" fill="white"/><line x1="1" y1="1" x2="23" y2="23"/></>
+                ) : (
+                  <><rect x="9" y="1" width="6" height="13" rx="3" fill="white"/><path d="M5 11a7 7 0 0014 0"/></>
+                )}
+              </svg>
             </button>
             <button style={{ ...s.miniBtn, background: "#ed4245" }} onClick={(e) => { e.stopPropagation(); handleEnd(); }}>
-              ✕
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="white">
+                <path d="M12 9c-1.66 0-3 1.34-3 3v2H5c-1.1 0-2-.9-2-2v-1c0-3.87 3.13-7 7-7h4c3.87 0 7 3.13 7 7v1c0 1.1-.9 2-2 2h-4v-2c0-1.66-1.34-3-3-3z" transform="rotate(135 12 12)"/>
+              </svg>
             </button>
           </div>
         </div>
@@ -245,7 +261,8 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
           style={{ ...s.videoWrap, ...(enlarged === "self" ? s.enlarged : {}), boxShadow: selfSpeaking && !muted ? "0 0 0 3px #57f287" : "none", transition: "box-shadow 0.15s", cursor: "pointer" }}
           onClick={() => setEnlarged(enlarged === "self" ? null : "self")}
         >
-          <video ref={localVideoRef} autoPlay muted playsInline style={s.video} />
+          <video ref={localVideoRef} autoPlay muted playsInline style={{ ...s.video, display: videoOff ? "none" : "block" }} />
+          {videoOff && <CallAvatar name={currentUser.username} url={currentUser.avatar_url} />}
           <span style={s.videoLabel}>Вы</span>
         </div>
 
@@ -479,6 +496,11 @@ function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, volume, onVol
       onContextMenu={(e) => { e.preventDefault(); setShowVolume(!showVolume); }}
     >
       <video ref={ref} autoPlay playsInline style={s.video} />
+      {entry.stream.getVideoTracks().length === 0 && member && (
+        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <CallAvatar name={member.username} url={member.avatar_url} />
+        </div>
+      )}
       <span style={s.videoLabel}>{peerMuted ? "🔇 " : ""}{member?.username || "Участник"}</span>
       {showVolume && (
         <div style={s.volumeSlider} onClick={(e) => e.stopPropagation()}>
@@ -497,6 +519,23 @@ function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, volume, onVol
   );
 }
 
+const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+
+function CallAvatar({ name, url }: { name: string; url: string | null }) {
+  const colors = ["#5865f2", "#57f287", "#fee75c", "#ed4245", "#eb459e", "#faa61a", "#00b0f4"];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  const bg = colors[Math.abs(hash) % colors.length];
+  return url ? (
+    <img src={url.startsWith("http") ? url : `${BASE_URL}${url}`}
+      style={{ width: 80, height: 80, borderRadius: "50%", objectFit: "cover", margin: "65px auto", display: "block" }} alt={name} />
+  ) : (
+    <div style={{ width: 80, height: 80, borderRadius: "50%", background: bg, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 32, margin: "65px auto" }}>
+      {name.charAt(0).toUpperCase()}
+    </div>
+  );
+}
+
 function HiddenAudio({ stream, deafened, volume }: { stream: MediaStream; deafened: boolean; volume: number }) {
   const ref = useRef<HTMLAudioElement>(null);
   useEffect(() => {
@@ -510,9 +549,9 @@ function HiddenAudio({ stream, deafened, volume }: { stream: MediaStream; deafen
 
 const s: Record<string, React.CSSProperties> = {
   miniBar: {
-    position: "absolute", bottom: 56, left: 240, right: 0, zIndex: 100,
+    position: "fixed", bottom: 0, left: 240, right: 0, zIndex: 100,
     background: "#3ba55d", display: "flex", alignItems: "center",
-    justifyContent: "space-between", padding: "8px 16px",
+    justifyContent: "space-between", padding: "10px 16px",
     cursor: "pointer",
   },
   miniText: { color: "#fff", fontWeight: 600, fontSize: 13 },
