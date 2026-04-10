@@ -85,6 +85,7 @@ export const chatApi = {
     return api.post<MessageOut>(`/api/chats/${chatId}/files`, form);
   },
   getReadStatus: (chatId: number) => api.get<Array<{ user_id: number; last_read_message_id: number }>>(`/api/chats/${chatId}/read-status`),
+  getUnreadCounts: () => api.get<Record<string, number>>("/api/chats/unread/counts"),
   getOnlineUsers: () => api.get<{ online_user_ids: number[] }>("/api/chats/online/users"),
 };
 

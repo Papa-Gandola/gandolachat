@@ -45,6 +45,11 @@ export default function Sidebar({
 
   useEffect(() => {
     chatApi.getOnlineUsers().then((res) => setOnlineUsers(new Set(res.data.online_user_ids)));
+    chatApi.getUnreadCounts().then((res) => {
+      const m = new Map<number, number>();
+      Object.entries(res.data).forEach(([k, v]) => m.set(Number(k), v));
+      setUnread(m);
+    }).catch(() => {});
 
     const onOnline = (data: any) => setOnlineUsers((prev) => new Set([...prev, data.user_id]));
     const onOffline = (data: any) => setOnlineUsers((prev) => { const n = new Set(prev); n.delete(data.user_id); return n; });

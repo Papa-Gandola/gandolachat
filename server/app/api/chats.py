@@ -382,6 +382,40 @@ async def get_read_status(
     return [{"user_id": r.user_id, "last_read_message_id": r.last_read_message_id} for r in result.all()]
 
 
+@router.get("/unread/counts")
+async def get_unread_counts(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    # Get all chats
+    result = await db.execute(
+        select(Chat).join(Chat.members).where(User.id == current_user.id)
+    )
+    chats = result.scalars().all()
+
+    # Get read receipts for current user
+    receipts = await db.execute(
+        select(read_receipts).where(read_receipts.c.user_id == current_user.id)
+    )
+    read_map = {r.chat_id: r.last_read_message_id for r in receipts.all()}
+
+    counts = {}
+    for chat in chats:
+        last_read = read_map.get(chat.id, 0) or 0
+        count_result = await db.execute(
+            select(Message.id).where(
+                Message.chat_id == chat.id,
+                Message.id > last_read,
+                Message.sender_id != current_user.id,
+            )
+        )
+        count = len(count_result.all())
+        if count > 0:
+            counts[chat.id] = count
+
+    return counts
+
+
 @router.get("/online/users")
 async def get_online_users(current_user: User = Depends(get_current_user)):
     return {"online_user_ids": list(manager.get_online_user_ids())}
