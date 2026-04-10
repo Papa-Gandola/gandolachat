@@ -7,7 +7,7 @@ from pathlib import Path
 import aiofiles
 import uuid
 from app.database import get_db
-from app.models import Chat, User, Message, chat_members
+from app.models import Chat, User, Message, Reaction, chat_members, read_receipts
 from app.schemas import ChatOut, UserOut, MessageOut, CreateGroupChat, AddMember
 from app.auth import get_current_user
 from app.ws.manager import manager
@@ -35,6 +35,7 @@ def _message_out(msg: Message) -> MessageOut:
         reply_to_id=msg.reply_to_id,
         reply_to_username=reply_username,
         reply_to_content=reply_content,
+        reactions=[{"emoji": r.emoji, "user_id": r.user_id} for r in (msg.reactions if hasattr(msg, 'reactions') and msg.reactions else [])],
         created_at=msg.created_at,
     )
 
@@ -42,7 +43,7 @@ def _message_out(msg: Message) -> MessageOut:
 async def _get_last_message(chat_id: int, db: AsyncSession) -> MessageOut | None:
     result = await db.execute(
         select(Message)
-        .options(selectinload(Message.sender), selectinload(Message.reply_to).selectinload(Message.sender))
+        .options(selectinload(Message.sender), selectinload(Message.reply_to).selectinload(Message.sender), selectinload(Message.reactions))
         .where(Message.chat_id == chat_id)
         .order_by(Message.created_at.desc())
         .limit(1)
@@ -279,7 +280,7 @@ async def get_messages(
 
     query = (
         select(Message)
-        .options(selectinload(Message.sender), selectinload(Message.reply_to).selectinload(Message.sender))
+        .options(selectinload(Message.sender), selectinload(Message.reply_to).selectinload(Message.sender), selectinload(Message.reactions))
         .where(Message.chat_id == chat_id)
         .order_by(Message.created_at.desc())
         .limit(limit)
@@ -331,7 +332,7 @@ async def upload_file(
     await db.commit()
 
     result2 = await db.execute(
-        select(Message).options(selectinload(Message.sender), selectinload(Message.reply_to).selectinload(Message.sender)).where(Message.id == msg.id)
+        select(Message).options(selectinload(Message.sender), selectinload(Message.reply_to).selectinload(Message.sender), selectinload(Message.reactions)).where(Message.id == msg.id)
     )
     msg = result2.scalar_one()
     out = _message_out(msg)
@@ -361,12 +362,24 @@ async def search_messages(
 
     result = await db.execute(
         select(Message)
-        .options(selectinload(Message.sender), selectinload(Message.reply_to).selectinload(Message.sender))
+        .options(selectinload(Message.sender), selectinload(Message.reply_to).selectinload(Message.sender), selectinload(Message.reactions))
         .where(Message.chat_id == chat_id, Message.content.ilike(f"%{q}%"))
         .order_by(Message.created_at.desc())
         .limit(20)
     )
     return [_message_out(m) for m in reversed(result.scalars().all())]
+
+
+@router.get("/{chat_id}/read-status")
+async def get_read_status(
+    chat_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(read_receipts).where(read_receipts.c.chat_id == chat_id)
+    )
+    return [{"user_id": r.user_id, "last_read_message_id": r.last_read_message_id} for r in result.all()]
 
 
 @router.get("/online/users")

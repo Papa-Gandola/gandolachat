@@ -260,7 +260,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
           style={{ ...s.videoWrap, ...(enlarged === "self" ? s.enlarged : {}), boxShadow: selfSpeaking && !muted ? "0 0 0 3px #57f287" : "none", transition: "box-shadow 0.15s", cursor: "pointer" }}
           onClick={() => setEnlarged(enlarged === "self" ? null : "self")}
         >
-          <video ref={localVideoRef} autoPlay muted playsInline style={{ ...s.video, display: videoOff ? "none" : "block" }} />
+          <video ref={localVideoRef} autoPlay muted playsInline style={{ ...(enlarged === "self" ? s.videoEnlarged : s.video), display: videoOff ? "none" : "block" }} />
           {videoOff && <CallAvatar name={currentUser.username} url={currentUser.avatar_url} />}
           <span style={s.videoLabel}>Вы</span>
         </div>
@@ -271,7 +271,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
             style={{ ...s.videoWrap, ...(enlarged === "screen" ? s.enlarged : {}), cursor: "pointer", border: "2px solid #5865f2" }}
             onClick={() => setEnlarged(enlarged === "screen" ? null : "screen")}
           >
-            <video ref={screenVideoRef} autoPlay muted playsInline style={s.video} />
+            <video ref={screenVideoRef} autoPlay muted playsInline style={enlarged === "screen" ? s.videoEnlarged : s.video} />
             <span style={s.videoLabel}>Ваш экран</span>
           </div>
         )}
@@ -494,7 +494,7 @@ function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, volume, onVol
       onClick={onClick}
       onContextMenu={(e) => { e.preventDefault(); setShowVolume(!showVolume); }}
     >
-      <video ref={ref} autoPlay playsInline style={s.video} />
+      <video ref={ref} autoPlay playsInline style={enlarged ? s.videoEnlarged : s.video} />
       {entry.stream.getVideoTracks().length === 0 && member && (
         <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <CallAvatar name={member.username} url={member.avatar_url} />
@@ -581,8 +581,9 @@ const s: Record<string, React.CSSProperties> = {
     position: "relative", borderRadius: 8, overflow: "hidden",
     background: "#18191c", transition: "all 0.3s",
   },
-  enlarged: { width: "60%", maxWidth: 640 },
+  enlarged: { width: "50%", maxWidth: "50%" },
   video: { width: 280, height: 210, objectFit: "cover", display: "block" },
+  videoEnlarged: { width: "100%", height: "auto", maxHeight: "60vh", objectFit: "contain" as const, display: "block" },
   videoLabel: {
     position: "absolute", bottom: 8, left: 8,
     background: "rgba(0,0,0,0.6)", color: "#fff",

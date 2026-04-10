@@ -56,3 +56,25 @@ class Message(Base):
     reply_to: Mapped["Message | None"] = relationship(remote_side=[id], foreign_keys=[reply_to_id])
     chat: Mapped["Chat"] = relationship(back_populates="messages")
     sender: Mapped["User"] = relationship(back_populates="messages")
+    reactions: Mapped[list["Reaction"]] = relationship(back_populates="message", cascade="all, delete-orphan")
+
+
+class Reaction(Base):
+    __tablename__ = "reactions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey("messages.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    emoji: Mapped[str] = mapped_column(String(10))
+
+    message: Mapped["Message"] = relationship(back_populates="reactions")
+
+
+# Track last read message per user per chat
+read_receipts = Table(
+    "read_receipts",
+    Base.metadata,
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("chat_id", Integer, ForeignKey("chats.id", ondelete="CASCADE"), primary_key=True),
+    Column("last_read_message_id", Integer, ForeignKey("messages.id", ondelete="SET NULL"), nullable=True),
+)

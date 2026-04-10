@@ -2,7 +2,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime, timedelta, timezone
-from app.models import Chat, Message, User
+from app.models import Chat, Message, User, Reaction, read_receipts
 from app.ws.manager import manager
 from app.config import settings
 
@@ -80,6 +80,9 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                 emoji = data.get("emoji", "")
                 chat_id = data.get("chat_id")
                 if msg_id and emoji and chat_id:
+                    reaction = Reaction(message_id=msg_id, user_id=user_id, emoji=emoji)
+                    db.add(reaction)
+                    await db.commit()
                     await manager.broadcast_to_chat(chat_id, {
                         "type": "reaction",
                         "message_id": msg_id,
@@ -87,6 +90,29 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                         "user_id": user_id,
                         "emoji": emoji,
                     })
+
+            elif event == "mark_read":
+                chat_id = data.get("chat_id")
+                msg_id = data.get("message_id")
+                if chat_id and msg_id:
+                    await db.execute(
+                        read_receipts.delete().where(
+                            read_receipts.c.user_id == user_id,
+                            read_receipts.c.chat_id == chat_id,
+                        )
+                    )
+                    await db.execute(
+                        read_receipts.insert().values(
+                            user_id=user_id, chat_id=chat_id, last_read_message_id=msg_id,
+                        )
+                    )
+                    await db.commit()
+                    await manager.broadcast_to_chat(chat_id, {
+                        "type": "message_read",
+                        "chat_id": chat_id,
+                        "user_id": user_id,
+                        "last_read_message_id": msg_id,
+                    }, exclude_user=user_id)
 
             elif event == "mute_status":
                 chat_id = data.get("chat_id")

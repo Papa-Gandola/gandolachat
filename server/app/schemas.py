@@ -39,6 +39,7 @@ class MessageOut(BaseModel):
     reply_to_id: int | None = None
     reply_to_username: str | None = None
     reply_to_content: str | None = None
+    reactions: list[dict] = []
     created_at: datetime
 
     model_config = {"from_attributes": True}

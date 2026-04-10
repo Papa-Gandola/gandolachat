@@ -31,6 +31,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   const [reactions, setReactions] = useState<Map<number, Array<{ emoji: string; userId: number }>>>(new Map());
   const [showReactionPicker, setShowReactionPicker] = useState<number | null>(null);
   const [forwardMsg, setForwardMsg] = useState<MessageOut | null>(null);
+  const [readBy, setReadBy] = useState<Map<number, number>>(new Map()); // userId -> lastReadMsgId
   const [chatMuted, setChatMuted] = useState(() => {
     const muted = JSON.parse(localStorage.getItem("mutedChats") || "[]");
     return muted.includes(chat.id);
@@ -47,6 +48,12 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     setShowSearch(false);
     setTypingUsers(new Map());
     setChatMuted(JSON.parse(localStorage.getItem("mutedChats") || "[]").includes(chat.id));
+    setReadBy(new Map());
+    chatApi.getReadStatus(chat.id).then((res) => {
+      const m = new Map<number, number>();
+      res.data.forEach((r) => m.set(r.user_id, r.last_read_message_id));
+      setReadBy(m);
+    }).catch(() => {});
     loadMessages();
     return () => {
       if (typingTimerRef.current) {
@@ -60,6 +67,8 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     const handler = (data: any) => {
       if (data.chat_id !== chat.id) return;
       setMessages((prev) => [...prev, data as MessageOut]);
+      // Auto mark as read
+      wsService.send({ type: "mark_read", chat_id: chat.id, message_id: data.id });
       if (data.sender_id !== currentUser.id) {
         const isMuted = JSON.parse(localStorage.getItem("mutedChats") || "[]").includes(chat.id);
         if (!isMuted) {
@@ -109,17 +118,24 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
       });
     };
 
+    const readHandler = (data: any) => {
+      if (data.chat_id !== chat.id) return;
+      setReadBy((prev) => new Map(prev).set(data.user_id, data.last_read_message_id));
+    };
+
     wsService.on("message", handler);
     wsService.on("typing", typingHandler);
     wsService.on("message_edited", editHandler);
     wsService.on("message_deleted", deleteHandler);
     wsService.on("reaction", reactionHandler);
+    wsService.on("message_read", readHandler);
     return () => {
       wsService.off("message", handler);
       wsService.off("typing", typingHandler);
       wsService.off("message_edited", editHandler);
       wsService.off("message_deleted", deleteHandler);
       wsService.off("reaction", reactionHandler);
+      wsService.off("message_read", readHandler);
     };
   }, [chat.id, currentUser.id]);
 
@@ -140,6 +156,19 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
       const res = await chatApi.getMessages(chat.id);
       setMessages(res.data);
       setHasMore(res.data.length >= 50);
+      // Load reactions from API response
+      const rMap = new Map<number, Array<{ emoji: string; userId: number }>>();
+      res.data.forEach((m: any) => {
+        if (m.reactions?.length) {
+          rMap.set(m.id, m.reactions.map((r: any) => ({ emoji: r.emoji, userId: r.user_id })));
+        }
+      });
+      setReactions(rMap);
+      // Mark messages as read
+      if (res.data.length > 0) {
+        const lastMsg = res.data[res.data.length - 1];
+        wsService.send({ type: "mark_read", chat_id: chat.id, message_id: lastMsg.id });
+      }
       setTimeout(() => bottomRef.current?.scrollIntoView(), 100);
     } finally {
       setLoading(false);
@@ -371,6 +400,11 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                         </span>
                         <span style={s.msgTime}>{formatTime(msg.created_at)}</span>
                         {msg.is_edited && <span style={s.editedTag}>(ред.)</span>}
+                        {isMine && (() => {
+                          const otherMembers = chat.members.filter((m) => m.id !== currentUser.id);
+                          const allRead = otherMembers.every((m) => (readBy.get(m.id) || 0) >= msg.id);
+                          return <span style={{ ...s.readCheck, color: allRead ? "#57f287" : "var(--text-muted)" }}>{allRead ? "✓✓" : "✓"}</span>;
+                        })()}
                       </div>
                     )}
                     {/* Reply preview */}
@@ -399,21 +433,6 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                     ) : (
                       <>
                         {msg.content && <p style={s.msgText}>{msg.content}</p>}
-                        {/* Reply button (inline) */}
-                        {msg.content && (
-                          <button style={s.replyBtn} onClick={() => setReplyTo(msg)} title="Ответить">↩</button>
-                        )}
-                        <button style={s.reactionBtn} onClick={() => setShowReactionPicker(showReactionPicker === msg.id ? null : msg.id)} title="Реакция">😀</button>
-                        {showReactionPicker === msg.id && (
-                          <div style={s.reactionPicker}>
-                            {["🤡", "💀", "🗿", "😭", "💩", "🤮", "👺", "🫠", "🤯", "😈", "👻", "🤓"].map((e) => (
-                              <button key={e} style={s.reactionEmoji} onClick={() => {
-                                wsService.send({ type: "reaction", message_id: msg.id, chat_id: chat.id, emoji: e });
-                                setShowReactionPicker(null);
-                              }}>{e}</button>
-                            ))}
-                          </div>
-                        )}
                         {/* Reactions display */}
                         {reactions.get(msg.id)?.length ? (
                           <div style={s.reactionsRow}>
@@ -457,6 +476,14 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
         <div style={{ ...s.ctxMenu, left: contextMenu.x, top: contextMenu.y }}>
           <button style={s.ctxItem} onClick={() => { setReplyTo(contextMenu.msg); setContextMenu(null); }}>↩ Ответить</button>
           <button style={s.ctxItem} onClick={() => { setForwardMsg(contextMenu.msg); setContextMenu(null); }}>➡ Переслать</button>
+          <div style={s.ctxReactions}>
+            {["🤡", "💀", "🗿", "😭", "💩", "🤮", "👺", "🫠", "🤯", "😈", "👻", "🤓"].map((e) => (
+              <button key={e} style={s.ctxReactionBtn} onClick={() => {
+                wsService.send({ type: "reaction", message_id: contextMenu!.msg.id, chat_id: chat.id, emoji: e });
+                setContextMenu(null);
+              }}>{e}</button>
+            ))}
+          </div>
           {contextMenu.msg.sender_id === currentUser.id && (
             <>
               <button style={s.ctxItem} onClick={() => { setEditingMsg(contextMenu.msg); setEditText(contextMenu.msg.content || ""); setContextMenu(null); }}>✏️ Редактировать</button>
@@ -490,8 +517,10 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                   wsService.send({
                     type: "forward_message",
                     target_chat_id: c.id,
-                    content: forwardMsg.content,
+                    content: forwardMsg.content || (forwardMsg.file_url ? `[Файл: ${forwardMsg.file_name}]` : ""),
                     original_author: forwardMsg.sender_username,
+                    file_url: forwardMsg.file_url,
+                    file_name: forwardMsg.file_name,
                   });
                   setForwardMsg(null);
                 }}>
@@ -582,6 +611,9 @@ const s: Record<string, React.CSSProperties> = {
   msgAuthor: { fontWeight: 600, fontSize: 14 },
   msgTime: { color: "var(--text-muted)", fontSize: 11 },
   editedTag: { color: "var(--text-muted)", fontSize: 10, fontStyle: "italic" },
+  readCheck: { fontSize: 11, marginLeft: 4 },
+  ctxReactions: { display: "flex", flexWrap: "wrap" as const, gap: 2, padding: "4px 8px", borderTop: "1px solid var(--border)" },
+  ctxReactionBtn: { background: "none", fontSize: 18, padding: 3, borderRadius: 4, cursor: "pointer" },
   msgText: { color: "var(--text-primary)", lineHeight: 1.5, wordBreak: "break-word" as const },
   msgImage: { maxWidth: 360, maxHeight: 280, borderRadius: 4, marginTop: 4, display: "block" },
   imageOverlay: { position: "fixed" as const, inset: 0, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, cursor: "pointer" },
