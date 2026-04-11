@@ -343,7 +343,7 @@ export default function Sidebar({
           <>
             <div style={s.userInfo}>
               <span style={s.userName}>{currentUser.username}</span>
-              <span style={s.userSub}>v1.0.10</span>
+              <span style={s.userSub}>v1.0.11</span>
             </div>
             <button style={s.settingsBtn} title="Изменить никнейм" onClick={() => { setNewName(currentUser.username); setEditingName(true); }}>✏️</button>
           </>
