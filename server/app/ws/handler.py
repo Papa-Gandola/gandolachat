@@ -80,6 +80,15 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                 emoji = data.get("emoji", "")
                 chat_id = data.get("chat_id")
                 if msg_id and emoji and chat_id:
+                    existing = await db.execute(
+                        select(Reaction).where(
+                            Reaction.message_id == msg_id,
+                            Reaction.user_id == user_id,
+                            Reaction.emoji == emoji,
+                        )
+                    )
+                    if existing.scalar_one_or_none():
+                        continue
                     reaction = Reaction(message_id=msg_id, user_id=user_id, emoji=emoji)
                     db.add(reaction)
                     await db.commit()
