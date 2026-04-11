@@ -12,6 +12,7 @@ export default function Auth({ onLogin }: Props) {
   const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [pendingMessage, setPendingMessage] = useState("");
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -21,6 +22,11 @@ export default function Auth({ onLogin }: Props) {
       let res;
       if (mode === "register") {
         res = await authApi.register(username, password);
+        if (res.data.status === "pending") {
+          setError("");
+          setPendingMessage(res.data.message);
+          return;
+        }
       } else {
         res = await authApi.login(username, password);
       }
@@ -36,6 +42,31 @@ export default function Auth({ onLogin }: Props) {
     } finally {
       setLoading(false);
     }
+  }
+
+  if (pendingMessage) {
+    return (
+      <div style={styles.root}>
+        <div style={styles.card}>
+          <div style={styles.logo}>
+            <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+              <circle cx="24" cy="24" r="24" fill="#5865f2" />
+              <text x="50%" y="55%" dominantBaseline="middle" textAnchor="middle"
+                fill="white" fontSize="22" fontWeight="700" fontFamily="Inter">G</text>
+            </svg>
+            <h1 style={styles.appName}>GandolaChat</h1>
+          </div>
+          <div style={{ textAlign: "center", padding: "24px 0" }}>
+            <span style={{ fontSize: 48 }}>⏳</span>
+            <h2 style={{ color: "var(--text-header)", fontSize: 20, margin: "16px 0 8px" }}>Заявка отправлена</h2>
+            <p style={{ color: "var(--text-secondary)", lineHeight: 1.6 }}>{pendingMessage}</p>
+            <button style={{ ...styles.btn, marginTop: 24, background: "var(--bg-active)" }} onClick={() => { setPendingMessage(""); setMode("login"); }}>
+              Попробовать войти
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (

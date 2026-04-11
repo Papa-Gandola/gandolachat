@@ -49,6 +49,9 @@ export const authApi = {
     api.post("/api/auth/login", { username, password }),
   changePassword: (oldPassword: string, newPassword: string) =>
     api.post("/api/auth/change-password", { old_password: oldPassword, new_password: newPassword }),
+  getPendingUsers: () => api.get<Array<{ id: number; username: string; created_at: string }>>("/api/auth/pending-users"),
+  approveUser: (userId: number) => api.post(`/api/auth/approve-user/${userId}`),
+  rejectUser: (userId: number) => api.post(`/api/auth/reject-user/${userId}`),
 };
 
 export const userApi = {

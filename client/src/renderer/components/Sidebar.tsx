@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { ChatOut, UserOut, chatApi, userApi, getFileUrl } from "../services/api";
+import { ChatOut, UserOut, chatApi, userApi, authApi, getFileUrl } from "../services/api";
 import { wsService } from "../services/ws";
 
 interface Props {
@@ -21,6 +21,9 @@ export default function Sidebar({
   const [groupName, setGroupName] = useState("");
   const [selectedForGroup, setSelectedForGroup] = useState<UserOut[]>([]);
   const [editingName, setEditingName] = useState(false);
+  const [pendingUsers, setPendingUsers] = useState<Array<{ id: number; username: string; created_at: string }>>([]);
+  const [showPending, setShowPending] = useState(false);
+  const isAdmin = currentUser.username === "Papa Gandola";
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [updatePercent, setUpdatePercent] = useState(0);
   const [showUpdateBanner, setShowUpdateBanner] = useState(false);
@@ -45,6 +48,9 @@ export default function Sidebar({
 
   useEffect(() => {
     chatApi.getOnlineUsers().then((res) => setOnlineUsers(new Set(res.data.online_user_ids)));
+    if (isAdmin) {
+      authApi.getPendingUsers().then((res) => setPendingUsers(res.data)).catch(() => {});
+    }
     chatApi.getUnreadCounts().then((res) => {
       const m = new Map<number, number>();
       Object.entries(res.data).forEach(([k, v]) => m.set(Number(k), v));
@@ -172,6 +178,32 @@ export default function Sidebar({
       <div style={s.header}>
         <span style={s.headerTitle}>GandolaChat</span>
       </div>
+
+      {/* Admin: pending users */}
+      {isAdmin && pendingUsers.length > 0 && (
+        <div style={s.pendingBtn} onClick={() => setShowPending(!showPending)}>
+          📋 Заявки ({pendingUsers.length})
+        </div>
+      )}
+      {showPending && pendingUsers.length > 0 && (
+        <div style={s.pendingList}>
+          {pendingUsers.map((u) => (
+            <div key={u.id} style={s.pendingItem}>
+              <span style={s.pendingName}>{u.username}</span>
+              <div style={{ display: "flex", gap: 4 }}>
+                <button style={s.approveBtn} onClick={async () => {
+                  await authApi.approveUser(u.id);
+                  setPendingUsers((prev) => prev.filter((p) => p.id !== u.id));
+                }}>✓</button>
+                <button style={s.rejectBtn2} onClick={async () => {
+                  await authApi.rejectUser(u.id);
+                  setPendingUsers((prev) => prev.filter((p) => p.id !== u.id));
+                }}>✕</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Search bar */}
       <div style={s.searchWrap}>
@@ -357,6 +389,12 @@ const s: Record<string, React.CSSProperties> = {
   root: { width: 240, background: "var(--bg-secondary)", display: "flex", flexDirection: "column", height: "100%" },
   header: { padding: "16px 16px 8px", borderBottom: "1px solid var(--border)" },
   headerTitle: { color: "var(--text-header)", fontWeight: 700, fontSize: 15 },
+  pendingBtn: { margin: "4px 12px", padding: "8px 12px", background: "#faa61a", color: "#000", borderRadius: 4, fontSize: 13, fontWeight: 700, cursor: "pointer", textAlign: "center" as const },
+  pendingList: { margin: "0 8px 4px", background: "var(--bg-tertiary)", borderRadius: 4, overflow: "hidden" },
+  pendingItem: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderBottom: "1px solid var(--border)" },
+  pendingName: { color: "var(--text-primary)", fontSize: 13, fontWeight: 500 },
+  approveBtn: { background: "#3ba55d", color: "#fff", border: "none", borderRadius: 4, padding: "4px 10px", fontSize: 14, cursor: "pointer", fontWeight: 700 },
+  rejectBtn2: { background: "#ed4245", color: "#fff", border: "none", borderRadius: 4, padding: "4px 10px", fontSize: 14, cursor: "pointer", fontWeight: 700 },
   searchWrap: { padding: "8px 12px" },
   searchInput: { width: "100%", background: "var(--bg-tertiary)", borderRadius: 4, padding: "6px 10px", fontSize: 13, color: "var(--text-primary)", border: "none" },
   searchDropdown: { background: "var(--bg-tertiary)", margin: "0 8px", borderRadius: 4, overflow: "hidden" },
