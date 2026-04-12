@@ -160,10 +160,6 @@ ipcMain.on("window:maximize", () => {
   if (mainWindow?.isMaximized()) mainWindow.unmaximize();
   else mainWindow?.maximize();
 });
-ipcMain.handle("window:close", async () => {
-  // Send to renderer to show custom dialog
-  return true;
-});
-
+ipcMain.on("window:close", () => { isQuitting = true; app.quit(); });
 ipcMain.on("window:hide", () => mainWindow?.hide());
 ipcMain.on("window:quit", () => { isQuitting = true; app.quit(); });

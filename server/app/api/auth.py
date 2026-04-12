@@ -22,7 +22,6 @@ async def register(data: UserRegister, db: AsyncSession = Depends(get_db)):
     is_admin = data.username == ADMIN_USERNAME
     user = User(
         username=data.username,
-        email=None,
         password_hash=hash_password(data.password),
         is_approved=is_admin,
     )

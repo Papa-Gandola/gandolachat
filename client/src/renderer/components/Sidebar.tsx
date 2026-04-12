@@ -316,7 +316,7 @@ export default function Sidebar({
         </label>
         <div style={s.userInfo} onClick={onOpenProfile} role="button">
           <span style={s.userName}>{currentUser.username}</span>
-          <span style={s.userSub}>{currentUser.status || "v1.0.12"}</span>
+          <span style={s.userSub}>{currentUser.status || "v1.1.0"}</span>
         </div>
         <button style={s.settingsBtn} title="Профиль" onClick={onOpenProfile}>✏️</button>
         <button style={s.settingsBtn} title="Проверить обновления" onClick={() => {
