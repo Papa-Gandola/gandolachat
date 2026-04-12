@@ -10,10 +10,12 @@ interface Props {
   onChatsUpdate: (chats: ChatOut[]) => void;
   onLogout: () => void;
   onAvatarUpdate: (user: UserOut) => void;
+  onOpenProfile: () => void;
+  width?: number;
 }
 
 export default function Sidebar({
-  chats, currentUser, activeChatId, onSelectChat, onChatsUpdate, onLogout, onAvatarUpdate
+  chats, currentUser, activeChatId, onSelectChat, onChatsUpdate, onLogout, onAvatarUpdate, onOpenProfile, width = 240
 }: Props) {
   const [search, setSearch] = useState("");
   const [searchResults, setSearchResults] = useState<UserOut[]>([]);
@@ -173,7 +175,7 @@ export default function Sidebar({
   }
 
   return (
-    <div style={s.root}>
+    <div style={{ ...s.root, width }}>
       {/* Header */}
       <div style={s.header}>
         <span style={s.headerTitle}>GandolaChat</span>
@@ -312,42 +314,11 @@ export default function Sidebar({
           <Avatar url={currentUser.avatar_url} name={currentUser.username} size={32} />
           <input type="file" accept="image/*" style={{ display: "none" }} onChange={uploadAvatar} />
         </label>
-        {editingName ? (
-          <div style={{ flex: 1, display: "flex", gap: 4, minWidth: 0, overflow: "hidden" }}>
-            <input
-              style={s.editNameInput}
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && newName.trim() && newName !== currentUser.username) {
-                  userApi.updateProfile({ username: newName.trim() }).then((res) => {
-                    onAvatarUpdate(res.data);
-                    setEditingName(false);
-                  });
-                }
-                if (e.key === "Escape") setEditingName(false);
-              }}
-              autoFocus
-              maxLength={50}
-            />
-            <button style={s.editNameSave} onClick={() => {
-              if (newName.trim() && newName !== currentUser.username) {
-                userApi.updateProfile({ username: newName.trim() }).then((res) => {
-                  onAvatarUpdate(res.data);
-                  setEditingName(false);
-                });
-              }
-            }}>✓</button>
-          </div>
-        ) : (
-          <>
-            <div style={s.userInfo}>
-              <span style={s.userName}>{currentUser.username}</span>
-              <span style={s.userSub}>v1.0.11</span>
-            </div>
-            <button style={s.settingsBtn} title="Изменить никнейм" onClick={() => { setNewName(currentUser.username); setEditingName(true); }}>✏️</button>
-          </>
-        )}
+        <div style={s.userInfo} onClick={onOpenProfile} role="button">
+          <span style={s.userName}>{currentUser.username}</span>
+          <span style={s.userSub}>{currentUser.status || "v1.0.12"}</span>
+        </div>
+        <button style={s.settingsBtn} title="Профиль" onClick={onOpenProfile}>✏️</button>
         <button style={s.settingsBtn} title="Проверить обновления" onClick={() => {
           setUpdateStatus(null);
           setShowUpdateBanner(false);
@@ -386,7 +357,7 @@ function stringToColor(str: string) {
 }
 
 const s: Record<string, React.CSSProperties> = {
-  root: { width: 240, background: "var(--bg-secondary)", display: "flex", flexDirection: "column", height: "100%" },
+  root: { background: "var(--bg-secondary)", display: "flex", flexDirection: "column", height: "100%", flexShrink: 0 },
   header: { padding: "16px 16px 8px", borderBottom: "1px solid var(--border)" },
   headerTitle: { color: "var(--text-header)", fontWeight: 700, fontSize: 15 },
   pendingBtn: { margin: "4px 12px", padding: "8px 12px", background: "#faa61a", color: "#000", borderRadius: 4, fontSize: 13, fontWeight: 700, cursor: "pointer", textAlign: "center" as const },

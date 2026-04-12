@@ -13,8 +13,11 @@ api.interceptors.request.use((config) => {
 export interface UserOut {
   id: number;
   username: string;
-  email: string;
+  email?: string;
   avatar_url: string | null;
+  status?: string | null;
+  about?: string | null;
+  grammar_errors?: number;
 }
 
 export interface MessageOut {
@@ -57,8 +60,9 @@ export const authApi = {
 export const userApi = {
   me: () => api.get<UserOut>("/api/users/me"),
   search: (q: string) => api.get<UserOut[]>(`/api/users/search?q=${encodeURIComponent(q)}`),
-  updateProfile: (data: { username?: string }) =>
+  updateProfile: (data: { username?: string; status?: string; about?: string }) =>
     api.patch<UserOut>("/api/users/me", data),
+  getUser: (userId: number) => api.get<UserOut>(`/api/users/${userId}`),
   uploadAvatar: (file: File) => {
     const form = new FormData();
     form.append("file", file);

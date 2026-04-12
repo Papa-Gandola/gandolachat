@@ -27,6 +27,10 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   const [enlarged, setEnlarged] = useState<string | null>(null);
   const screenVideoRef = useRef<HTMLVideoElement>(null);
   const [minimized, setMinimized] = useState(false);
+  const [callStartTime] = useState(Date.now());
+  const [callDuration, setCallDuration] = useState("00:00");
+  const [freeMode, setFreeMode] = useState(false);
+  const [tilePositions, setTilePositions] = useState<Map<string, { x: number; y: number; w: number; h: number }>>(new Map());
   const [peerVolumes, setPeerVolumes] = useState<Map<number, number>>(new Map());
   const [selfSpeaking, setSelfSpeaking] = useState(false);
   const [mutedPeers, setMutedPeers] = useState<Set<number>>(new Set());
@@ -67,6 +71,22 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
     wsService.on("mute_status", handler);
     return () => wsService.off("mute_status", handler);
   }, []);
+
+  // Call duration timer
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - callStartTime) / 1000);
+      const min = Math.floor(elapsed / 60);
+      const sec = elapsed % 60;
+      const hrs = Math.floor(min / 60);
+      if (hrs > 0) {
+        setCallDuration(`${hrs}:${(min % 60).toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`);
+      } else {
+        setCallDuration(`${min.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [callStartTime]);
 
   // Own voice activity detection
   useEffect(() => {
@@ -212,6 +232,39 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
     setPeerVolumes((prev) => new Map(prev).set(userId, volume));
   }
 
+  function getTilePos(id: string, index: number) {
+    const saved = tilePositions.get(id);
+    if (saved) return saved;
+    return { x: 20 + (index % 3) * 300, y: 20 + Math.floor(index / 3) * 230, w: 280, h: 210 };
+  }
+
+  function startDrag(id: string, e: React.MouseEvent, mode: "move" | "resize") {
+    if (!freeMode) return;
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const pos = tilePositions.get(id) || { x: 20, y: 20, w: 280, h: 210 };
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      setTilePositions((prev) => {
+        const next = new Map(prev);
+        if (mode === "move") {
+          next.set(id, { ...pos, x: pos.x + dx, y: pos.y + dy });
+        } else {
+          next.set(id, { ...pos, w: Math.max(160, pos.w + dx), h: Math.max(120, pos.h + dy) });
+        }
+        return next;
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
   const callName = chat.is_group ? chat.name : chat.members.find((m) => m.id !== currentUser.id)?.username;
 
   if (minimized) {
@@ -247,37 +300,64 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   return (
     <div style={s.overlay}>
       <div style={s.header}>
-        <span style={s.title}>Видеозвонок</span>
+        <span style={s.title}>Видеозвонок • {callDuration}</span>
         <span style={s.subtitle}>{callName}</span>
         <button style={s.minimizeBtn} onClick={() => setMinimized(true)} title="Свернуть">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><polyline points="4 14 10 20 16 14"/><line x1="10" y1="20" x2="10" y2="4"/></svg>
         </button>
       </div>
 
-      <div style={s.videoGrid}>
+      <div style={freeMode ? s.videoGridFree : s.videoGrid}>
         {/* Local video */}
-        <div
-          style={{ ...s.videoWrap, ...(enlarged === "self" ? s.enlarged : {}), boxShadow: selfSpeaking && !muted ? "0 0 0 3px #57f287" : "none", transition: "box-shadow 0.15s", cursor: "pointer" }}
-          onClick={() => setEnlarged(enlarged === "self" ? null : "self")}
-        >
-          <video ref={localVideoRef} autoPlay muted playsInline style={{ ...(enlarged === "self" ? s.videoEnlarged : s.video), display: videoOff ? "none" : "block" }} />
-          {videoOff && <CallAvatar name={currentUser.username} url={currentUser.avatar_url} />}
-          <span style={s.videoLabel}>Вы</span>
-        </div>
+        {(() => {
+          const pos = freeMode ? getTilePos("self", 0) : null;
+          return (
+            <div
+              style={{
+                ...s.videoWrap,
+                ...(!freeMode && enlarged === "self" ? s.enlarged : {}),
+                ...(freeMode && pos ? { position: "absolute" as const, left: pos.x, top: pos.y, width: pos.w, height: pos.h } : {}),
+                boxShadow: selfSpeaking && !muted ? "0 0 0 3px #57f287" : "none",
+                transition: freeMode ? "none" : "box-shadow 0.15s",
+                cursor: freeMode ? "move" : "pointer",
+              }}
+              onMouseDown={(e) => freeMode && startDrag("self", e, "move")}
+              onClick={() => !freeMode && setEnlarged(enlarged === "self" ? null : "self")}
+            >
+              <video ref={localVideoRef} autoPlay muted playsInline style={{
+                ...(freeMode ? { width: "100%", height: "100%", objectFit: "cover" as const } : (enlarged === "self" ? s.videoEnlarged : s.video)),
+                display: videoOff ? "none" : "block",
+              }} />
+              {videoOff && <CallAvatar name={currentUser.username} url={currentUser.avatar_url} />}
+              <span style={s.videoLabel}>Вы</span>
+              {freeMode && <div style={s.resizeCorner} onMouseDown={(e) => startDrag("self", e, "resize")} />}
+            </div>
+          );
+        })()}
 
         {/* Screen share tile */}
-        {screenStream && (
-          <div
-            style={{ ...s.videoWrap, ...(enlarged === "screen" ? s.enlarged : {}), cursor: "pointer", border: "2px solid #5865f2" }}
-            onClick={() => setEnlarged(enlarged === "screen" ? null : "screen")}
-          >
-            <video ref={screenVideoRef} autoPlay muted playsInline style={enlarged === "screen" ? s.videoEnlarged : s.video} />
-            <span style={s.videoLabel}>Ваш экран</span>
-          </div>
-        )}
+        {screenStream && (() => {
+          const pos = freeMode ? getTilePos("screen", 1) : null;
+          return (
+            <div
+              style={{
+                ...s.videoWrap,
+                ...(!freeMode && enlarged === "screen" ? s.enlarged : {}),
+                ...(freeMode && pos ? { position: "absolute" as const, left: pos.x, top: pos.y, width: pos.w, height: pos.h } : {}),
+                cursor: freeMode ? "move" : "pointer", border: "2px solid #5865f2",
+              }}
+              onMouseDown={(e) => freeMode && startDrag("screen", e, "move")}
+              onClick={() => !freeMode && setEnlarged(enlarged === "screen" ? null : "screen")}
+            >
+              <video ref={screenVideoRef} autoPlay muted playsInline style={freeMode ? { width: "100%", height: "100%", objectFit: "contain" as const } : (enlarged === "screen" ? s.videoEnlarged : s.video)} />
+              <span style={s.videoLabel}>Ваш экран</span>
+              {freeMode && <div style={s.resizeCorner} onMouseDown={(e) => startDrag("screen", e, "resize")} />}
+            </div>
+          );
+        })()}
 
         {/* Remote videos */}
-        {remoteVideos.map((entry) => (
+        {remoteVideos.map((entry, idx) => (
           <RemoteVideo
             key={entry.userId}
             entry={entry}
@@ -287,7 +367,10 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
             peerMuted={mutedPeers.has(entry.userId)}
             volume={peerVolumes.get(entry.userId) ?? 100}
             onVolumeChange={(v) => changePeerVolume(entry.userId, v)}
-            onClick={() => setEnlarged(enlarged === String(entry.userId) ? null : String(entry.userId))}
+            onClick={() => !freeMode && setEnlarged(enlarged === String(entry.userId) ? null : String(entry.userId))}
+            freeMode={freeMode}
+            freePos={freeMode ? getTilePos(`r${entry.userId}`, idx + 2) : null}
+            onStartDrag={(e, mode) => startDrag(`r${entry.userId}`, e, mode)}
           />
         ))}
 
@@ -371,12 +454,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
               onChange={(e) => {
                 const val = Number(e.target.value);
                 setMicGain(val);
-                const ls = webrtcService.getLocalStream();
-                ls?.getAudioTracks().forEach((t) => {
-                  if ((t as any).applyConstraints) {
-                    // Volume isn't a standard constraint but we can try gain
-                  }
-                });
+                webrtcService.setMicGain(val);
               }}
             />
           </div>
@@ -424,6 +502,13 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
           </svg>
         </button>
 
+        {/* Free mode (universe icon) */}
+        <button style={{ ...s.ctrl, background: freeMode ? "#5865f2" : "var(--bg-active)" }} onClick={() => { setFreeMode(!freeMode); setTilePositions(new Map()); }} title="Свободный режим">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
+            <circle cx="12" cy="12" r="10"/><ellipse cx="12" cy="12" rx="10" ry="4"/><path d="M2 12h20"/>
+          </svg>
+        </button>
+
         {/* Settings */}
         <button style={{ ...s.ctrl, background: showSettings ? "#5865f2" : "var(--bg-active)" }} onClick={() => setShowSettings(!showSettings)} title="Настройки">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
@@ -442,9 +527,11 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   );
 }
 
-function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, volume, onVolumeChange, onClick }: {
+function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, volume, onVolumeChange, onClick, freeMode, freePos, onStartDrag }: {
   entry: VideoEntry; chat: ChatOut; enlarged: boolean; deafened: boolean; peerMuted: boolean;
   volume: number; onVolumeChange: (v: number) => void; onClick: () => void;
+  freeMode?: boolean; freePos?: { x: number; y: number; w: number; h: number } | null;
+  onStartDrag?: (e: React.MouseEvent, mode: "move" | "resize") => void;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   const member = chat.members.find((m) => m.id === entry.userId);
@@ -486,20 +573,33 @@ function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, volume, onVol
     <div
       style={{
         ...s.videoWrap,
-        ...(enlarged ? s.enlarged : {}),
-        cursor: "pointer",
+        ...(!freeMode && enlarged ? s.enlarged : {}),
+        ...(freeMode && freePos ? { position: "absolute" as const, left: freePos.x, top: freePos.y, width: freePos.w, height: freePos.h } : {}),
+        cursor: freeMode ? "move" : "pointer",
         boxShadow: speaking ? "0 0 0 3px #57f287" : "none",
-        transition: "box-shadow 0.15s",
+        transition: freeMode ? "none" : "box-shadow 0.15s",
       }}
+      onMouseDown={(e) => freeMode && onStartDrag?.(e, "move")}
       onClick={onClick}
       onContextMenu={(e) => { e.preventDefault(); setShowVolume(!showVolume); }}
     >
-      <video ref={ref} autoPlay playsInline style={enlarged ? s.videoEnlarged : s.video} />
+      <video ref={ref} autoPlay playsInline style={freeMode ? { width: "100%", height: "100%", objectFit: "cover" as const, display: "block" } : (enlarged ? s.videoEnlarged : s.video)} />
+      {freeMode && <div style={s.resizeCorner} onMouseDown={(e) => { e.stopPropagation(); onStartDrag?.(e, "resize"); }} />}
       {entry.stream.getVideoTracks().length === 0 && member && (
         <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <CallAvatar name={member.username} url={member.avatar_url} />
         </div>
       )}
+      <button
+        style={s.pipBtn}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (ref.current && (ref.current as any).requestPictureInPicture) {
+            (ref.current as any).requestPictureInPicture().catch(() => {});
+          }
+        }}
+        title="В отдельное окно"
+      >⧉</button>
       <span style={s.videoLabel}>{peerMuted ? "🔇 " : ""}{member?.username || "Участник"}</span>
       {showVolume && (
         <div style={s.volumeSlider} onClick={(e) => e.stopPropagation()}>
@@ -577,6 +677,9 @@ const s: Record<string, React.CSSProperties> = {
     flex: 1, width: "100%", display: "flex", flexWrap: "wrap",
     alignItems: "center", justifyContent: "center", gap: 12, padding: 16,
   },
+  videoGridFree: {
+    flex: 1, width: "100%", position: "relative" as const, overflow: "hidden",
+  },
   videoWrap: {
     position: "relative", borderRadius: 8, overflow: "hidden",
     background: "#18191c", transition: "all 0.3s",
@@ -588,6 +691,16 @@ const s: Record<string, React.CSSProperties> = {
     position: "absolute", bottom: 8, left: 8,
     background: "rgba(0,0,0,0.6)", color: "#fff",
     padding: "2px 8px", borderRadius: 4, fontSize: 12,
+  },
+  pipBtn: {
+    position: "absolute" as const, top: 8, right: 8,
+    background: "rgba(0,0,0,0.6)", color: "#fff", border: "none",
+    width: 28, height: 28, borderRadius: 4, cursor: "pointer", fontSize: 14,
+  },
+  resizeCorner: {
+    position: "absolute" as const, right: 0, bottom: 0, width: 16, height: 16,
+    cursor: "nwse-resize", background: "rgba(255,255,255,0.4)",
+    clipPath: "polygon(100% 0, 100% 100%, 0 100%)",
   },
   volumeSlider: {
     position: "absolute", bottom: 32, left: 8, right: 8,

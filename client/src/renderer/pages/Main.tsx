@@ -7,6 +7,7 @@ import Sidebar from "../components/Sidebar";
 import ChatArea from "../components/ChatArea";
 import MemberList from "../components/MemberList";
 import VideoCall from "../components/VideoCall";
+import ProfilePage from "../components/ProfilePage";
 
 interface Props {
   token: string;
@@ -21,9 +22,16 @@ export default function Main({ token, user, onLogout }: Props) {
   const [incomingCalls, setIncomingCalls] = useState<Array<{ chatId: number; fromUserId: number }>>([]);
   const [callChat, setCallChat] = useState<ChatOut | null>(null);
   const [callInitiator, setCallInitiator] = useState(false);
+  const [viewingProfile, setViewingProfile] = useState<UserOut | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(240);
+  const [resizing, setResizing] = useState(false);
+  const [connQuality, setConnQuality] = useState<string>("good");
+  const [connPing, setConnPing] = useState(0);
+  const [showCloseDialog, setShowCloseDialog] = useState(false);
 
   useEffect(() => {
     wsService.connect(token);
+    wsService.onQualityChange = (q, p) => { setConnQuality(q); setConnPing(p); };
     webrtcService.init(user.id);
     chatApi.list().then((res) => setChats(res.data));
 
@@ -38,6 +46,16 @@ export default function Main({ token, user, onLogout }: Props) {
           c.id === data.chat_id ? { ...c, last_message: data } : c
         )
       );
+    });
+
+    wsService.on("profile_updated", (data) => {
+      setChats((prev) => prev.map((c) => ({
+        ...c,
+        members: c.members.map((m) => m.id === data.user_id ? { ...m, username: data.username, avatar_url: data.avatar_url, status: data.status } : m),
+      })));
+      if (data.user_id === user.id) {
+        setCurrentUser((prev) => ({ ...prev, username: data.username, avatar_url: data.avatar_url, status: data.status }));
+      }
     });
 
     wsService.on("chat_deleted", (data) => {
@@ -57,7 +75,40 @@ export default function Main({ token, user, onLogout }: Props) {
     return () => wsService.disconnect();
   }, [token, user.id]);
 
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setActiveChat(null);
+        setViewingProfile(null);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  useEffect(() => {
+    if (!resizing) return;
+    const onMove = (e: MouseEvent) => {
+      const w = Math.max(180, Math.min(400, e.clientX));
+      setSidebarWidth(w);
+    };
+    const onUp = () => setResizing(false);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [resizing]);
+
   function handleLogout() {
+    // End active call first
+    if (webrtcService.isInCall()) {
+      webrtcService.endCall();
+    }
+    setCallChat(null);
+    setCallInitiator(false);
+    setIncomingCalls([]);
     wsService.disconnect();
     localStorage.removeItem("token");
     sessionStorage.removeItem("token");
@@ -104,11 +155,20 @@ export default function Main({ token, user, onLogout }: Props) {
     <div style={s.root}>
       {/* Title bar */}
       <div style={s.titleBar}>
-        <span style={s.titleText}>GandolaChat</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={s.titleText}>GandolaChat</span>
+          <span
+            style={{
+              width: 8, height: 8, borderRadius: "50%",
+              background: connQuality === "good" ? "#3ba55d" : connQuality === "ok" ? "#faa61a" : connQuality === "bad" ? "#ed4245" : "#72767d",
+            }}
+            title={connQuality === "offline" ? "Нет соединения" : `Пинг: ${connPing}мс`}
+          />
+        </div>
         <div style={s.winControls}>
           <button style={s.winBtn} onClick={() => (window as any).electron?.minimize()}>─</button>
           <button style={s.winBtn} onClick={() => (window as any).electron?.maximize()}>□</button>
-          <button style={{ ...s.winBtn, ...s.closeBtn }} onClick={() => (window as any).electron?.close()}>✕</button>
+          <button style={{ ...s.winBtn, ...s.closeBtn }} onClick={() => setShowCloseDialog(true)}>✕</button>
         </div>
       </div>
 
@@ -128,13 +188,25 @@ export default function Main({ token, user, onLogout }: Props) {
           chats={chats}
           currentUser={currentUser}
           activeChatId={activeChat?.id ?? null}
-          onSelectChat={setActiveChat}
+          onSelectChat={(c) => { setActiveChat(c); setViewingProfile(null); }}
           onChatsUpdate={setChats}
           onLogout={handleLogout}
           onAvatarUpdate={setCurrentUser}
+          onOpenProfile={() => setViewingProfile(currentUser)}
+          width={sidebarWidth}
         />
+        <div style={s.resizer} onMouseDown={() => setResizing(true)} />
 
-        {activeChat ? (
+        {viewingProfile ? (
+          <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
+            <ProfilePage
+              user={viewingProfile}
+              currentUser={currentUser}
+              onClose={() => setViewingProfile(null)}
+              onUpdate={(u) => { if (u.id === currentUser.id) setCurrentUser(u); }}
+            />
+          </div>
+        ) : activeChat ? (
           <>
             <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
               <ChatArea
@@ -142,6 +214,7 @@ export default function Main({ token, user, onLogout }: Props) {
                 currentUser={currentUser}
                 onStartCall={() => startCall(activeChat)}
                 allChats={chats}
+                onOpenProfile={(u) => setViewingProfile(u)}
               />
             </div>
             {activeChat.is_group && (
@@ -169,6 +242,27 @@ export default function Main({ token, user, onLogout }: Props) {
           </div>
         )}
       </div>
+
+      {/* Close dialog */}
+      {showCloseDialog && (
+        <div style={s.closeDialogOverlay} onClick={() => setShowCloseDialog(false)}>
+          <div style={s.closeDialog} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ margin: "0 0 16px", color: "var(--text-header)" }}>Закрыть GandolaChat?</h3>
+            <p style={{ color: "var(--text-secondary)", marginBottom: 20 }}>Что сделать с приложением?</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <button style={s.closeDialogBtn} onClick={() => { (window as any).electron?.hide(); setShowCloseDialog(false); }}>
+                Свернуть в трей
+              </button>
+              <button style={{ ...s.closeDialogBtn, background: "#ed4245" }} onClick={() => (window as any).electron?.quit()}>
+                Полностью закрыть
+              </button>
+              <button style={{ ...s.closeDialogBtn, background: "var(--bg-tertiary)" }} onClick={() => setShowCloseDialog(false)}>
+                Отмена
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Video call overlay — lives at top level, persists across chat switches */}
       {callChat && (
@@ -199,6 +293,10 @@ const s: Record<string, React.CSSProperties> = {
   },
   closeBtn: { color: "var(--text-muted)" },
   body: { flex: 1, display: "flex", overflow: "hidden" },
+  resizer: { width: 4, cursor: "col-resize", background: "var(--border)", flexShrink: 0 },
+  closeDialogOverlay: { position: "fixed" as const, inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 500 },
+  closeDialog: { background: "var(--bg-primary)", borderRadius: 8, padding: 24, width: 320, boxShadow: "0 8px 32px rgba(0,0,0,0.5)" },
+  closeDialogBtn: { background: "var(--accent)", color: "#fff", border: "none", borderRadius: 6, padding: "10px 16px", fontSize: 14, fontWeight: 600, cursor: "pointer" },
   incomingCallBanner: {
     background: "#5865f2", display: "flex", alignItems: "center",
     justifyContent: "space-between", padding: "10px 16px", color: "#fff", fontWeight: 600,

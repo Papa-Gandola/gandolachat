@@ -1,7 +1,15 @@
-import { app, BrowserWindow, ipcMain, shell, desktopCapturer, session } from "electron";
+import { app, BrowserWindow, ipcMain, shell, desktopCapturer, session, Tray, Menu } from "electron";
 import { autoUpdater } from "electron-updater";
 import path from "path";
 const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
+
+// Performance flags for high refresh rate monitors
+app.commandLine.appendSwitch("enable-features", "CalculateNativeWinOcclusion");
+app.commandLine.appendSwitch("disable-frame-rate-limit");
+app.commandLine.appendSwitch("disable-gpu-vsync");
+
+let tray: Tray | null = null;
+let isQuitting = false;
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -26,13 +34,22 @@ function createWindow() {
     frame: false,
     titleBarStyle: "hidden",
     backgroundColor: "#36393f",
+    useContentSize: true,
     icon: path.join(__dirname, "../../assets/icon.ico"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
       webSecurity: false,
+      backgroundThrottling: false,
     },
+  });
+
+  mainWindow.on("close", (e) => {
+    if (!isQuitting) {
+      e.preventDefault();
+      mainWindow?.hide();
+    }
   });
 
   if (isDev) {
@@ -45,6 +62,25 @@ function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: "deny" };
+  });
+}
+
+function createTray() {
+  if (tray) return;
+  tray = new Tray(path.join(__dirname, "../../assets/icon.ico"));
+  tray.setToolTip("GandolaChat");
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: "Открыть", click: () => { mainWindow?.show(); mainWindow?.focus(); } },
+    { type: "separator" },
+    { label: "Выход", click: () => { isQuitting = true; app.quit(); } },
+  ]));
+  tray.on("click", () => {
+    if (mainWindow?.isVisible()) {
+      mainWindow?.hide();
+    } else {
+      mainWindow?.show();
+      mainWindow?.focus();
+    }
   });
 }
 
@@ -88,13 +124,14 @@ ipcMain.on("update:install", () => {
 });
 
 app.whenReady().then(() => {
-  // Screen sharing handled via IPC for source selection
-
   createWindow();
+  createTray();
   if (!isDev) {
     autoUpdater.checkForUpdatesAndNotify();
   }
 });
+
+app.on("before-quit", () => { isQuitting = true; });
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
@@ -123,4 +160,10 @@ ipcMain.on("window:maximize", () => {
   if (mainWindow?.isMaximized()) mainWindow.unmaximize();
   else mainWindow?.maximize();
 });
-ipcMain.on("window:close", () => mainWindow?.close());
+ipcMain.handle("window:close", async () => {
+  // Send to renderer to show custom dialog
+  return true;
+});
+
+ipcMain.on("window:hide", () => mainWindow?.hide());
+ipcMain.on("window:quit", () => { isQuitting = true; app.quit(); });

@@ -71,6 +71,7 @@ export default function Auth({ onLogin }: Props) {
 
   return (
     <div style={styles.root}>
+      <button style={styles.closeAppBtn} onClick={() => (window as any).electron?.close()} title="Закрыть">✕</button>
       <div style={styles.card}>
         <div style={styles.logo}>
           <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
@@ -155,7 +156,8 @@ export default function Auth({ onLogin }: Props) {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  root: { width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg-tertiary)" },
+  root: { width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg-tertiary)", position: "relative" },
+  closeAppBtn: { position: "absolute", top: 12, right: 12, background: "none", color: "var(--text-muted)", border: "none", fontSize: 18, width: 32, height: 32, borderRadius: 4, cursor: "pointer" },
   card: { background: "var(--bg-primary)", borderRadius: 8, padding: "32px 40px", width: 440, boxShadow: "var(--shadow)" },
   logo: { display: "flex", alignItems: "center", gap: 12, marginBottom: 24, justifyContent: "center" },
   appName: { color: "var(--text-header)", fontSize: 24, fontWeight: 700 },

@@ -9,11 +9,12 @@ interface Props {
   currentUser: UserOut;
   onStartCall: () => void;
   allChats?: ChatOut[];
+  onOpenProfile?: (user: UserOut) => void;
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-export default function ChatArea({ chat, currentUser, onStartCall, allChats = [] }: Props) {
+export default function ChatArea({ chat, currentUser, onStartCall, allChats = [], onOpenProfile }: Props) {
   const [messages, setMessages] = useState<MessageOut[]>([]);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
@@ -27,6 +28,8 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   const [showSearch, setShowSearch] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
+  const [hoverEmoji, setHoverEmoji] = useState("😊");
+  const RANDOM_EMOJI = ["😊", "😂", "🤣", "😍", "🥰", "😎", "🤔", "😭", "🥺", "🤡", "💀", "🗿", "🔥", "💯", "👻", "🤓", "🫠", "🤯", "😈", "🥴"];
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [reactions, setReactions] = useState<Map<number, Array<{ emoji: string; userId: number }>>>(new Map());
   const [showReactionPicker, setShowReactionPicker] = useState<number | null>(null);
@@ -118,6 +121,21 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
       });
     };
 
+    const reactionRemovedHandler = (data: any) => {
+      if (data.chat_id !== chat.id) return;
+      setReactions((prev) => {
+        const next = new Map(prev);
+        const list = next.get(data.message_id) || [];
+        const idx = list.findIndex((r) => r.userId === data.user_id && r.emoji === data.emoji);
+        if (idx >= 0) {
+          const newList = [...list];
+          newList.splice(idx, 1);
+          next.set(data.message_id, newList);
+        }
+        return next;
+      });
+    };
+
     const readHandler = (data: any) => {
       if (data.chat_id !== chat.id) return;
       setReadBy((prev) => new Map(prev).set(data.user_id, data.last_read_message_id));
@@ -128,6 +146,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     wsService.on("message_edited", editHandler);
     wsService.on("message_deleted", deleteHandler);
     wsService.on("reaction", reactionHandler);
+    wsService.on("reaction_removed", reactionRemovedHandler);
     wsService.on("message_read", readHandler);
     return () => {
       wsService.off("message", handler);
@@ -135,6 +154,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
       wsService.off("message_edited", editHandler);
       wsService.off("message_deleted", deleteHandler);
       wsService.off("reaction", reactionHandler);
+      wsService.off("reaction_removed", reactionRemovedHandler);
       wsService.off("message_read", readHandler);
     };
   }, [chat.id, currentUser.id]);
@@ -379,14 +399,23 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
               return (
                 <div
                   key={msg.id}
+                  className="msg-row-hover"
                   style={{ ...s.msgRow, marginTop: isGrouped ? 2 : 16 }}
+                  onDoubleClick={() => setReplyTo(msg)}
                   onContextMenu={(e) => {
                     e.preventDefault();
-                    setContextMenu({ x: e.clientX, y: e.clientY, msg });
+                    const menuWidth = 220;
+                    const menuHeight = 280;
+                    const x = Math.min(e.clientX, window.innerWidth - menuWidth - 8);
+                    const y = Math.min(e.clientY, window.innerHeight - menuHeight - 8);
+                    setContextMenu({ x, y, msg });
                   }}
                 >
                   {!isGrouped ? (
-                    <div style={s.avatarSmall}>
+                    <div style={{ ...s.avatarSmall, cursor: "pointer" }} onClick={() => {
+                      const member = chat.members.find((m) => m.id === msg.sender_id);
+                      if (member && onOpenProfile) onOpenProfile(member);
+                    }}>
                       <AvatarSmall name={msg.sender_username} url={msg.sender_avatar} />
                     </div>
                   ) : (
@@ -441,9 +470,23 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                                 acc[r.emoji] = (acc[r.emoji] || 0) + 1;
                                 return acc;
                               }, {})
-                            ).map(([emoji, count]) => (
-                              <span key={emoji} style={s.reactionBadge}>{emoji} {count}</span>
-                            ))}
+                            ).map(([emoji, count]) => {
+                              const myReact = reactions.get(msg.id)!.some((r) => r.emoji === emoji && r.userId === currentUser.id);
+                              return (
+                                <span
+                                  key={emoji}
+                                  style={{ ...s.reactionBadge, cursor: "pointer", border: myReact ? "1px solid var(--accent)" : "1px solid transparent" }}
+                                  onClick={() => {
+                                    if (myReact) {
+                                      wsService.send({ type: "remove_reaction", message_id: msg.id, chat_id: chat.id, emoji });
+                                    } else {
+                                      wsService.send({ type: "reaction", message_id: msg.id, chat_id: chat.id, emoji });
+                                    }
+                                  }}
+                                  title={myReact ? "Убрать реакцию" : "Добавить реакцию"}
+                                >{emoji} {count}</span>
+                              );
+                            })}
                           </div>
                         ) : null}
                       </>
@@ -477,7 +520,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
           <button style={s.ctxItem} onClick={() => { setReplyTo(contextMenu.msg); setContextMenu(null); }}>↩ Ответить</button>
           <button style={s.ctxItem} onClick={() => { setForwardMsg(contextMenu.msg); setContextMenu(null); }}>➡ Переслать</button>
           <div style={s.ctxReactions}>
-            {["🤡", "💀", "🗿", "😭", "💩", "🤮", "👺", "🫠", "🤯", "😈", "👻", "🤓"].map((e) => (
+            {["🤡", "💀", "🗿", "😭", "💩", "🤮", "👺", "🫠", "🤯", "😈", "👻", "🤓", "❤️", "👍", "👎", "🔥", "💯", "😂", "🤣", "😍", "🥺", "😤", "🤬", "🥴", "🫡", "🤝", "🙏", "💅"].map((e) => (
               <button key={e} style={s.ctxReactionBtn} onClick={() => {
                 wsService.send({ type: "reaction", message_id: contextMenu!.msg.id, chat_id: chat.id, emoji: e });
                 setContextMenu(null);
@@ -551,16 +594,26 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
       <form onSubmit={sendMessage} style={s.inputBar}>
         <button type="button" style={s.attachBtn} onClick={() => fileRef.current?.click()} title="Прикрепить файл">+</button>
         <input type="file" ref={fileRef} style={{ display: "none" }} onChange={handleFileInput} />
-        <button type="button" style={s.emojiBtn} onClick={() => setShowEmoji(!showEmoji)} title="Эмодзи">😊</button>
-        <input
+        <button
+          type="button"
+          style={s.emojiBtn}
+          onClick={() => setShowEmoji(!showEmoji)}
+          onMouseEnter={() => setHoverEmoji(RANDOM_EMOJI[Math.floor(Math.random() * RANDOM_EMOJI.length)])}
+          title="Эмодзи"
+        >{hoverEmoji}</button>
+        <textarea
           style={s.textInput}
           value={text}
           onChange={(e) => { setText(e.target.value); handleTyping(); }}
           placeholder={`Написать ${chat.is_group ? "в группе" : getChatTitle()}...`}
+          rows={1}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+            if (e.key === "Enter" && !e.ctrlKey && !e.shiftKey) {
               e.preventDefault();
               sendMessage(e as any);
+            } else if (e.key === "Enter" && e.ctrlKey) {
+              e.preventDefault();
+              setText((t) => t + "\n");
             }
           }}
         />
@@ -614,7 +667,7 @@ const s: Record<string, React.CSSProperties> = {
   readCheck: { fontSize: 11, marginLeft: 4 },
   ctxReactions: { display: "flex", flexWrap: "wrap" as const, gap: 2, padding: "4px 8px", borderTop: "1px solid var(--border)" },
   ctxReactionBtn: { background: "none", fontSize: 18, padding: 3, borderRadius: 4, cursor: "pointer" },
-  msgText: { color: "var(--text-primary)", lineHeight: 1.5, wordBreak: "break-word" as const },
+  msgText: { color: "var(--text-primary)", lineHeight: 1.5, wordBreak: "break-word" as const, whiteSpace: "pre-wrap" as const, margin: 0 },
   msgImage: { maxWidth: 360, maxHeight: 280, borderRadius: 4, marginTop: 4, display: "block" },
   imageOverlay: { position: "fixed" as const, inset: 0, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, cursor: "pointer" },
   imagePreview: { maxWidth: "90%", maxHeight: "90%", borderRadius: 8, objectFit: "contain" as const },
@@ -642,6 +695,6 @@ const s: Record<string, React.CSSProperties> = {
   inputBar: { display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", background: "var(--bg-primary)", borderTop: "1px solid var(--border)" },
   attachBtn: { background: "var(--bg-input)", color: "var(--text-muted)", width: 36, height: 36, borderRadius: "50%", fontSize: 20, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
   emojiBtn: { background: "none", fontSize: 22, padding: "4px", flexShrink: 0, opacity: 0.7 },
-  textInput: { flex: 1, background: "var(--bg-input)", borderRadius: 8, padding: "10px 14px", fontSize: 14, color: "var(--text-primary)" },
+  textInput: { flex: 1, background: "var(--bg-input)", borderRadius: 8, padding: "10px 14px", fontSize: 14, color: "var(--text-primary)", resize: "none" as const, fontFamily: "inherit", lineHeight: 1.4, maxHeight: 120, minHeight: 38 },
   sendBtn: { background: "var(--accent)", color: "#fff", width: 36, height: 36, borderRadius: "50%", fontSize: 16, flexShrink: 0, opacity: 1, transition: "opacity 0.15s" },
 };

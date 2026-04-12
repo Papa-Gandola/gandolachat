@@ -81,6 +81,16 @@ input, textarea {
 
 a { color: var(--text-link); text-decoration: none; }
 
+.msg-row-hover {
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-left: -8px;
+  margin-right: -8px;
+}
+.msg-row-hover:hover {
+  background: rgba(4, 4, 5, 0.12);
+}
+
 /* Utility */
 .flex { display: flex; }
 .flex-col { flex-direction: column; }

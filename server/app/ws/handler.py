@@ -29,7 +29,10 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
             data = await websocket.receive_json()
             event = data.get("type")
 
-            if event == "message":
+            if event == "ping":
+                await websocket.send_json({"type": "pong", "t": data.get("t")})
+
+            elif event == "message":
                 await handle_message(data, user_id, db)
 
             elif event == "typing":
@@ -90,6 +93,30 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                         "user_id": user_id,
                         "emoji": emoji,
                     })
+
+            elif event == "remove_reaction":
+                msg_id = data.get("message_id")
+                emoji = data.get("emoji", "")
+                chat_id = data.get("chat_id")
+                if msg_id and emoji and chat_id:
+                    result = await db.execute(
+                        select(Reaction).where(
+                            Reaction.message_id == msg_id,
+                            Reaction.user_id == user_id,
+                            Reaction.emoji == emoji,
+                        ).limit(1)
+                    )
+                    r = result.scalar_one_or_none()
+                    if r:
+                        await db.delete(r)
+                        await db.commit()
+                        await manager.broadcast_to_chat(chat_id, {
+                            "type": "reaction_removed",
+                            "message_id": msg_id,
+                            "chat_id": chat_id,
+                            "user_id": user_id,
+                            "emoji": emoji,
+                        })
 
             elif event == "mark_read":
                 chat_id = data.get("chat_id")
@@ -173,12 +200,50 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
 
     except WebSocketDisconnect:
         manager.disconnect(user_id, chat_ids)
+        # Remove from any active calls + notify
+        active_call_chats = [cid for cid, users in manager.active_calls.items() if user_id in users]
+        for cid in active_call_chats:
+            manager.active_calls[cid].discard(user_id)
+            if not manager.active_calls[cid]:
+                manager.active_calls.pop(cid, None)
+            await manager.broadcast_to_chat(cid, {
+                "type": "call_end",
+                "from_user_id": user_id,
+                "chat_id": cid,
+            }, exclude_user=user_id)
         # Broadcast offline status
         for cid in chat_ids:
             await manager.broadcast_to_chat(cid, {
                 "type": "user_offline",
                 "user_id": user_id,
             })
+
+
+def count_grammar_errors(text: str) -> int:
+    """Simple Russian grammar error counter - dictionary-based."""
+    import re
+    if not text:
+        return 0
+    errors = 0
+    lower = text.lower()
+    # Common misspellings
+    patterns = [
+        r'\bчто\s?бы\b(?!\s+(?:было|было|будет|стало))',  # чтобы vs что бы
+        r'\bтоже\s+(?:самое|самая)\b',  # то же самое
+        r'\bпо(?:чему|тому)\s+что\b',  # false positive check
+        r'жы|шы|чя|щя|чю|щю',  # жи-ши правило
+        r'\bне\s?знаю\b',  # just count usage
+    ]
+    # Count stupid patterns
+    stupid = [
+        r'\bща\b', r'\bщас\b', r'\bчо\b', r'\bчё\b', r'\bтя\b',
+        r'\bпоч\b', r'\bспс\b', r'\bнзч\b', r'\bкстат\b',
+    ]
+    for p in patterns[:4]:
+        errors += len(re.findall(p, lower))
+    for p in stupid:
+        errors += len(re.findall(p, lower))
+    return errors
 
 
 async def handle_message(data: dict, sender_id: int, db: AsyncSession):
@@ -222,6 +287,12 @@ async def handle_message(data: dict, sender_id: int, db: AsyncSession):
         expires_at=expires_at,
     )
     db.add(msg)
+
+    # Count grammar errors
+    errors = count_grammar_errors(content)
+    if errors > 0:
+        sender.grammar_errors = (sender.grammar_errors or 0) + errors
+
     await db.commit()
     await db.refresh(msg)
 

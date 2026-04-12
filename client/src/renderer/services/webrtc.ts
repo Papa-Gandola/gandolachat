@@ -204,6 +204,31 @@ class WebRTCService {
     });
   }
 
+  // Mic gain (0-200%) via Web Audio API
+  private gainContext: AudioContext | null = null;
+  private gainNode: GainNode | null = null;
+
+  setMicGain(gain: number) {
+    if (!this.localStream) return;
+    if (!this.gainContext) {
+      this.gainContext = new AudioContext();
+      const source = this.gainContext.createMediaStreamSource(this.localStream);
+      this.gainNode = this.gainContext.createGain();
+      const dest = this.gainContext.createMediaStreamDestination();
+      source.connect(this.gainNode);
+      this.gainNode.connect(dest);
+      const newTrack = dest.stream.getAudioTracks()[0];
+      // Replace audio track in peers
+      this.peers.forEach((peer) => {
+        const sender = (peer as any)._pc?.getSenders?.()?.find((s: any) => s.track?.kind === "audio");
+        if (sender) sender.replaceTrack(newTrack);
+      });
+    }
+    if (this.gainNode) {
+      this.gainNode.gain.value = gain / 100;
+    }
+  }
+
   getLocalStream() {
     return this.localStream;
   }

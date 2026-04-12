@@ -8,6 +8,10 @@ class WSService {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private token: string | null = null;
+  public quality: "good" | "ok" | "bad" | "offline" = "offline";
+  public ping: number = 0;
+  private pingInterval: ReturnType<typeof setInterval> | null = null;
+  public onQualityChange: ((q: string, ping: number) => void) | null = null;
 
   connect(token: string) {
     this.token = token;
@@ -21,17 +25,35 @@ class WSService {
 
     this.ws.onopen = () => {
       this.reconnectAttempts = 0;
+      this.quality = "good";
+      this.onQualityChange?.("good", 0);
+      // Ping every 5s
+      if (this.pingInterval) clearInterval(this.pingInterval);
+      this.pingInterval = setInterval(() => {
+        const t = Date.now();
+        this.send({ type: "ping", t });
+      }, 5000);
     };
 
     this.ws.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data);
+        if (data.type === "pong" && data.t) {
+          const p = Date.now() - data.t;
+          this.ping = p;
+          this.quality = p < 100 ? "good" : p < 300 ? "ok" : "bad";
+          this.onQualityChange?.(this.quality, p);
+          return;
+        }
         const listeners = this.handlers.get(data.type) || [];
         listeners.forEach((h) => h(data));
       } catch {}
     };
 
     this.ws.onclose = () => {
+      this.quality = "offline";
+      this.onQualityChange?.("offline", 0);
+      if (this.pingInterval) { clearInterval(this.pingInterval); this.pingInterval = null; }
       const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
       this.reconnectAttempts++;
       this.reconnectTimer = setTimeout(() => this._connect(), delay);
