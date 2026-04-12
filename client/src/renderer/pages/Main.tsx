@@ -56,6 +56,7 @@ export default function Main({ token, user, onLogout }: Props) {
       if (data.user_id === user.id) {
         setCurrentUser((prev) => ({ ...prev, username: data.username, avatar_url: data.avatar_url, status: data.status }));
       }
+      setViewingProfile((prev) => prev && prev.id === data.user_id ? { ...prev, username: data.username, avatar_url: data.avatar_url, status: data.status } : prev);
     });
 
     wsService.on("chat_deleted", (data) => {

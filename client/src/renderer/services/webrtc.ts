@@ -193,6 +193,11 @@ class WebRTCService {
     this.localStream = null;
     this.currentChatId = null;
     this.pendingSignals.clear();
+    if (this.gainContext) {
+      this.gainContext.close().catch(() => {});
+      this.gainContext = null;
+      this.gainNode = null;
+    }
   }
 
   replaceVideoTrack(newTrack: MediaStreamTrack) {
@@ -211,23 +216,30 @@ class WebRTCService {
   setMicGain(gain: number) {
     if (!this.localStream) return;
     if (!this.gainContext) {
-      this.gainContext = new AudioContext();
-      const source = this.gainContext.createMediaStreamSource(this.localStream);
-      this.gainNode = this.gainContext.createGain();
-      const dest = this.gainContext.createMediaStreamDestination();
-      source.connect(this.gainNode);
-      this.gainNode.connect(dest);
-      const newTrack = dest.stream.getAudioTracks()[0];
-      // Replace audio track in peers
-      this.peers.forEach((peer) => {
-        const sender = (peer as any)._pc?.getSenders?.()?.find((s: any) => s.track?.kind === "audio");
-        if (sender) sender.replaceTrack(newTrack);
-      });
+      try {
+        this.gainContext = new AudioContext();
+        const source = this.gainContext.createMediaStreamSource(this.localStream);
+        this.gainNode = this.gainContext.createGain();
+        const dest = this.gainContext.createMediaStreamDestination();
+        source.connect(this.gainNode);
+        this.gainNode.connect(dest);
+        const newTrack = dest.stream.getAudioTracks()[0];
+        // Replace audio track in all existing peers
+        this.peers.forEach((peer) => {
+          const sender = (peer as any)._pc?.getSenders?.()?.find((s: any) => s.track?.kind === "audio");
+          if (sender) sender.replaceTrack(newTrack);
+        });
+      } catch (err) {
+        console.error("[WebRTC] setMicGain error", err);
+        return;
+      }
     }
     if (this.gainNode) {
       this.gainNode.gain.value = gain / 100;
     }
   }
+
+  // Clean up gain context when call ends
 
   getLocalStream() {
     return this.localStream;
