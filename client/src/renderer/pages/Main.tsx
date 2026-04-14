@@ -156,15 +156,17 @@ export default function Main({ token, user, onLogout }: Props) {
     <div style={s.root}>
       {/* Title bar */}
       <div style={s.titleBar}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={s.titleText}>GandolaChat</span>
           <span
             style={{
               width: 8, height: 8, borderRadius: "50%",
               background: connQuality === "good" ? "#3ba55d" : connQuality === "ok" ? "#faa61a" : connQuality === "bad" ? "#ed4245" : "#72767d",
             }}
-            title={connQuality === "offline" ? "Нет соединения" : `Пинг: ${connPing}мс`}
           />
+          <span style={{ ...s.titleText, fontSize: 11 }}>
+            {connQuality === "offline" ? "offline" : `${connPing} мс`}
+          </span>
         </div>
         <div style={s.winControls}>
           <button style={s.winBtn} onClick={() => (window as any).electron?.minimize()}>─</button>

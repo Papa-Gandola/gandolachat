@@ -241,23 +241,38 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   function startDrag(id: string, e: React.MouseEvent, mode: "move" | "resize") {
     if (!freeMode) return;
     e.stopPropagation();
+    e.preventDefault();
     const startX = e.clientX;
     const startY = e.clientY;
     const pos = tilePositions.get(id) || { x: 20, y: 20, w: 280, h: 210 };
+    const tileEl = (e.currentTarget as HTMLElement).closest("[data-tile-id]") as HTMLElement || (e.currentTarget as HTMLElement);
+    let lastFrame: number | null = null;
+    let pendingPos = { ...pos };
+
     const onMove = (ev: MouseEvent) => {
       const dx = ev.clientX - startX;
       const dy = ev.clientY - startY;
-      setTilePositions((prev) => {
-        const next = new Map(prev);
-        if (mode === "move") {
-          next.set(id, { ...pos, x: pos.x + dx, y: pos.y + dy });
-        } else {
-          next.set(id, { ...pos, w: Math.max(160, pos.w + dx), h: Math.max(120, pos.h + dy) });
-        }
-        return next;
-      });
+      if (mode === "move") {
+        pendingPos = { ...pos, x: pos.x + dx, y: pos.y + dy };
+      } else {
+        pendingPos = { ...pos, w: Math.max(160, pos.w + dx), h: Math.max(120, pos.h + dy) };
+      }
+      if (lastFrame === null) {
+        lastFrame = requestAnimationFrame(() => {
+          if (tileEl) {
+            tileEl.style.left = pendingPos.x + "px";
+            tileEl.style.top = pendingPos.y + "px";
+            tileEl.style.width = pendingPos.w + "px";
+            tileEl.style.height = pendingPos.h + "px";
+          }
+          lastFrame = null;
+        });
+      }
     };
     const onUp = () => {
+      if (lastFrame !== null) cancelAnimationFrame(lastFrame);
+      // Commit final position to state
+      setTilePositions((prev) => new Map(prev).set(id, pendingPos));
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
@@ -313,6 +328,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
           const pos = freeMode ? getTilePos("self", 0) : null;
           return (
             <div
+              data-tile-id="self"
               style={{
                 ...s.videoWrap,
                 ...(!freeMode && enlarged === "self" ? s.enlarged : {}),
@@ -320,12 +336,13 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
                 boxShadow: selfSpeaking && !muted ? "0 0 0 3px #57f287" : "none",
                 transition: freeMode ? "none" : "box-shadow 0.15s",
                 cursor: freeMode ? "move" : "pointer",
+                willChange: freeMode ? "left, top, width, height" : "auto",
               }}
               onMouseDown={(e) => freeMode && startDrag("self", e, "move")}
               onClick={() => !freeMode && setEnlarged(enlarged === "self" ? null : "self")}
             >
               <video ref={localVideoRef} autoPlay muted playsInline style={{
-                ...(freeMode ? { width: "100%", height: "100%", objectFit: "cover" as const } : (enlarged === "self" ? s.videoEnlarged : s.video)),
+                ...(freeMode ? { width: "100%", height: "100%", objectFit: "cover" as const, pointerEvents: "none" as const } : (enlarged === "self" ? s.videoEnlarged : s.video)),
                 display: videoOff ? "none" : "block",
               }} />
               {videoOff && <CallAvatar name={currentUser.username} url={currentUser.avatar_url} />}
@@ -340,16 +357,18 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
           const pos = freeMode ? getTilePos("screen", 1) : null;
           return (
             <div
+              data-tile-id="screen"
               style={{
                 ...s.videoWrap,
                 ...(!freeMode && enlarged === "screen" ? s.enlarged : {}),
                 ...(freeMode && pos ? { position: "absolute" as const, left: pos.x, top: pos.y, width: pos.w, height: pos.h } : {}),
                 cursor: freeMode ? "move" : "pointer", border: "2px solid #5865f2",
+                willChange: freeMode ? "left, top, width, height" : "auto",
               }}
               onMouseDown={(e) => freeMode && startDrag("screen", e, "move")}
               onClick={() => !freeMode && setEnlarged(enlarged === "screen" ? null : "screen")}
             >
-              <video ref={screenVideoRef} autoPlay muted playsInline style={freeMode ? { width: "100%", height: "100%", objectFit: "contain" as const } : (enlarged === "screen" ? s.videoEnlarged : s.video)} />
+              <video ref={screenVideoRef} autoPlay muted playsInline style={freeMode ? { width: "100%", height: "100%", objectFit: "contain" as const, pointerEvents: "none" as const } : (enlarged === "screen" ? s.videoEnlarged : s.video)} />
               <span style={s.videoLabel}>Ваш экран</span>
               {freeMode && <div style={s.resizeCorner} onMouseDown={(e) => startDrag("screen", e, "resize")} />}
             </div>

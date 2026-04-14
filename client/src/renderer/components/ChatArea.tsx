@@ -356,6 +356,10 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
         <div style={s.headerLeft}>
           <span style={s.chatIcon}>{chat.is_group ? "#" : "@"}</span>
           <span style={s.chatTitle}>{getChatTitle()}</span>
+          {!chat.is_group && (() => {
+            const other = chat.members.find((m) => m.id !== currentUser.id);
+            return other?.status ? <span style={s.chatStatus}>— {other.status}</span> : null;
+          })()}
           {chat.is_group && (
             <span style={s.memberCount}>{chat.members.length} участников</span>
           )}
@@ -680,6 +684,7 @@ const s: Record<string, React.CSSProperties> = {
   chatIcon: { color: "var(--text-muted)", fontWeight: 700, fontSize: 18 },
   chatTitle: { color: "var(--text-header)", fontWeight: 600, fontSize: 16 },
   memberCount: { color: "var(--text-muted)", fontSize: 13, marginLeft: 8 },
+  chatStatus: { color: "var(--text-muted)", fontSize: 13, marginLeft: 8, fontStyle: "italic" as const },
   headerBtn: { background: "none", color: "var(--text-secondary)", fontSize: 20, padding: "4px 8px", borderRadius: 4 },
   searchBar: { display: "flex", gap: 8, padding: "8px 16px", borderBottom: "1px solid var(--border)", background: "var(--bg-secondary)" },
   searchInput: { flex: 1, background: "var(--bg-input)", borderRadius: 6, padding: "8px 12px", fontSize: 13, color: "var(--text-primary)" },

@@ -25,6 +25,7 @@ export default function Sidebar({
   const [editingName, setEditingName] = useState(false);
   const [pendingUsers, setPendingUsers] = useState<Array<{ id: number; username: string; created_at: string }>>([]);
   const [showPending, setShowPending] = useState(false);
+  const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const isAdmin = currentUser.username === "Papa Gandola";
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [updatePercent, setUpdatePercent] = useState(0);
@@ -318,13 +319,35 @@ export default function Sidebar({
           <span style={s.userName}>{currentUser.username}</span>
           <span style={s.userSub}>{currentUser.status || "v1.1.0"}</span>
         </div>
-        <button style={s.settingsBtn} title="Профиль" onClick={onOpenProfile}>✏️</button>
-        <button style={s.settingsBtn} title="Проверить обновления" onClick={() => {
-          setUpdateStatus(null);
-          setShowUpdateBanner(false);
-          (window as any).electron?.checkForUpdates();
-        }}>🔄</button>
-        <button style={s.logoutBtn} title="Выйти" onClick={onLogout}>⎋</button>
+        <div style={{ position: "relative" }}>
+          <button style={s.settingsBtn} title="Настройки" onClick={() => setShowSettingsMenu(!showSettingsMenu)}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.6 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+            </svg>
+          </button>
+          {showSettingsMenu && (
+            <>
+              <div style={s.settingsMenuBackdrop} onClick={() => setShowSettingsMenu(false)} />
+              <div style={s.settingsMenu}>
+                <button style={s.settingsMenuItem} onClick={() => { setShowSettingsMenu(false); onOpenProfile(); }}>
+                  ✏️ Профиль
+                </button>
+                <button style={s.settingsMenuItem} onClick={() => {
+                  setShowSettingsMenu(false);
+                  setUpdateStatus(null);
+                  setShowUpdateBanner(false);
+                  (window as any).electron?.checkForUpdates();
+                }}>
+                  🔄 Проверить обновления
+                </button>
+                <button style={{ ...s.settingsMenuItem, color: "#ed4245" }} onClick={() => { setShowSettingsMenu(false); onLogout(); }}>
+                  ⎋ Выйти
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -393,7 +416,10 @@ const s: Record<string, React.CSSProperties> = {
   userInfo: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column" },
   userName: { color: "var(--text-header)", fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   userSub: { color: "var(--text-muted)", fontSize: 10 },
-  settingsBtn: { background: "none", color: "var(--text-muted)", fontSize: 14, padding: "2px", cursor: "pointer" },
+  settingsBtn: { background: "none", color: "var(--text-muted)", padding: "4px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", border: "none" },
+  settingsMenuBackdrop: { position: "fixed" as const, inset: 0, zIndex: 99 },
+  settingsMenu: { position: "absolute" as const, bottom: "100%", right: 0, marginBottom: 6, background: "var(--bg-tertiary)", borderRadius: 6, boxShadow: "0 8px 24px rgba(0,0,0,0.5)", minWidth: 200, padding: 4, zIndex: 100 },
+  settingsMenuItem: { display: "block", width: "100%", textAlign: "left" as const, background: "none", border: "none", color: "var(--text-primary)", padding: "8px 12px", fontSize: 13, borderRadius: 4, cursor: "pointer" },
   editNameInput: { flex: 1, background: "var(--bg-tertiary)", border: "1px solid var(--accent)", borderRadius: 4, padding: "4px 6px", fontSize: 12, color: "var(--text-primary)", minWidth: 0, width: "100%" },
   editNameSave: { background: "var(--accent)", color: "#fff", border: "none", borderRadius: 4, padding: "4px 6px", fontSize: 12, cursor: "pointer", flexShrink: 0 },
   logoutBtn: { background: "none", color: "var(--text-muted)", fontSize: 18 },
