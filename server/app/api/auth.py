@@ -6,6 +6,7 @@ from app.database import get_db
 from app.models import User
 from app.schemas import UserRegister, UserLogin, Token, UserOut
 from app.auth import hash_password, verify_password, create_access_token, get_current_user
+from app.ws.manager import manager
 
 ADMIN_USERNAME = "Papa Gandola"
 
@@ -33,6 +34,16 @@ async def register(data: UserRegister, db: AsyncSession = Depends(get_db)):
         token = create_access_token(user.id)
         return {"status": "approved", "access_token": token, "token_type": "bearer", "user": UserOut.model_validate(user).model_dump()}
     else:
+        # Notify admin in real-time
+        admin_result = await db.execute(select(User).where(User.username == ADMIN_USERNAME))
+        admin = admin_result.scalar_one_or_none()
+        if admin:
+            await manager.send_to_user(admin.id, {
+                "type": "new_pending_user",
+                "id": user.id,
+                "username": user.username,
+                "created_at": user.created_at.isoformat(),
+            })
         return {"status": "pending", "message": "Ваша заявка отправлена. Ожидайте одобрения администратора."}
 
 

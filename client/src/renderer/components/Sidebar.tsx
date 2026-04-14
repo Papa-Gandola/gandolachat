@@ -54,6 +54,14 @@ export default function Sidebar({
     if (isAdmin) {
       authApi.getPendingUsers().then((res) => setPendingUsers(res.data)).catch(() => {});
     }
+
+    const onPending = (data: any) => {
+      setPendingUsers((prev) => {
+        if (prev.some((p) => p.id === data.id)) return prev;
+        return [...prev, { id: data.id, username: data.username, created_at: data.created_at }];
+      });
+    };
+    if (isAdmin) wsService.on("new_pending_user", onPending);
     chatApi.getUnreadCounts().then((res) => {
       const m = new Map<number, number>();
       Object.entries(res.data).forEach(([k, v]) => m.set(Number(k), v));
@@ -82,6 +90,7 @@ export default function Sidebar({
       wsService.off("message", onMsg);
       wsService.off("call_active", onCallActive);
       wsService.off("call_end", onCallEnd);
+      if (isAdmin) wsService.off("new_pending_user", onPending);
     };
   }, [activeChatId, currentUser.id]);
 
