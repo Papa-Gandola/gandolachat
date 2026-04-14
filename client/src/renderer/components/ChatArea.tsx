@@ -23,7 +23,11 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   const [searchResults, setSearchResults] = useState<MessageOut[] | null>(null);
   const [editingMsg, setEditingMsg] = useState<MessageOut | null>(null);
   const [editText, setEditText] = useState("");
-  const [replyTo, setReplyTo] = useState<MessageOut | null>(null);
+  const [replyTo, setReplyToState] = useState<MessageOut | null>(null);
+  const setReplyTo = (msg: MessageOut | null) => {
+    setReplyToState(msg);
+    if (msg) setTimeout(() => textInputRef.current?.focus(), 0);
+  };
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; msg: MessageOut } | null>(null);
   const [showSearch, setShowSearch] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -41,6 +45,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   });
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const textInputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
@@ -602,6 +607,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
           title="Эмодзи"
         >{hoverEmoji}</button>
         <textarea
+          ref={textInputRef}
           style={s.textInput}
           value={text}
           onChange={(e) => { setText(e.target.value); handleTyping(); }}
