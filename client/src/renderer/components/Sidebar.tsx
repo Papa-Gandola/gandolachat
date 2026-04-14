@@ -358,7 +358,7 @@ function stringToColor(str: string) {
 
 const s: Record<string, React.CSSProperties> = {
   root: { background: "var(--bg-secondary)", display: "flex", flexDirection: "column", height: "100%", flexShrink: 0 },
-  header: { padding: "16px 16px 8px", borderBottom: "1px solid var(--border)" },
+  header: { padding: "12px 16px", borderBottom: "1px solid var(--border)", height: 49, boxSizing: "border-box" as const, display: "flex", alignItems: "center", justifyContent: "space-between" },
   headerTitle: { color: "var(--text-header)", fontWeight: 700, fontSize: 15 },
   pendingBtn: { margin: "4px 12px", padding: "8px 12px", background: "#faa61a", color: "#000", borderRadius: 4, fontSize: 13, fontWeight: 700, cursor: "pointer", textAlign: "center" as const },
   pendingList: { margin: "0 8px 4px", background: "var(--bg-tertiary)", borderRadius: 4, overflow: "hidden" },

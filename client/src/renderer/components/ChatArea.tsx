@@ -642,7 +642,7 @@ function AvatarSmall({ name, url }: { name: string; url: string | null }) {
 
 const s: Record<string, React.CSSProperties> = {
   root: { flex: 1, display: "flex", flexDirection: "column", background: "var(--bg-primary)", height: "100%", position: "relative" },
-  header: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: "1px solid var(--border)", background: "var(--bg-primary)" },
+  header: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: "1px solid var(--border)", background: "var(--bg-primary)", height: 49, boxSizing: "border-box" as const, flexShrink: 0 },
   headerLeft: { display: "flex", alignItems: "center", gap: 8 },
   chatIcon: { color: "var(--text-muted)", fontWeight: 700, fontSize: 18 },
   chatTitle: { color: "var(--text-header)", fontWeight: 600, fontSize: 16 },
