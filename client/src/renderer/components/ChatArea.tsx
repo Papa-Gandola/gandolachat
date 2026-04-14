@@ -3,6 +3,7 @@ import { ChatOut, MessageOut, UserOut, chatApi } from "../services/api";
 import { wsService } from "../services/ws";
 import { playMessageSound } from "../services/sounds";
 import EmojiPicker from "./EmojiPicker";
+import FormattedText from "./FormattedText";
 
 interface Props {
   chat: ChatOut;
@@ -217,6 +218,23 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     if (e.currentTarget.scrollTop === 0 && hasMore) {
       loadOlderMessages();
     }
+  }
+
+  function wrapSelection(marker: string) {
+    const ta = textInputRef.current;
+    if (!ta) return;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    const before = text.slice(0, start);
+    const sel = text.slice(start, end);
+    const after = text.slice(end);
+    const newText = `${before}${marker}${sel}${marker}${after}`;
+    setText(newText);
+    setTimeout(() => {
+      ta.focus();
+      const newPos = end + marker.length * 2;
+      ta.setSelectionRange(newPos, newPos);
+    }, 0);
   }
 
   function handleTyping() {
@@ -466,7 +484,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                       </div>
                     ) : (
                       <>
-                        {msg.content && <p style={s.msgText}>{msg.content}</p>}
+                        {msg.content && <p style={s.msgText}><FormattedText text={msg.content} /></p>}
                         {/* Reactions display */}
                         {reactions.get(msg.id)?.length ? (
                           <div style={s.reactionsRow}>
@@ -543,6 +561,15 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
 
       {/* Typing indicator */}
       {typingText && <div style={s.typingBar}>{typingText}</div>}
+
+      {/* Format toolbar */}
+      <div style={s.formatBar}>
+        <button type="button" style={s.formatBtn} onClick={() => wrapSelection("**")} title="Жирный"><b>B</b></button>
+        <button type="button" style={s.formatBtn} onClick={() => wrapSelection("*")} title="Курсив"><i>I</i></button>
+        <button type="button" style={s.formatBtn} onClick={() => wrapSelection("__")} title="Подчёркнутый"><u>U</u></button>
+        <button type="button" style={s.formatBtn} onClick={() => wrapSelection("~~")} title="Зачёркнутый"><s>S</s></button>
+        <button type="button" style={s.formatBtn} onClick={() => wrapSelection("||")} title="Спойлер">▮</button>
+      </div>
 
       {/* Reply preview bar */}
       {replyTo && (
@@ -698,7 +725,9 @@ const s: Record<string, React.CSSProperties> = {
   editSaveBtn: { background: "var(--accent)", color: "#fff", borderRadius: 4, padding: "4px 10px", fontSize: 14 },
   editCancelBtn: { background: "var(--bg-tertiary)", color: "var(--text-muted)", borderRadius: 4, padding: "4px 10px", fontSize: 14 },
   dropOverlay: { position: "absolute" as const, inset: 0, background: "rgba(88,101,242,0.15)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)", fontSize: 18, fontWeight: 700, zIndex: 50, pointerEvents: "none" as const },
-  inputBar: { display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", background: "var(--bg-primary)", borderTop: "1px solid var(--border)" },
+  formatBar: { display: "flex", gap: 4, padding: "4px 16px", background: "var(--bg-primary)", borderTop: "1px solid var(--border)" },
+  formatBtn: { background: "none", color: "var(--text-muted)", padding: "4px 10px", borderRadius: 4, fontSize: 13, cursor: "pointer", border: "1px solid transparent" },
+  inputBar: { display: "flex", alignItems: "center", gap: 8, padding: "8px 16px 12px", background: "var(--bg-primary)" },
   attachBtn: { background: "var(--bg-input)", color: "var(--text-muted)", width: 36, height: 36, borderRadius: "50%", fontSize: 20, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
   emojiBtn: { background: "none", fontSize: 22, padding: "4px", flexShrink: 0, opacity: 0.7 },
   textInput: { flex: 1, background: "var(--bg-input)", borderRadius: 8, padding: "10px 14px", fontSize: 14, color: "var(--text-primary)", resize: "none" as const, fontFamily: "inherit", lineHeight: 1.4, maxHeight: 120, minHeight: 38 },

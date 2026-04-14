@@ -20,6 +20,7 @@ let mainWindow: BrowserWindow | null = null;
 
 app.on("second-instance", () => {
   if (mainWindow) {
+    if (!mainWindow.isVisible()) mainWindow.show();
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
   }
@@ -69,19 +70,25 @@ function createTray() {
   if (tray) return;
   tray = new Tray(path.join(__dirname, "../../assets/icon.ico"));
   tray.setToolTip("GandolaChat");
+  const showWin = () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  };
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: "Открыть", click: () => { mainWindow?.show(); mainWindow?.focus(); } },
+    { label: "Открыть", click: showWin },
     { type: "separator" },
     { label: "Выход", click: () => { isQuitting = true; app.quit(); } },
   ]));
   tray.on("click", () => {
-    if (mainWindow?.isVisible()) {
+    if (mainWindow?.isVisible() && !mainWindow.isMinimized()) {
       mainWindow?.hide();
     } else {
-      mainWindow?.show();
-      mainWindow?.focus();
+      showWin();
     }
   });
+  tray.on("double-click", showWin);
 }
 
 // Auto-updater events
