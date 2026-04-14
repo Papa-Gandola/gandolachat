@@ -158,9 +158,10 @@ export default function Main({ token, user, onLogout }: Props) {
       <div style={s.titleBar}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={s.titleText}>GandolaChat</span>
+          <span style={{ ...s.titleText, fontSize: 10, opacity: 0.6 }}>v1.1.1</span>
           <span
             style={{
-              width: 8, height: 8, borderRadius: "50%",
+              width: 8, height: 8, borderRadius: "50%", marginLeft: 4,
               background: connQuality === "good" ? "#3ba55d" : connQuality === "ok" ? "#faa61a" : connQuality === "bad" ? "#ed4245" : "#72767d",
             }}
           />
