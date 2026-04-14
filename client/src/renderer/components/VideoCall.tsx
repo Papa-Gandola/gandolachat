@@ -245,7 +245,8 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
     const startX = e.clientX;
     const startY = e.clientY;
     const pos = tilePositions.get(id) || { x: 20, y: 20, w: 280, h: 210 };
-    const tileEl = (e.currentTarget as HTMLElement).closest("[data-tile-id]") as HTMLElement || (e.currentTarget as HTMLElement);
+    const tileEl = (e.currentTarget as HTMLElement).closest("[data-tile-id]") as HTMLElement | null;
+    if (!tileEl) return;
     let lastFrame: number | null = null;
     let pendingPos = { ...pos };
 
@@ -432,6 +433,9 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
                   oldTrack.stop();
                   ls.addTrack(newTrack);
                 }
+                // Reset gain context to use new audio source
+                webrtcService.resetGainContext();
+                if (micGain !== 100) webrtcService.setMicGain(micGain);
               } catch {}
             }}>
               {audioDevices.map((d) => <option key={d.deviceId} value={d.deviceId}>{d.label || "Микрофон"}</option>)}
@@ -590,6 +594,7 @@ function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, volume, onVol
 
   return (
     <div
+      data-tile-id={`remote-${entry.userId}`}
       style={{
         ...s.videoWrap,
         ...(!freeMode && enlarged ? s.enlarged : {}),
@@ -597,6 +602,7 @@ function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, volume, onVol
         cursor: freeMode ? "move" : "pointer",
         boxShadow: speaking ? "0 0 0 3px #57f287" : "none",
         transition: freeMode ? "none" : "box-shadow 0.15s",
+        willChange: freeMode ? "left, top, width, height" : "auto",
       }}
       onMouseDown={(e) => freeMode && onStartDrag?.(e, "move")}
       onClick={onClick}

@@ -213,6 +213,14 @@ class WebRTCService {
   private gainContext: AudioContext | null = null;
   private gainNode: GainNode | null = null;
 
+  resetGainContext() {
+    if (this.gainContext) {
+      this.gainContext.close().catch(() => {});
+      this.gainContext = null;
+      this.gainNode = null;
+    }
+  }
+
   setMicGain(gain: number) {
     if (!this.localStream) return;
     if (!this.gainContext) {

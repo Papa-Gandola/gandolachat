@@ -69,6 +69,7 @@ async def update_profile(
         "username": current_user.username,
         "avatar_url": current_user.avatar_url,
         "status": current_user.status,
+        "about": current_user.about,
     }
     for row in chat_ids_result.all():
         await manager.broadcast_to_chat(row.chat_id, payload)
@@ -122,6 +123,7 @@ async def upload_avatar(
         "username": current_user.username,
         "avatar_url": current_user.avatar_url,
         "status": current_user.status,
+        "about": current_user.about,
     }
     for row in chat_ids_result.all():
         await manager.broadcast_to_chat(row.chat_id, payload)

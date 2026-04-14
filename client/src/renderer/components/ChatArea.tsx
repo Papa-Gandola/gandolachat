@@ -172,6 +172,19 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     return () => document.removeEventListener("click", close);
   }, []);
 
+  // ESC closes image preview (capture phase, before global ESC handler)
+  useEffect(() => {
+    if (!previewImage) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setPreviewImage(null);
+      }
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [previewImage]);
+
   const [hasMore, setHasMore] = useState(true);
   const messagesRef = useRef<HTMLDivElement>(null);
 
@@ -347,8 +360,11 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
       onDragLeave={() => setDragOver(false)}
       onDrop={handleDrop}
       onPaste={(e) => {
-        const file = e.clipboardData?.files?.[0];
-        if (file) { e.preventDefault(); sendFile(file); }
+        const files = Array.from(e.clipboardData?.files || []);
+        if (files.length > 0) {
+          e.preventDefault();
+          files.forEach((f) => sendFile(f));
+        }
       }}
     >
       {/* Header */}
