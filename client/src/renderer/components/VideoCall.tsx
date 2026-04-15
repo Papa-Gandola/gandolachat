@@ -34,6 +34,8 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   const [peerVolumes, setPeerVolumes] = useState<Map<number, number>>(new Map());
   const [selfSpeaking, setSelfSpeaking] = useState(false);
   const [mutedPeers, setMutedPeers] = useState<Set<number>>(new Set());
+  const [videoOffPeers, setVideoOffPeers] = useState<Set<number>>(new Set());
+  const [screenSharingPeers, setScreenSharingPeers] = useState<Set<number>>(new Set());
   const [showSettings, setShowSettings] = useState(false);
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
@@ -59,17 +61,37 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
     }
   }, [screenStream]);
 
-  // Listen for mute status from other users
+  // Listen for mute/video/screen status from other users
   useEffect(() => {
-    const handler = (data: any) => {
+    const muteHandler = (data: any) => {
       setMutedPeers((prev) => {
         const next = new Set(prev);
         data.muted ? next.add(data.user_id) : next.delete(data.user_id);
         return next;
       });
     };
-    wsService.on("mute_status", handler);
-    return () => wsService.off("mute_status", handler);
+    const videoHandler = (data: any) => {
+      setVideoOffPeers((prev) => {
+        const next = new Set(prev);
+        data.video_off ? next.add(data.user_id) : next.delete(data.user_id);
+        return next;
+      });
+    };
+    const screenHandler = (data: any) => {
+      setScreenSharingPeers((prev) => {
+        const next = new Set(prev);
+        data.sharing ? next.add(data.user_id) : next.delete(data.user_id);
+        return next;
+      });
+    };
+    wsService.on("mute_status", muteHandler);
+    wsService.on("video_status", videoHandler);
+    wsService.on("screen_share_status", screenHandler);
+    return () => {
+      wsService.off("mute_status", muteHandler);
+      wsService.off("video_status", videoHandler);
+      wsService.off("screen_share_status", screenHandler);
+    };
   }, []);
 
   // Call duration timer
@@ -169,7 +191,9 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   function toggleVideo() {
     const stream = webrtcService.getLocalStream();
     stream?.getVideoTracks().forEach((t) => (t.enabled = videoOff));
-    setVideoOff(!videoOff);
+    const newVideoOff = !videoOff;
+    setVideoOff(newVideoOff);
+    wsService.send({ type: "video_status", chat_id: chat.id, video_off: newVideoOff });
   }
 
   function toggleDeafen() {
@@ -211,6 +235,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
       webrtcService.replaceVideoTrack(screenTrack);
       setScreenStream(stream);
       setScreenSharing(true);
+      wsService.send({ type: "screen_share_status", chat_id: chat.id, sharing: true });
       // Don't change localVideoRef — keep showing webcam
       screenTrack.onended = () => stopScreenShare();
     } catch {}
@@ -220,6 +245,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
     screenStream?.getTracks().forEach((t) => t.stop());
     setScreenStream(null);
     setScreenSharing(false);
+    wsService.send({ type: "screen_share_status", chat_id: chat.id, sharing: false });
     // Restore webcam track to peers
     const ls = webrtcService.getLocalStream();
     const camTrack = ls?.getVideoTracks()[0];
@@ -385,6 +411,8 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
             enlarged={enlarged === String(entry.userId)}
             deafened={deafened}
             peerMuted={mutedPeers.has(entry.userId)}
+            peerVideoOff={videoOffPeers.has(entry.userId)}
+            peerScreenSharing={screenSharingPeers.has(entry.userId)}
             volume={peerVolumes.get(entry.userId) ?? 100}
             onVolumeChange={(v) => changePeerVolume(entry.userId, v)}
             onClick={() => !freeMode && setEnlarged(enlarged === String(entry.userId) ? null : String(entry.userId))}
@@ -550,8 +578,9 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   );
 }
 
-function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, volume, onVolumeChange, onClick, freeMode, freePos, onStartDrag }: {
+function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, peerVideoOff, peerScreenSharing, volume, onVolumeChange, onClick, freeMode, freePos, onStartDrag }: {
   entry: VideoEntry; chat: ChatOut; enlarged: boolean; deafened: boolean; peerMuted: boolean;
+  peerVideoOff?: boolean; peerScreenSharing?: boolean;
   volume: number; onVolumeChange: (v: number) => void; onClick: () => void;
   freeMode?: boolean; freePos?: { x: number; y: number; w: number; h: number } | null;
   onStartDrag?: (e: React.MouseEvent, mode: "move" | "resize") => void;
@@ -567,6 +596,14 @@ function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, volume, onVol
       ref.current.volume = deafened ? 0 : Math.min(volume / 100, 1);
     }
   }, [entry.stream, volume, deafened]);
+
+  // Force reattach srcObject when screen sharing status changes (replaceTrack doesn't trigger re-render)
+  useEffect(() => {
+    if (ref.current && entry.stream) {
+      ref.current.srcObject = null;
+      setTimeout(() => { if (ref.current) ref.current.srcObject = entry.stream; }, 50);
+    }
+  }, [peerScreenSharing]);
 
   // Voice activity detection
   useEffect(() => {
@@ -608,10 +645,13 @@ function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, volume, onVol
       onClick={onClick}
       onContextMenu={(e) => { e.preventDefault(); setShowVolume(!showVolume); }}
     >
-      <video ref={ref} autoPlay playsInline style={freeMode ? { width: "100%", height: "100%", objectFit: "cover" as const, display: "block" } : (enlarged ? s.videoEnlarged : s.video)} />
+      <video ref={ref} autoPlay playsInline style={{
+        ...(freeMode ? { width: "100%", height: "100%", objectFit: (peerScreenSharing ? "contain" : "cover") as const, display: "block" } : (enlarged ? s.videoEnlarged : s.video)),
+        display: peerVideoOff && !peerScreenSharing ? "none" : "block",
+      }} />
       {freeMode && <div style={s.resizeCorner} onMouseDown={(e) => { e.stopPropagation(); onStartDrag?.(e, "resize"); }} />}
-      {entry.stream.getVideoTracks().length === 0 && member && (
-        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      {(peerVideoOff && !peerScreenSharing || entry.stream.getVideoTracks().length === 0) && member && (
+        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "#18191c" }}>
           <CallAvatar name={member.username} url={member.avatar_url} />
         </div>
       )}
@@ -625,7 +665,12 @@ function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, volume, onVol
         }}
         title="В отдельное окно"
       >⧉</button>
-      <span style={s.videoLabel}>{peerMuted ? "🔇 " : ""}{member?.username || "Участник"}</span>
+      <span style={s.videoLabel}>
+        {peerMuted ? "🔇 " : ""}
+        {peerScreenSharing ? "📺 " : ""}
+        {member?.username || "Участник"}
+        {peerScreenSharing ? " (экран)" : ""}
+      </span>
       {showVolume && (
         <div style={s.volumeSlider} onClick={(e) => e.stopPropagation()}>
           <input

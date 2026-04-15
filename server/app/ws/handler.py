@@ -141,6 +141,24 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                         "last_read_message_id": msg_id,
                     }, exclude_user=user_id)
 
+            elif event == "video_status":
+                chat_id = data.get("chat_id")
+                await manager.broadcast_to_chat(chat_id, {
+                    "type": "video_status",
+                    "user_id": user_id,
+                    "chat_id": chat_id,
+                    "video_off": data.get("video_off", False),
+                }, exclude_user=user_id)
+
+            elif event == "screen_share_status":
+                chat_id = data.get("chat_id")
+                await manager.broadcast_to_chat(chat_id, {
+                    "type": "screen_share_status",
+                    "user_id": user_id,
+                    "chat_id": chat_id,
+                    "sharing": data.get("sharing", False),
+                }, exclude_user=user_id)
+
             elif event == "mute_status":
                 chat_id = data.get("chat_id")
                 await manager.broadcast_to_chat(chat_id, {
