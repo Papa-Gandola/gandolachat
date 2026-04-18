@@ -176,6 +176,22 @@ export default function ProfilePage({ user: initialUser, currentUser, onClose, o
           )}
         </div>
 
+        {user.last_seen && (
+          <div style={s.field}>
+            <label style={s.label}>ПОСЛЕДНИЙ ВИЗИТ</label>
+            <div style={s.value}>
+              {(() => {
+                const d = new Date(user.last_seen);
+                const diff = Math.floor((Date.now() - d.getTime()) / 1000);
+                if (diff < 60) return "только что";
+                if (diff < 3600) return `${Math.floor(diff / 60)} мин. назад`;
+                if (diff < 86400) return `${Math.floor(diff / 3600)} ч. назад`;
+                return d.toLocaleDateString("ru-RU") + " " + d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+              })()}
+            </div>
+          </div>
+        )}
+
         <div style={s.field}>
           <label style={s.label}>РЕЙТИНГ ГРАМОТНОСТИ</label>
           <div style={s.value}>

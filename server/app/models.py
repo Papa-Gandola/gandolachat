@@ -23,6 +23,7 @@ class User(Base):
     about: Mapped[str | None] = mapped_column(String(500), nullable=True)
     grammar_errors: Mapped[int] = mapped_column(default=0)
     is_approved: Mapped[bool] = mapped_column(default=False)
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     messages: Mapped[list["Message"]] = relationship(back_populates="sender", cascade="all, delete-orphan")

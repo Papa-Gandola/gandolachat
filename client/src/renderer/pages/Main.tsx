@@ -68,13 +68,20 @@ export default function Main({ token, user, onLogout }: Props) {
       if (webrtcService.isInCall()) return;
       setIncomingCalls((prev) => {
         if (prev.some((c) => c.chatId === data.chat_id)) return prev;
-        playCallRing();
         return [...prev, { chatId: data.chat_id, fromUserId: data.from_user_id }];
       });
     });
 
     return () => wsService.disconnect();
   }, [token, user.id]);
+
+  // Ring loop while incoming calls
+  useEffect(() => {
+    if (incomingCalls.length === 0) return;
+    playCallRing();
+    const interval = setInterval(() => playCallRing(), 5000);
+    return () => clearInterval(interval);
+  }, [incomingCalls.length]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {

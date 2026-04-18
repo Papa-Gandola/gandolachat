@@ -339,6 +339,17 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     return /\.(jpg|jpeg|png|gif|webp)$/i.test(url);
   }
 
+  function formatLastSeen(iso: string | null | undefined): string | null {
+    if (!iso) return null;
+    const d = new Date(iso);
+    const now = Date.now();
+    const diff = Math.floor((now - d.getTime()) / 1000);
+    if (diff < 60) return "был только что";
+    if (diff < 3600) return `был ${Math.floor(diff / 60)} мин. назад`;
+    if (diff < 86400) return `был ${Math.floor(diff / 3600)} ч. назад`;
+    return `был ${d.toLocaleDateString("ru-RU")}`;
+  }
+
   const typingText = typingUsers.size > 0
     ? [...typingUsers.values()].join(", ") + " печатает..."
     : null;
@@ -374,7 +385,13 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
           <span style={s.chatTitle}>{getChatTitle()}</span>
           {!chat.is_group && (() => {
             const other = chat.members.find((m) => m.id !== currentUser.id);
-            return other?.status ? <span style={s.chatStatus}>— {other.status}</span> : null;
+            const lastSeen = formatLastSeen(other?.last_seen);
+            return (
+              <>
+                {other?.status && <span style={s.chatStatus}>— {other.status}</span>}
+                {lastSeen && <span style={s.lastSeen}>{lastSeen}</span>}
+              </>
+            );
           })()}
           {chat.is_group && (
             <span style={s.memberCount}>{chat.members.length} участников</span>
@@ -701,6 +718,7 @@ const s: Record<string, React.CSSProperties> = {
   chatTitle: { color: "var(--text-header)", fontWeight: 600, fontSize: 16 },
   memberCount: { color: "var(--text-muted)", fontSize: 13, marginLeft: 8 },
   chatStatus: { color: "var(--text-muted)", fontSize: 13, marginLeft: 8, fontStyle: "italic" as const },
+  lastSeen: { color: "var(--text-muted)", fontSize: 11, marginLeft: 8 },
   headerBtn: { background: "none", color: "var(--text-secondary)", fontSize: 20, padding: "4px 8px", borderRadius: 4 },
   searchBar: { display: "flex", gap: 8, padding: "8px 16px", borderBottom: "1px solid var(--border)", background: "var(--bg-secondary)" },
   searchInput: { flex: 1, background: "var(--bg-input)", borderRadius: 6, padding: "8px 12px", fontSize: 13, color: "var(--text-primary)" },

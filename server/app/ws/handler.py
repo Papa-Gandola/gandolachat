@@ -217,6 +217,13 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                 }, exclude_user=user_id)
 
     except WebSocketDisconnect:
+        # Update last_seen
+        sender_result = await db.execute(select(User).where(User.id == user_id))
+        user_obj = sender_result.scalar_one_or_none()
+        if user_obj:
+            user_obj.last_seen = datetime.now(timezone.utc)
+            await db.commit()
+
         manager.disconnect(user_id, chat_ids)
         # Remove from any active calls + notify
         active_call_chats = [cid for cid, users in manager.active_calls.items() if user_id in users]
