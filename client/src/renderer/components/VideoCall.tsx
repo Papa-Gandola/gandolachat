@@ -181,17 +181,17 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   }
 
   function toggleMute() {
-    const stream = webrtcService.getLocalStream();
-    stream?.getAudioTracks().forEach((t) => (t.enabled = muted));
     const newMuted = !muted;
+    const stream = webrtcService.getLocalStream();
+    stream?.getAudioTracks().forEach((t) => (t.enabled = !newMuted));
     setMuted(newMuted);
     wsService.send({ type: "mute_status", chat_id: chat.id, muted: newMuted });
   }
 
   function toggleVideo() {
-    const stream = webrtcService.getLocalStream();
-    stream?.getVideoTracks().forEach((t) => (t.enabled = videoOff));
     const newVideoOff = !videoOff;
+    const stream = webrtcService.getLocalStream();
+    stream?.getVideoTracks().forEach((t) => (t.enabled = !newVideoOff));
     setVideoOff(newVideoOff);
     wsService.send({ type: "video_status", chat_id: chat.id, video_off: newVideoOff });
   }
@@ -597,13 +597,6 @@ function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, peerVideoOff,
     }
   }, [entry.stream, volume, deafened]);
 
-  // Force reattach srcObject when screen sharing status changes (replaceTrack doesn't trigger re-render)
-  useEffect(() => {
-    if (ref.current && entry.stream) {
-      ref.current.srcObject = null;
-      setTimeout(() => { if (ref.current) ref.current.srcObject = entry.stream; }, 50);
-    }
-  }, [peerScreenSharing]);
 
   // Voice activity detection
   useEffect(() => {
