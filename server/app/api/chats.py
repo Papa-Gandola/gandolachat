@@ -248,9 +248,9 @@ async def delete_chat(
     chat = result.scalar_one_or_none()
     if not chat:
         raise HTTPException(404, "Chat not found")
-    if not chat.is_group:
-        raise HTTPException(400, "Cannot delete DM chats")
-    if chat.created_by != current_user.id:
+    if current_user not in chat.members:
+        raise HTTPException(403, "Not a member")
+    if chat.is_group and chat.created_by != current_user.id:
         raise HTTPException(403, "Only the creator can delete the group")
 
     member_ids = [m.id for m in chat.members]

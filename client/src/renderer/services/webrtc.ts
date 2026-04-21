@@ -101,11 +101,17 @@ class WebRTCService {
         iceCandidatePoolSize: 10,
         iceServers: [
           { urls: "stun:stun.l.google.com:19302" },
-          { urls: "stun:2.26.117.77:3478" },
+          { urls: "stun:stun1.l.google.com:19302" },
+          { urls: "stun:stun.cloudflare.com:3478" },
           {
             urls: "turn:2.26.117.77:3478",
             username: "gandola",
             credential: "gandolapass",
+          },
+          {
+            urls: "turn:openrelay.metered.ca:80",
+            username: "openrelayproject",
+            credential: "openrelayproject",
           },
         ],
       },
@@ -202,9 +208,13 @@ class WebRTCService {
 
   replaceVideoTrack(newTrack: MediaStreamTrack) {
     this.peers.forEach((peer) => {
-      const sender = (peer as any)._pc?.getSenders?.()?.find((s: any) => s.track?.kind === "video");
+      const pc = (peer as any)._pc;
+      if (!pc) return;
+      const sender = pc.getSenders?.()?.find((s: any) => s.track?.kind === "video");
       if (sender) {
-        sender.replaceTrack(newTrack);
+        sender.replaceTrack(newTrack).catch((err: any) => {
+          console.error("[WebRTC] replaceTrack failed", err);
+        });
       }
     });
   }

@@ -26,6 +26,7 @@ export default function Sidebar({
   const [pendingUsers, setPendingUsers] = useState<Array<{ id: number; username: string; created_at: string }>>([]);
   const [showPending, setShowPending] = useState(false);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
+  const [chatContextMenu, setChatContextMenu] = useState<{ x: number; y: number; chat: ChatOut } | null>(null);
   const isAdmin = currentUser.username === "Papa Gandola";
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [updatePercent, setUpdatePercent] = useState(0);
@@ -94,6 +95,17 @@ export default function Sidebar({
     };
   }, [activeChatId, currentUser.id]);
 
+  useEffect(() => {
+    if (activeChatId != null) {
+      setUnread((prev) => {
+        if (!prev.has(activeChatId)) return prev;
+        const n = new Map(prev);
+        n.delete(activeChatId);
+        return n;
+      });
+    }
+  }, [activeChatId]);
+
   function selectChat(chat: ChatOut) {
     setUnread((prev) => { const n = new Map(prev); n.delete(chat.id); return n; });
     onSelectChat(chat);
@@ -152,6 +164,12 @@ export default function Sidebar({
     return name.charAt(0).toUpperCase();
   }
 
+  function sortByLastMessage(a: ChatOut, b: ChatOut): number {
+    const ta = a.last_message ? new Date(a.last_message.created_at).getTime() : 0;
+    const tb = b.last_message ? new Date(b.last_message.created_at).getTime() : 0;
+    return tb - ta;
+  }
+
   function renderChatItem(chat: ChatOut) {
     const name = getChatName(chat);
     const avatarUrl = getChatAvatar(chat);
@@ -164,6 +182,13 @@ export default function Sidebar({
         key={chat.id}
         style={{ ...s.chatItem, background: isActive ? "var(--bg-active)" : "transparent" }}
         onClick={() => selectChat(chat)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          const menuW = 180, menuH = 60;
+          const x = Math.min(e.clientX, window.innerWidth - menuW - 8);
+          const y = Math.min(e.clientY, window.innerHeight - menuH - 8);
+          setChatContextMenu({ x, y, chat });
+        }}
       >
         <div style={{ position: "relative", flexShrink: 0 }}>
           <Avatar url={avatarUrl} name={name} size={32} isGroup={chat.is_group} />
@@ -294,14 +319,14 @@ export default function Sidebar({
             <span style={s.sectionTitle}>ГРУППЫ</span>
           </div>
         )}
-        {chats.filter((c) => c.is_group).map((chat) => renderChatItem(chat))}
+        {[...chats].filter((c) => c.is_group).sort(sortByLastMessage).map((chat) => renderChatItem(chat))}
 
         {/* DMs section */}
         <div style={s.sectionHeader}>
           <span style={s.sectionTitle}>ЛИЧНЫЕ СООБЩЕНИЯ</span>
           <button style={s.newGroupBtn} title="Создать группу" onClick={() => setShowNewGroup(true)}>+</button>
         </div>
-        {chats.filter((c) => !c.is_group).map((chat) => renderChatItem(chat))}
+        {[...chats].filter((c) => !c.is_group).sort(sortByLastMessage).map((chat) => renderChatItem(chat))}
       </div>
 
       {/* Update banner */}
@@ -316,6 +341,26 @@ export default function Sidebar({
           <span>Обновление готово!</span>
           <button style={s.updateInstallBtn} onClick={() => (window as any).electron?.installUpdate()}>Обновить сейчас</button>
         </div>
+      )}
+
+      {/* Chat context menu */}
+      {chatContextMenu && (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 99 }} onClick={() => setChatContextMenu(null)} />
+          <div style={{ ...s.chatCtxMenu, left: chatContextMenu.x, top: chatContextMenu.y }}>
+            <button style={{ ...s.chatCtxItem, color: "#ed4245" }} onClick={async () => {
+              const c = chatContextMenu.chat;
+              setChatContextMenu(null);
+              if (!confirm(`Удалить чат ${c.is_group ? c.name : "?"}`)) return;
+              try {
+                await chatApi.deleteChat(c.id);
+                onChatsUpdate(chats.filter((x) => x.id !== c.id));
+              } catch (err: any) {
+                alert(err.response?.data?.detail || "Ошибка удаления");
+              }
+            }}>🗑 Удалить чат</button>
+          </div>
+        </>
       )}
 
       {/* User panel */}
@@ -428,6 +473,8 @@ const s: Record<string, React.CSSProperties> = {
   settingsBtn: { background: "none", color: "var(--text-muted)", padding: "4px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", border: "none" },
   settingsMenuBackdrop: { position: "fixed" as const, inset: 0, zIndex: 99 },
   settingsMenu: { position: "absolute" as const, bottom: "100%", right: 0, marginBottom: 6, background: "var(--bg-tertiary)", borderRadius: 6, boxShadow: "0 8px 24px rgba(0,0,0,0.5)", minWidth: 200, padding: 4, zIndex: 100 },
+  chatCtxMenu: { position: "fixed" as const, background: "var(--bg-tertiary)", borderRadius: 6, padding: 4, boxShadow: "0 4px 16px rgba(0,0,0,0.4)", zIndex: 200, minWidth: 180 },
+  chatCtxItem: { display: "block", width: "100%", background: "none", border: "none", padding: "8px 12px", fontSize: 13, textAlign: "left" as const, borderRadius: 4, cursor: "pointer", color: "var(--text-primary)" },
   settingsMenuItem: { display: "block", width: "100%", textAlign: "left" as const, background: "none", border: "none", color: "var(--text-primary)", padding: "8px 12px", fontSize: 13, borderRadius: 4, cursor: "pointer" },
   editNameInput: { flex: 1, background: "var(--bg-tertiary)", border: "1px solid var(--accent)", borderRadius: 4, padding: "4px 6px", fontSize: 12, color: "var(--text-primary)", minWidth: 0, width: "100%" },
   editNameSave: { background: "var(--accent)", color: "#fff", border: "none", borderRadius: 4, padding: "4px 6px", fontSize: 12, cursor: "pointer", flexShrink: 0 },

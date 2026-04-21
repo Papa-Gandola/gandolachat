@@ -36,6 +36,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   const [hoverEmoji, setHoverEmoji] = useState("😊");
   const RANDOM_EMOJI = ["😊", "😂", "🤣", "😍", "🥰", "😎", "🤔", "😭", "🥺", "🤡", "💀", "🗿", "🔥", "💯", "👻", "🤓", "🫠", "🤯", "😈", "🥴"];
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [onlineUserIds, setOnlineUserIds] = useState<Set<number>>(new Set());
   const [reactions, setReactions] = useState<Map<number, Array<{ emoji: string; userId: number }>>>(new Map());
   const [showReactionPicker, setShowReactionPicker] = useState<number | null>(null);
   const [forwardMsg, setForwardMsg] = useState<MessageOut | null>(null);
@@ -170,6 +171,16 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     const close = () => setContextMenu(null);
     document.addEventListener("click", close);
     return () => document.removeEventListener("click", close);
+  }, []);
+
+  // Track online users
+  useEffect(() => {
+    chatApi.getOnlineUsers().then((res) => setOnlineUserIds(new Set(res.data.online_user_ids))).catch(() => {});
+    const onOnline = (d: any) => setOnlineUserIds((prev) => new Set([...prev, d.user_id]));
+    const onOffline = (d: any) => setOnlineUserIds((prev) => { const n = new Set(prev); n.delete(d.user_id); return n; });
+    wsService.on("user_online", onOnline);
+    wsService.on("user_offline", onOffline);
+    return () => { wsService.off("user_online", onOnline); wsService.off("user_offline", onOffline); };
   }, []);
 
   // ESC closes image preview (capture phase, before global ESC handler)
@@ -385,11 +396,17 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
           <span style={s.chatTitle}>{getChatTitle()}</span>
           {!chat.is_group && (() => {
             const other = chat.members.find((m) => m.id !== currentUser.id);
-            const lastSeen = formatLastSeen(other?.last_seen);
+            if (!other) return null;
+            const isOnline = onlineUserIds.has(other.id);
+            const lastSeen = formatLastSeen(other.last_seen);
             return (
               <>
-                {other?.status && <span style={s.chatStatus}>— {other.status}</span>}
-                {lastSeen && <span style={s.lastSeen}>{lastSeen}</span>}
+                {other.status && <span style={s.chatStatus}>— {other.status}</span>}
+                {isOnline ? (
+                  <span style={{ ...s.lastSeen, color: "#57f287" }}>● онлайн</span>
+                ) : lastSeen ? (
+                  <span style={s.lastSeen}>{lastSeen}</span>
+                ) : null}
               </>
             );
           })()}
@@ -484,7 +501,14 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                   <div style={s.msgContent}>
                     {!isGrouped && (
                       <div style={s.msgMeta}>
-                        <span style={{ ...s.msgAuthor, color: isMine ? "var(--accent)" : "var(--text-header)" }}>
+                        <span
+                          style={{ ...s.msgAuthor, color: isMine ? "var(--accent)" : "var(--text-header)", cursor: isMine ? "default" : "pointer" }}
+                          onClick={() => {
+                            if (isMine) return;
+                            const member = chat.members.find((m) => m.id === msg.sender_id);
+                            if (member && onOpenProfile) onOpenProfile(member);
+                          }}
+                        >
                           {isMine ? "Вы" : msg.sender_username}
                         </span>
                         <span style={s.msgTime}>{formatTime(msg.created_at)}</span>

@@ -9,6 +9,7 @@ export default function Auth({ onLogin }: Props) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -105,15 +106,20 @@ export default function Auth({ onLogin }: Props) {
 
           <div style={styles.field}>
             <label style={styles.label}>ПАРОЛЬ</label>
-            <input
-              style={styles.input}
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              required
-              minLength={4}
-            />
+            <div style={{ position: "relative" }}>
+              <input
+                style={{ ...styles.input, paddingRight: 40 }}
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                required
+                minLength={4}
+              />
+              <button type="button" style={styles.eyeBtn} onClick={() => setShowPassword(!showPassword)} title={showPassword ? "Скрыть" : "Показать"}>
+                {showPassword ? "🙈" : "👁"}
+              </button>
+            </div>
           </div>
 
           <label style={styles.checkboxRow}>
@@ -158,6 +164,7 @@ export default function Auth({ onLogin }: Props) {
 const styles: Record<string, React.CSSProperties> = {
   root: { width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg-tertiary)", position: "relative" },
   closeAppBtn: { position: "absolute", top: 12, right: 12, background: "none", color: "var(--text-muted)", border: "none", fontSize: 18, width: 32, height: 32, borderRadius: 4, cursor: "pointer" },
+  eyeBtn: { position: "absolute" as const, right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", fontSize: 16, cursor: "pointer", padding: 4 },
   card: { background: "var(--bg-primary)", borderRadius: 8, padding: "32px 40px", width: 440, boxShadow: "var(--shadow)" },
   logo: { display: "flex", alignItems: "center", gap: 12, marginBottom: 24, justifyContent: "center" },
   appName: { color: "var(--text-header)", fontSize: 24, fontWeight: 700 },
