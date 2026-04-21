@@ -64,6 +64,13 @@ function createWindow() {
     shell.openExternal(url);
     return { action: "deny" };
   });
+
+  // F12 or Ctrl+Shift+I to toggle DevTools in production
+  mainWindow.webContents.on("before-input-event", (_e, input) => {
+    if (input.key === "F12" || (input.control && input.shift && input.key === "I")) {
+      mainWindow?.webContents.toggleDevTools();
+    }
+  });
 }
 
 function createTray() {

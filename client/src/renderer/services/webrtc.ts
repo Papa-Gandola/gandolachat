@@ -127,12 +127,28 @@ class WebRTCService {
     });
 
     peer.on("stream", (stream) => {
+      console.log("[WebRTC] Stream received from", targetUserId, "tracks:", stream.getTracks().map((t) => `${t.kind}:${t.id.slice(0, 8)}`));
       this.onStream?.(targetUserId, stream);
+    });
+
+    peer.on("track", (track) => {
+      console.log("[WebRTC] Track received from", targetUserId, track.kind, track.id.slice(0, 8));
     });
 
     peer.on("connect", () => {
       console.log("[WebRTC] Connected to peer", targetUserId);
     });
+
+    // Log ICE connection state changes
+    const pc = (peer as any)._pc;
+    if (pc) {
+      pc.addEventListener("iceconnectionstatechange", () => {
+        console.log("[WebRTC] ICE state with", targetUserId, "→", pc.iceConnectionState);
+      });
+      pc.addEventListener("connectionstatechange", () => {
+        console.log("[WebRTC] Connection state with", targetUserId, "→", pc.connectionState);
+      });
+    }
 
     peer.on("close", () => {
       this.peers.delete(targetUserId);
