@@ -3,6 +3,7 @@ import { ChatOut, UserOut } from "../services/api";
 import { webrtcService } from "../services/webrtc";
 import { wsService } from "../services/ws";
 import { playCallRing, playCallEndSound } from "../services/sounds";
+import { useTheme } from "../services/theme";
 
 interface Props {
   chat: ChatOut;
@@ -16,7 +17,18 @@ interface VideoEntry {
   stream: MediaStream;
 }
 
+function neoCtrl(activeColor?: string): React.CSSProperties {
+  return {
+    borderRadius: 0,
+    border: `1.5px solid ${activeColor || "var(--accent)"}`,
+    boxShadow: activeColor ? `0 0 8px ${activeColor}55` : undefined,
+  };
+}
+
 export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props) {
+  const theme = useTheme();
+  const isNeo = theme === "neo";
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
   const [remoteVideos, setRemoteVideos] = useState<VideoEntry[]>([]);
   const [muted, setMuted] = useState(false);
   const [videoOff, setVideoOff] = useState(false);
@@ -316,19 +328,42 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
         {remoteVideos.map((entry) => (
           <HiddenAudio key={entry.userId} stream={entry.stream} deafened={deafened} volume={peerVolumes.get(entry.userId) ?? 100} />
         ))}
-        <div style={s.miniBar} onClick={() => setMinimized(false)}>
-          <span style={s.miniText}>📞 {callName} — {remoteVideos.length + 1} участник(ов)</span>
+        <div
+          style={{
+            ...s.miniBar,
+            ...(isNeo ? {
+              background: "#0a0a0a",
+              border: "1.5px solid var(--accent)",
+              borderRadius: 0,
+              boxShadow: "0 0 12px rgba(198,255,61,0.35)",
+            } : {}),
+          }}
+          onClick={() => setMinimized(false)}
+        >
+          <span style={{ ...s.miniText, ...mono, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.05em" } : {}) }}>
+            {isNeo ? (
+              <><span style={{ animation: "neo-blink 1.2s infinite" }}>●</span> LIVE · {callName} · [{remoteVideos.length + 1}]</>
+            ) : (
+              <>📞 {callName} — {remoteVideos.length + 1} участник(ов)</>
+            )}
+          </span>
           <div style={{ display: "flex", gap: 8 }}>
-            <button style={s.miniBtn} onClick={(e) => { e.stopPropagation(); toggleMute(); }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
+            <button
+              style={{ ...s.miniBtn, ...(isNeo ? { borderRadius: 0, border: "1px solid var(--border)", background: "transparent" } : {}) }}
+              onClick={(e) => { e.stopPropagation(); toggleMute(); }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={isNeo ? "var(--accent)" : "white"} strokeWidth="2" strokeLinecap="round">
                 {muted ? (
-                  <><rect x="9" y="1" width="6" height="13" rx="3" fill="white"/><line x1="1" y1="1" x2="23" y2="23"/></>
+                  <><rect x="9" y="1" width="6" height="13" rx="3" fill={isNeo ? "var(--accent)" : "white"}/><line x1="1" y1="1" x2="23" y2="23"/></>
                 ) : (
-                  <><rect x="9" y="1" width="6" height="13" rx="3" fill="white"/><path d="M5 11a7 7 0 0014 0"/></>
+                  <><rect x="9" y="1" width="6" height="13" rx="3" fill={isNeo ? "var(--accent)" : "white"}/><path d="M5 11a7 7 0 0014 0"/></>
                 )}
               </svg>
             </button>
-            <button style={{ ...s.miniBtn, background: "#ed4245" }} onClick={(e) => { e.stopPropagation(); handleEnd(); }}>
+            <button
+              style={{ ...s.miniBtn, background: "#ed4245", ...(isNeo ? { borderRadius: 0 } : {}) }}
+              onClick={(e) => { e.stopPropagation(); handleEnd(); }}
+            >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="white">
                 <path d="M12 9c-1.66 0-3 1.34-3 3v2H5c-1.1 0-2-.9-2-2v-1c0-3.87 3.13-7 7-7h4c3.87 0 7 3.13 7 7v1c0 1.1-.9 2-2 2h-4v-2c0-1.66-1.34-3-3-3z" transform="rotate(135 12 12)"/>
               </svg>
@@ -342,10 +377,25 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   return (
     <div style={s.overlay}>
       <div style={s.header}>
-        <span style={s.title}>Видеозвонок • {callDuration}</span>
-        <span style={s.subtitle}>{callName}</span>
-        <button style={s.minimizeBtn} onClick={() => setMinimized(true)} title="Свернуть">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><polyline points="4 14 10 20 16 14"/><line x1="10" y1="20" x2="10" y2="4"/></svg>
+        {isNeo ? (
+          <>
+            <span style={{ ...s.title, ...mono, color: "var(--accent)", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+              <span style={{ animation: "neo-blink 1.2s infinite" }}>●</span> ПОДКЛЮЧЕНИЕ {callDuration}
+            </span>
+            <span style={{ ...s.subtitle, ...mono, letterSpacing: "0.08em" }}>&gt; {callName}</span>
+          </>
+        ) : (
+          <>
+            <span style={s.title}>Видеозвонок • {callDuration}</span>
+            <span style={s.subtitle}>{callName}</span>
+          </>
+        )}
+        <button
+          style={{ ...s.minimizeBtn, ...(isNeo ? { borderRadius: 0, border: "1px solid var(--border)", background: "transparent", color: "var(--accent)" } : {}) }}
+          onClick={() => setMinimized(true)}
+          title="Свернуть"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={isNeo ? "var(--accent)" : "white"} strokeWidth="2.5" strokeLinecap="round"><polyline points="4 14 10 20 16 14"/><line x1="10" y1="20" x2="10" y2="4"/></svg>
         </button>
       </div>
 
@@ -360,10 +410,11 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
                 ...s.videoWrap,
                 ...(!freeMode && enlarged === "self" ? s.enlarged : {}),
                 ...(freeMode && pos ? { position: "absolute" as const, left: pos.x, top: pos.y, width: pos.w, height: pos.h } : {}),
-                boxShadow: selfSpeaking && !muted ? "0 0 0 3px #57f287" : "none",
+                boxShadow: selfSpeaking && !muted ? (isNeo ? "0 0 0 2px var(--accent), 0 0 12px rgba(198,255,61,0.5)" : "0 0 0 3px #57f287") : "none",
                 transition: freeMode ? "none" : "box-shadow 0.15s",
                 cursor: freeMode ? "move" : "pointer",
                 willChange: freeMode ? "left, top, width, height" : "auto",
+                ...(isNeo ? { borderRadius: 0, border: "1px solid var(--border)" } : {}),
               }}
               onMouseDown={(e) => freeMode && startDrag("self", e, "move")}
               onClick={() => !freeMode && setEnlarged(enlarged === "self" ? null : "self")}
@@ -372,8 +423,11 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
                 ...(freeMode ? { width: "100%", height: "100%", objectFit: "cover" as const, pointerEvents: "none" as const } : (enlarged === "self" ? s.videoEnlarged : s.video)),
                 display: videoOff ? "none" : "block",
               }} />
-              {videoOff && <CallAvatar name={currentUser.username} url={currentUser.avatar_url} />}
-              <span style={s.videoLabel}>Вы</span>
+              {videoOff && <CallAvatar name={currentUser.username} url={currentUser.avatar_url} isNeo={isNeo} />}
+              {isNeo && <NeoCorners />}
+              <span style={{ ...s.videoLabel, ...mono, ...(isNeo ? { background: "rgba(10,10,10,0.85)", color: "var(--accent)", borderRadius: 0, border: "1px solid var(--accent)", letterSpacing: "0.05em" } : {}) }}>
+                {isNeo ? "@вы" : "Вы"}
+              </span>
               {freeMode && <div style={s.resizeCorner} onMouseDown={(e) => startDrag("self", e, "resize")} />}
             </div>
           );
@@ -419,38 +473,48 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
             freeMode={freeMode}
             freePos={freeMode ? getTilePos(`r${entry.userId}`, idx + 2) : null}
             onStartDrag={(e, mode) => startDrag(`r${entry.userId}`, e, mode)}
+            isNeo={isNeo}
           />
         ))}
 
         {remoteVideos.length === 0 && (
           <div style={s.waiting}>
-            <span>Ожидание участников...</span>
+            <span style={{ ...mono, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.05em" } : {}) }}>
+              {isNeo ? "> ожидание_участников..." : "Ожидание участников..."}
+            </span>
           </div>
         )}
       </div>
 
       {/* Screen source picker */}
       {screenSources && (
-        <div style={s.sourcePicker}>
-          <div style={s.sourceTitle}>Выберите экран для демонстрации</div>
+        <div style={{ ...s.sourcePicker, ...(isNeo ? { borderRadius: 0, border: "1.5px solid var(--accent)", background: "#0a0a0a" } : {}) }}>
+          <div style={{ ...s.sourceTitle, ...mono, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.08em", textTransform: "uppercase" } : {}) }}>
+            {isNeo ? "// ВЫБЕРИ_ЭКРАН" : "Выберите экран для демонстрации"}
+          </div>
           <div style={s.sourceGrid}>
             {screenSources.map((src: any) => (
-              <div key={src.id} style={s.sourceItem} onClick={() => startScreenShare(src.id)}>
-                <img src={src.thumbnail} style={s.sourceThumbnail} alt={src.name} />
-                <span style={s.sourceName}>{src.name}</span>
+              <div key={src.id} style={{ ...s.sourceItem, ...(isNeo ? { borderRadius: 0, border: "1px solid var(--border)", background: "transparent" } : {}) }} onClick={() => startScreenShare(src.id)}>
+                <img src={src.thumbnail} style={{ ...s.sourceThumbnail, ...(isNeo ? { borderRadius: 0 } : {}) }} alt={src.name} />
+                <span style={{ ...s.sourceName, ...mono }}>{src.name}</span>
               </div>
             ))}
           </div>
-          <button style={s.sourceCancel} onClick={() => setScreenSources(null)}>Отмена</button>
+          <button
+            style={{ ...s.sourceCancel, ...(isNeo ? { borderRadius: 0, background: "transparent", border: "1px solid var(--accent)", color: "var(--accent)", fontFamily: "var(--font-mono)", letterSpacing: "0.08em" } : {}) }}
+            onClick={() => setScreenSources(null)}
+          >
+            {isNeo ? "[ОТМЕНА]" : "Отмена"}
+          </button>
         </div>
       )}
 
       {/* Settings panel */}
       {showSettings && (
-        <div style={s.settingsPanel}>
+        <div style={{ ...s.settingsPanel, ...(isNeo ? { borderRadius: 0, border: "1.5px solid var(--accent)", background: "#0a0a0a" } : {}) }}>
           <div style={s.settingRow}>
-            <label style={s.settingLabel}>Микрофон</label>
-            <select style={s.settingSelect} onChange={async (e) => {
+            <label style={{ ...s.settingLabel, ...mono, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.05em" } : {}) }}>{isNeo ? "// МИКРОФОН" : "Микрофон"}</label>
+            <select style={{ ...s.settingSelect, ...mono, ...(isNeo ? { borderRadius: 0 } : {}) }} onChange={async (e) => {
               try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: e.target.value }, video: false });
                 const newTrack = stream.getAudioTracks()[0];
@@ -470,8 +534,8 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
             </select>
           </div>
           <div style={s.settingRow}>
-            <label style={s.settingLabel}>Камера</label>
-            <select style={s.settingSelect} onChange={async (e) => {
+            <label style={{ ...s.settingLabel, ...mono, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.05em" } : {}) }}>{isNeo ? "// КАМЕРА" : "Камера"}</label>
+            <select style={{ ...s.settingSelect, ...mono, ...(isNeo ? { borderRadius: 0 } : {}) }} onChange={async (e) => {
               try {
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: e.target.value }, audio: false });
                 const newTrack = stream.getVideoTracks()[0];
@@ -489,8 +553,8 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
           </div>
           {outputDevices.length > 0 && (
             <div style={s.settingRow}>
-              <label style={s.settingLabel}>Динамик</label>
-              <select style={s.settingSelect} onChange={(e) => {
+              <label style={{ ...s.settingLabel, ...mono, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.05em" } : {}) }}>{isNeo ? "// ДИНАМИК" : "Динамик"}</label>
+              <select style={{ ...s.settingSelect, ...mono, ...(isNeo ? { borderRadius: 0 } : {}) }} onChange={(e) => {
                 document.querySelectorAll("video, audio").forEach((el: any) => {
                   if (el.setSinkId) el.setSinkId(e.target.value);
                 });
@@ -500,7 +564,9 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
             </div>
           )}
           <div style={s.settingRow}>
-            <label style={s.settingLabel}>Громкость микрофона: {micGain}%</label>
+            <label style={{ ...s.settingLabel, ...mono, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.05em" } : {}) }}>
+              {isNeo ? `// ГРОМКОСТЬ_МИКРОФОНА: ${micGain}%` : `Громкость микрофона: ${micGain}%`}
+            </label>
             <input type="range" min="0" max="200" value={micGain} style={{ width: "100%" }}
               onChange={(e) => {
                 const val = Number(e.target.value);
@@ -514,77 +580,111 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
 
       <div style={s.controls}>
         {/* Mic */}
-        <button style={{ ...s.ctrl, background: muted ? "#ed4245" : "#3ba55d" }} onClick={toggleMute} title={muted ? "Включить микрофон" : "Выключить микрофон"}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
+        <button
+          style={{ ...s.ctrl, background: muted ? "#ed4245" : (isNeo ? "transparent" : "#3ba55d"), ...(isNeo ? neoCtrl(muted ? "#ed4245" : undefined) : {}) }}
+          onClick={toggleMute}
+          title={muted ? "Включить микрофон" : "Выключить микрофон"}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={isNeo && !muted ? "var(--accent)" : "white"} strokeWidth="2" strokeLinecap="round">
             {muted ? (
               <><rect x="9" y="1" width="6" height="13" rx="3" fill="white"/><line x1="1" y1="1" x2="23" y2="23"/><path d="M17 11a5 5 0 01-8.2 3.8"/><path d="M12 19v4M8 23h8"/></>
             ) : (
-              <><rect x="9" y="1" width="6" height="13" rx="3" fill="white"/><path d="M5 11a7 7 0 0014 0"/><path d="M12 19v4M8 23h8"/></>
+              <><rect x="9" y="1" width="6" height="13" rx="3" fill={isNeo ? "var(--accent)" : "white"}/><path d="M5 11a7 7 0 0014 0"/><path d="M12 19v4M8 23h8"/></>
             )}
           </svg>
         </button>
 
         {/* Video */}
-        <button style={{ ...s.ctrl, background: videoOff ? "#ed4245" : "#3ba55d" }} onClick={toggleVideo} title={videoOff ? "Включить камеру" : "Выключить камеру"}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
+        <button
+          style={{ ...s.ctrl, background: videoOff ? "#ed4245" : (isNeo ? "transparent" : "#3ba55d"), ...(isNeo ? neoCtrl(videoOff ? "#ed4245" : undefined) : {}) }}
+          onClick={toggleVideo}
+          title={videoOff ? "Включить камеру" : "Выключить камеру"}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={isNeo && !videoOff ? "var(--accent)" : "white"} strokeWidth="2" strokeLinecap="round">
             {videoOff ? (
               <><line x1="1" y1="1" x2="23" y2="23"/><path d="M21 7l-5 3.5L21 14V7z"/><rect x="2" y="5" width="14" height="14" rx="2" fill="white" opacity="0.3"/></>
             ) : (
-              <><rect x="2" y="5" width="14" height="14" rx="2" fill="white"/><path d="M23 7l-7 5 7 5V7z" fill="white"/></>
+              <><rect x="2" y="5" width="14" height="14" rx="2" fill={isNeo ? "var(--accent)" : "white"}/><path d="M23 7l-7 5 7 5V7z" fill={isNeo ? "var(--accent)" : "white"}/></>
             )}
           </svg>
         </button>
 
         {/* Screen share */}
-        <button style={{ ...s.ctrl, background: screenSharing ? "#5865f2" : "var(--bg-active)" }} onClick={toggleScreenShare} title="Демонстрация экрана">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
+        <button
+          style={{ ...s.ctrl, background: screenSharing ? (isNeo ? "var(--accent)" : "#5865f2") : (isNeo ? "transparent" : "var(--bg-active)"), ...(isNeo ? neoCtrl(screenSharing ? "var(--accent)" : undefined) : {}) }}
+          onClick={toggleScreenShare}
+          title="Демонстрация экрана"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={isNeo ? (screenSharing ? "#0a0a0a" : "var(--accent)") : "white"} strokeWidth="2" strokeLinecap="round">
             <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
           </svg>
         </button>
 
         {/* Deafen */}
-        <button style={{ ...s.ctrl, background: deafened ? "#ed4245" : "var(--bg-active)" }} onClick={toggleDeafen} title={deafened ? "Включить звук" : "Заглушить всех"}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
+        <button
+          style={{ ...s.ctrl, background: deafened ? "#ed4245" : (isNeo ? "transparent" : "var(--bg-active)"), ...(isNeo ? neoCtrl(deafened ? "#ed4245" : undefined) : {}) }}
+          onClick={toggleDeafen}
+          title={deafened ? "Включить звук" : "Заглушить всех"}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={isNeo && !deafened ? "var(--accent)" : "white"} strokeWidth="2" strokeLinecap="round">
             {deafened ? (
               <><path d="M3 14h2a2 2 0 012 2v2a2 2 0 01-2 2H3V14z"/><path d="M21 14h-2a2 2 0 00-2 2v2a2 2 0 002 2h2V14z"/><path d="M3 14V9a9 9 0 0118 0v5"/><line x1="1" y1="1" x2="23" y2="23"/></>
             ) : (
-              <><path d="M3 14h2a2 2 0 012 2v2a2 2 0 01-2 2H3V14z" fill="white"/><path d="M21 14h-2a2 2 0 00-2 2v2a2 2 0 002 2h2V14z" fill="white"/><path d="M3 14V9a9 9 0 0118 0v5"/></>
+              <><path d="M3 14h2a2 2 0 012 2v2a2 2 0 01-2 2H3V14z" fill={isNeo ? "var(--accent)" : "white"}/><path d="M21 14h-2a2 2 0 00-2 2v2a2 2 0 002 2h2V14z" fill={isNeo ? "var(--accent)" : "white"}/><path d="M3 14V9a9 9 0 0118 0v5"/></>
             )}
           </svg>
         </button>
 
         {/* Free mode (universe icon) */}
-        <button style={{ ...s.ctrl, background: freeMode ? "#5865f2" : "var(--bg-active)" }} onClick={() => { setFreeMode(!freeMode); setTilePositions(new Map()); }} title="Свободный режим">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
+        <button
+          style={{ ...s.ctrl, background: freeMode ? (isNeo ? "var(--accent)" : "#5865f2") : (isNeo ? "transparent" : "var(--bg-active)"), ...(isNeo ? neoCtrl(freeMode ? "var(--accent)" : undefined) : {}) }}
+          onClick={() => { setFreeMode(!freeMode); setTilePositions(new Map()); }}
+          title="Свободный режим"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={isNeo ? (freeMode ? "#0a0a0a" : "var(--accent)") : "white"} strokeWidth="2" strokeLinecap="round">
             <circle cx="12" cy="12" r="10"/><ellipse cx="12" cy="12" rx="10" ry="4"/><path d="M2 12h20"/>
           </svg>
         </button>
 
         {/* Settings */}
-        <button style={{ ...s.ctrl, background: showSettings ? "#5865f2" : "var(--bg-active)" }} onClick={() => setShowSettings(!showSettings)} title="Настройки">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
+        <button
+          style={{ ...s.ctrl, background: showSettings ? (isNeo ? "var(--accent)" : "#5865f2") : (isNeo ? "transparent" : "var(--bg-active)"), ...(isNeo ? neoCtrl(showSettings ? "var(--accent)" : undefined) : {}) }}
+          onClick={() => setShowSettings(!showSettings)}
+          title="Настройки"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={isNeo ? (showSettings ? "#0a0a0a" : "var(--accent)") : "white"} strokeWidth="2" strokeLinecap="round">
             <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
           </svg>
         </button>
 
         {/* Hangup */}
-        <button style={{ ...s.ctrl, ...s.hangup }} onClick={handleEnd} title="Завершить звонок">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="white">
-            <path d="M12 9c-1.66 0-3 1.34-3 3v2H5c-1.1 0-2-.9-2-2v-1c0-3.87 3.13-7 7-7h4c3.87 0 7 3.13 7 7v1c0 1.1-.9 2-2 2h-4v-2c0-1.66-1.34-3-3-3z" transform="rotate(135 12 12)"/>
-          </svg>
+        <button
+          style={{ ...s.ctrl, ...s.hangup, ...(isNeo ? { borderRadius: 0, width: 80, height: 44, letterSpacing: "0.1em", fontFamily: "var(--font-mono)", fontWeight: 700, color: "#fff", border: "1.5px solid #ed4245" } : {}) }}
+          onClick={handleEnd}
+          title="Завершить звонок"
+        >
+          {isNeo ? (
+            <span>[END]</span>
+          ) : (
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="white">
+              <path d="M12 9c-1.66 0-3 1.34-3 3v2H5c-1.1 0-2-.9-2-2v-1c0-3.87 3.13-7 7-7h4c3.87 0 7 3.13 7 7v1c0 1.1-.9 2-2 2h-4v-2c0-1.66-1.34-3-3-3z" transform="rotate(135 12 12)"/>
+            </svg>
+          )}
         </button>
       </div>
     </div>
   );
 }
 
-function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, peerVideoOff, peerScreenSharing, volume, onVolumeChange, onClick, freeMode, freePos, onStartDrag }: {
+function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, peerVideoOff, peerScreenSharing, volume, onVolumeChange, onClick, freeMode, freePos, onStartDrag, isNeo }: {
   entry: VideoEntry; chat: ChatOut; enlarged: boolean; deafened: boolean; peerMuted: boolean;
   peerVideoOff?: boolean; peerScreenSharing?: boolean;
   volume: number; onVolumeChange: (v: number) => void; onClick: () => void;
   freeMode?: boolean; freePos?: { x: number; y: number; w: number; h: number } | null;
   onStartDrag?: (e: React.MouseEvent, mode: "move" | "resize") => void;
+  isNeo?: boolean;
 }) {
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
   const ref = useRef<HTMLVideoElement>(null);
   const member = chat.members.find((m) => m.id === entry.userId);
   const [showVolume, setShowVolume] = useState(false);
@@ -630,9 +730,10 @@ function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, peerVideoOff,
         ...(!freeMode && enlarged ? s.enlarged : {}),
         ...(freeMode && freePos ? { position: "absolute" as const, left: freePos.x, top: freePos.y, width: freePos.w, height: freePos.h } : {}),
         cursor: freeMode ? "move" : "pointer",
-        boxShadow: speaking ? "0 0 0 3px #57f287" : "none",
+        boxShadow: speaking ? (isNeo ? "0 0 0 2px var(--accent), 0 0 12px rgba(198,255,61,0.5)" : "0 0 0 3px #57f287") : "none",
         transition: freeMode ? "none" : "box-shadow 0.15s",
         willChange: freeMode ? "left, top, width, height" : "auto",
+        ...(isNeo ? { borderRadius: 0, border: "1px solid var(--border)" } : {}),
       }}
       onMouseDown={(e) => freeMode && onStartDrag?.(e, "move")}
       onClick={onClick}
@@ -642,14 +743,15 @@ function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, peerVideoOff,
         ...(freeMode ? { width: "100%", height: "100%", objectFit: (peerScreenSharing ? "contain" : "cover") as const, display: "block" } : (enlarged ? s.videoEnlarged : s.video)),
         display: peerVideoOff && !peerScreenSharing ? "none" : "block",
       }} />
+      {isNeo && <NeoCorners />}
       {freeMode && <div style={s.resizeCorner} onMouseDown={(e) => { e.stopPropagation(); onStartDrag?.(e, "resize"); }} />}
       {(peerVideoOff && !peerScreenSharing || entry.stream.getVideoTracks().length === 0) && member && (
-        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "#18191c" }}>
-          <CallAvatar name={member.username} url={member.avatar_url} />
+        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: isNeo ? "#0a0a0a" : "#18191c" }}>
+          <CallAvatar name={member.username} url={member.avatar_url} isNeo={isNeo} />
         </div>
       )}
       <button
-        style={s.pipBtn}
+        style={{ ...s.pipBtn, ...(isNeo ? { borderRadius: 0, border: "1px solid var(--accent)", background: "rgba(10,10,10,0.85)", color: "var(--accent)" } : {}) }}
         onClick={(e) => {
           e.stopPropagation();
           if (ref.current && (ref.current as any).requestPictureInPicture) {
@@ -658,11 +760,11 @@ function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, peerVideoOff,
         }}
         title="В отдельное окно"
       >⧉</button>
-      <span style={s.videoLabel}>
+      <span style={{ ...s.videoLabel, ...mono, ...(isNeo ? { background: "rgba(10,10,10,0.85)", color: "var(--accent)", borderRadius: 0, border: "1px solid var(--accent)", letterSpacing: "0.05em" } : {}) }}>
         {peerMuted ? "🔇 " : ""}
         {peerScreenSharing ? "📺 " : ""}
-        {member?.username || "Участник"}
-        {peerScreenSharing ? " (экран)" : ""}
+        {isNeo ? "@" : ""}{member?.username || "Участник"}
+        {peerScreenSharing ? (isNeo ? "_screen" : " (экран)") : ""}
       </span>
       {showVolume && (
         <div style={s.volumeSlider} onClick={(e) => e.stopPropagation()}>
@@ -683,18 +785,36 @@ function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, peerVideoOff,
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-function CallAvatar({ name, url }: { name: string; url: string | null }) {
+function CallAvatar({ name, url, isNeo }: { name: string; url: string | null; isNeo?: boolean }) {
   const colors = ["#5865f2", "#57f287", "#fee75c", "#ed4245", "#eb459e", "#faa61a", "#00b0f4"];
   let hash = 0;
   for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  const bg = colors[Math.abs(hash) % colors.length];
+  const bg = isNeo ? "#0a0a0a" : colors[Math.abs(hash) % colors.length];
+  const radius = isNeo ? 0 : "50%";
+  const border = isNeo ? "2px solid var(--accent)" : "none";
+  const fg = isNeo ? "var(--accent)" : "#fff";
   return url ? (
     <img src={url.startsWith("http") ? url : `${BASE_URL}${url}`}
-      style={{ width: 80, height: 80, borderRadius: "50%", objectFit: "cover", margin: "65px auto", display: "block" }} alt={name} />
+      style={{ width: 80, height: 80, borderRadius: radius, border, objectFit: "cover", margin: "65px auto", display: "block" }} alt={name} />
   ) : (
-    <div style={{ width: 80, height: 80, borderRadius: "50%", background: bg, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 32, margin: "65px auto" }}>
+    <div style={{ width: 80, height: 80, borderRadius: radius, border, background: bg, display: "flex", alignItems: "center", justifyContent: "center", color: fg, fontWeight: 700, fontSize: 32, margin: "65px auto", fontFamily: isNeo ? "var(--font-mono)" : undefined }}>
       {name.charAt(0).toUpperCase()}
     </div>
+  );
+}
+
+function NeoCorners() {
+  const size = 14;
+  const thick = 2;
+  const color = "var(--accent)";
+  const base: React.CSSProperties = { position: "absolute", width: size, height: size, pointerEvents: "none" };
+  return (
+    <>
+      <span style={{ ...base, top: 6, left: 6, borderTop: `${thick}px solid ${color}`, borderLeft: `${thick}px solid ${color}` }} />
+      <span style={{ ...base, top: 6, right: 6, borderTop: `${thick}px solid ${color}`, borderRight: `${thick}px solid ${color}` }} />
+      <span style={{ ...base, bottom: 6, left: 6, borderBottom: `${thick}px solid ${color}`, borderLeft: `${thick}px solid ${color}` }} />
+      <span style={{ ...base, bottom: 6, right: 6, borderBottom: `${thick}px solid ${color}`, borderRight: `${thick}px solid ${color}` }} />
+    </>
   );
 }
 
