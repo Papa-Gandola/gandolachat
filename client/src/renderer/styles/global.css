@@ -19,6 +19,7 @@
   --accent-text: #ffffff;
   --accent-hover: #4752c4;
   --accent-active: #3c45a5;
+  --bubble-mine: #5865f2;
 
   --danger: #ed4245;
   --danger-hover: #c03537;
@@ -50,8 +51,8 @@ body.theme-neo {
   --bg-modal: #0d0d0d;
 
   --text-primary: #e6e6e6;
-  --text-secondary: #888888;
-  --text-muted: #555555;
+  --text-secondary: #9a9a9a;
+  --text-muted: #7a7a7a;
   --text-header: #ffffff;
   --text-link: #5cc8ff;
 
@@ -59,6 +60,7 @@ body.theme-neo {
   --accent-text: #0a0a0a;
   --accent-hover: #b5ee2c;
   --accent-active: #9edb1f;
+  --bubble-mine: #87b82a;
 
   --danger: #ff3d6b;
   --danger-hover: #e02555;
@@ -143,6 +145,34 @@ a { color: var(--text-link); text-decoration: none; }
 }
 .neo-blink {
   animation: neo-blink 1s step-end infinite;
+}
+
+@keyframes neo-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+@keyframes neo-eye-blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  94%, 98% { transform: scaleY(0.1); }
+}
+@keyframes neo-glow-pulse {
+  0%, 100% { text-shadow: 0 0 8px rgba(198,255,61,0.6), 0 0 16px rgba(198,255,61,0.3); }
+  50% { text-shadow: 0 0 14px rgba(198,255,61,0.9), 0 0 28px rgba(198,255,61,0.5); }
+}
+.neo-gandola {
+  font-family: var(--font-mono);
+  color: var(--accent);
+  animation: neo-float 3s ease-in-out infinite, neo-glow-pulse 2.4s ease-in-out infinite;
+  line-height: 1.1;
+  white-space: pre;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+.neo-gandola .eye {
+  display: inline-block;
+  transform-origin: center;
+  animation: neo-eye-blink 4s infinite;
 }
 
 .neo-scanlines {

@@ -8,6 +8,7 @@ import ChatArea from "../components/ChatArea";
 import MemberList from "../components/MemberList";
 import VideoCall from "../components/VideoCall";
 import ProfilePage from "../components/ProfilePage";
+import { useTheme } from "../services/theme";
 
 interface Props {
   token: string;
@@ -16,6 +17,8 @@ interface Props {
 }
 
 export default function Main({ token, user, onLogout }: Props) {
+  const theme = useTheme();
+  const isNeo = theme === "neo";
   const [chats, setChats] = useState<ChatOut[]>([]);
   const [activeChat, setActiveChat] = useState<ChatOut | null>(null);
   const [currentUser, setCurrentUser] = useState<UserOut>(user);
@@ -244,11 +247,33 @@ export default function Main({ token, user, onLogout }: Props) {
         ) : (
           <div style={s.empty}>
             <div style={s.emptyInner}>
-              <span style={s.emptyIcon}>💬</span>
-              <h2 style={s.emptyTitle}>Выбери чат</h2>
-              <p style={s.emptyText}>
-                Найди друга в строке поиска или создай группу нажав +
-              </p>
+              {isNeo ? (
+                <>
+                  <pre className="neo-gandola" aria-hidden="true">
+{`    ╔═══════════╗
+    ║  `}<span className="eye">◉</span>{`  ___  `}<span className="eye">◉</span>{`  ║
+    ║     `}<span style={{ color: "#fff" }}>\\_/</span>{`     ║
+    ║   [GANDOLA] ║
+    ╚═══╦═════╦═══╝
+        ║     ║
+       ═╩═   ═╩═`}
+                  </pre>
+                  <h2 style={{ ...s.emptyTitle, fontFamily: "var(--font-mono)", color: "var(--accent)", letterSpacing: "0.1em", textTransform: "uppercase", fontSize: 18, marginTop: 24 }}>
+                    &gt; выбери_чат<span className="neo-blink">_</span>
+                  </h2>
+                  <p style={{ ...s.emptyText, fontFamily: "var(--font-mono)", color: "var(--text-secondary)", letterSpacing: "0.03em" }}>
+                    // найди_друга_в_строке_поиска<br/>// или_создай_группу_нажав [+]
+                  </p>
+                </>
+              ) : (
+                <>
+                  <span style={s.emptyIcon}>💬</span>
+                  <h2 style={s.emptyTitle}>Выбери чат</h2>
+                  <p style={s.emptyText}>
+                    Найди друга в строке поиска или создай группу нажав +
+                  </p>
+                </>
+              )}
             </div>
           </div>
         )}

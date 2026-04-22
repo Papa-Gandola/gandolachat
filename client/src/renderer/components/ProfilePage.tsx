@@ -228,7 +228,7 @@ const s: Record<string, React.CSSProperties> = {
   header: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: "1px solid var(--border)" },
   title: { color: "var(--text-header)", fontWeight: 700, fontSize: 18 },
   closeBtn: { background: "none", color: "var(--text-muted)", fontSize: 18, cursor: "pointer", padding: 4 },
-  content: { padding: 32, maxWidth: 600, width: "100%", overflowY: "auto" as const },
+  content: { padding: 32, maxWidth: 600, width: "100%", margin: "0 auto", overflowY: "auto" as const },
   avatarSection: { display: "flex", justifyContent: "center", marginBottom: 24 },
   avatar: { width: 120, height: 120, borderRadius: "50%", objectFit: "cover" as const, display: "block" },
   avatarFallback: { width: 120, height: 120, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 48, fontWeight: 700 },

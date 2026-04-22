@@ -123,15 +123,15 @@ export default function Auth({ onLogin }: Props) {
             ? (mode === "login" ? "> Добро_пожаловать_" : "> Новый_аккаунт_")
             : (mode === "login" ? "Добро пожаловать!" : "Создать аккаунт")}
         </h2>
-        <p style={{ ...styles.subtitle, ...mono, ...(isNeo ? { textAlign: "left" as const, letterSpacing: "0.03em" } : {}) }}>
-          {isNeo
-            ? (mode === "login" ? "// рады_видеть_тебя_снова" : "// зарегистрируйся_и_начни_общение")
-            : (mode === "login" ? "Рады видеть тебя снова" : "Зарегистрируйся и начни общение")}
-        </p>
+        {!isNeo && (
+          <p style={styles.subtitle}>
+            {mode === "login" ? "Рады видеть тебя снова" : "Зарегистрируйся и начни общение"}
+          </p>
+        )}
 
         <form onSubmit={handleSubmit} style={styles.form}>
           <div style={styles.field}>
-            <label style={{ ...styles.label, ...mono }}>{isNeo ? "// ИМЯ_ПОЛЬЗОВАТЕЛЯ" : "ИМЯ ПОЛЬЗОВАТЕЛЯ"}</label>
+            <label style={{ ...styles.label, ...mono }}>{isNeo ? "ИМЯ_ПОЛЬЗОВАТЕЛЯ" : "ИМЯ ПОЛЬЗОВАТЕЛЯ"}</label>
             <input
               style={{ ...styles.input, ...neoInputExtra }}
               value={username}
@@ -144,7 +144,7 @@ export default function Auth({ onLogin }: Props) {
           </div>
 
           <div style={styles.field}>
-            <label style={{ ...styles.label, ...mono }}>{isNeo ? "// ПАРОЛЬ" : "ПАРОЛЬ"}</label>
+            <label style={{ ...styles.label, ...mono }}>{isNeo ? "ПАРОЛЬ" : "ПАРОЛЬ"}</label>
             <div style={{ position: "relative" }}>
               <input
                 style={{ ...styles.input, ...neoInputExtra, paddingRight: 40 }}

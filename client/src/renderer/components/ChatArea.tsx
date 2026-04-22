@@ -482,7 +482,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
               const neoBubble = isNeo ? {
                 maxWidth: "68%",
                 padding: "9px 13px",
-                background: isMine ? "var(--accent)" : "var(--bg-message)",
+                background: isMine ? "var(--bubble-mine)" : "var(--bg-message)",
                 color: isMine ? "var(--accent-text)" : "var(--text-primary)",
                 border: isMine ? "none" : "1px solid var(--border)",
                 borderRadius: 14,
