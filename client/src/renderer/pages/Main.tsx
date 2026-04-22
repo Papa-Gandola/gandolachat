@@ -267,7 +267,7 @@ export default function Main({ token, user, onLogout }: Props) {
               <button style={{ ...s.closeDialogBtn, background: "#ed4245" }} onClick={() => (window as any).electron?.quit()}>
                 Полностью закрыть
               </button>
-              <button style={{ ...s.closeDialogBtn, background: "var(--bg-tertiary)" }} onClick={() => setShowCloseDialog(false)}>
+              <button style={{ ...s.closeDialogBtn, background: "var(--bg-hover)", color: "var(--text-primary)" }} onClick={() => setShowCloseDialog(false)}>
                 Отмена
               </button>
             </div>

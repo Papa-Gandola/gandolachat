@@ -4,6 +4,7 @@ import { wsService } from "../services/ws";
 import { playMessageSound } from "../services/sounds";
 import EmojiPicker from "./EmojiPicker";
 import FormattedText from "./FormattedText";
+import { useTheme } from "../services/theme";
 
 interface Props {
   chat: ChatOut;
@@ -16,6 +17,9 @@ interface Props {
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 export default function ChatArea({ chat, currentUser, onStartCall, allChats = [], onOpenProfile }: Props) {
+  const theme = useTheme();
+  const isNeo = theme === "neo";
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
   const [messages, setMessages] = useState<MessageOut[]>([]);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
@@ -392,8 +396,8 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
       {/* Header */}
       <div style={s.header}>
         <div style={s.headerLeft}>
-          <span style={s.chatIcon}>{chat.is_group ? "#" : "@"}</span>
-          <span style={s.chatTitle}>{getChatTitle()}</span>
+          <span style={{ ...s.chatIcon, ...(isNeo ? { ...mono, color: "var(--accent)" } : {}) }}>{chat.is_group ? "#" : "@"}</span>
+          <span style={{ ...s.chatTitle, ...(isNeo ? mono : {}) }}>{getChatTitle()}</span>
           {!chat.is_group && (() => {
             const other = chat.members.find((m) => m.id !== currentUser.id);
             if (!other) return null;
@@ -463,9 +467,11 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
         {grouped.map((group) => (
           <div key={group.date}>
             <div style={s.dateSep}>
-              <hr style={s.dateLine} />
-              <span style={s.dateLabel}>{group.date}</span>
-              <hr style={s.dateLine} />
+              {!isNeo && <hr style={s.dateLine} />}
+              <span style={{ ...s.dateLabel, ...(isNeo ? { ...mono, letterSpacing: 1, textTransform: "uppercase" as const } : {}) }}>
+                {isNeo ? `── ${group.date} ──` : group.date}
+              </span>
+              {!isNeo && <hr style={s.dateLine} />}
             </div>
             {group.messages.map((msg, i) => {
               const prev = group.messages[i - 1];
@@ -502,7 +508,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                     {!isGrouped && (
                       <div style={s.msgMeta}>
                         <span
-                          style={{ ...s.msgAuthor, color: isMine ? "var(--accent)" : "var(--text-header)", cursor: isMine ? "default" : "pointer" }}
+                          style={{ ...s.msgAuthor, color: isMine ? "var(--accent)" : "var(--text-header)", cursor: isMine ? "default" : "pointer", ...(isNeo ? mono : {}) }}
                           onClick={() => {
                             if (isMine) return;
                             const member = chat.members.find((m) => m.id === msg.sender_id);
@@ -511,12 +517,12 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                         >
                           {isMine ? "Вы" : msg.sender_username}
                         </span>
-                        <span style={s.msgTime}>{formatTime(msg.created_at)}</span>
-                        {msg.is_edited && <span style={s.editedTag}>(ред.)</span>}
+                        <span style={{ ...s.msgTime, ...(isNeo ? mono : {}) }}>{formatTime(msg.created_at)}</span>
+                        {msg.is_edited && <span style={{ ...s.editedTag, ...(isNeo ? mono : {}) }}>{isNeo ? "(ред.)" : "(ред.)"}</span>}
                         {isMine && (() => {
                           const otherMembers = chat.members.filter((m) => m.id !== currentUser.id);
                           const allRead = otherMembers.every((m) => (readBy.get(m.id) || 0) >= msg.id);
-                          return <span style={{ ...s.readCheck, color: allRead ? "#57f287" : "var(--text-muted)" }}>{allRead ? "✓✓" : "✓"}</span>;
+                          return <span style={{ ...s.readCheck, color: allRead ? "var(--accent)" : "var(--text-muted)", ...(isNeo ? mono : {}) }}>{allRead ? "✓✓" : "✓"}</span>;
                         })()}
                       </div>
                     )}
@@ -621,15 +627,17 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
       )}
 
       {/* Typing indicator */}
-      {typingText && <div style={s.typingBar}>{typingText}</div>}
+      {typingText && <div style={{ ...s.typingBar, ...(isNeo ? { ...mono, color: "var(--accent)" } : {}) }}>
+        {isNeo ? `> ${typingText.replace("печатает...", "typing_")}` : typingText}
+      </div>}
 
       {/* Format toolbar */}
       <div style={s.formatBar}>
-        <button type="button" style={s.formatBtn} onClick={() => wrapSelection("**")} title="Жирный"><b>B</b></button>
-        <button type="button" style={s.formatBtn} onClick={() => wrapSelection("*")} title="Курсив"><i>I</i></button>
-        <button type="button" style={s.formatBtn} onClick={() => wrapSelection("__")} title="Подчёркнутый"><u>U</u></button>
-        <button type="button" style={s.formatBtn} onClick={() => wrapSelection("~~")} title="Зачёркнутый"><s>S</s></button>
-        <button type="button" style={s.formatBtn} onClick={() => wrapSelection("||")} title="Спойлер">▮</button>
+        <button type="button" style={{ ...s.formatBtn, ...(isNeo ? mono : {}) }} onClick={() => wrapSelection("**")} title="Жирный"><b>B</b></button>
+        <button type="button" style={{ ...s.formatBtn, ...(isNeo ? mono : {}) }} onClick={() => wrapSelection("*")} title="Курсив"><i>I</i></button>
+        <button type="button" style={{ ...s.formatBtn, ...(isNeo ? mono : {}) }} onClick={() => wrapSelection("__")} title="Подчёркнутый"><u>U</u></button>
+        <button type="button" style={{ ...s.formatBtn, ...(isNeo ? mono : {}) }} onClick={() => wrapSelection("~~")} title="Зачёркнутый"><s>S</s></button>
+        <button type="button" style={{ ...s.formatBtn, ...(isNeo ? mono : {}) }} onClick={() => wrapSelection("||")} title="Спойлер">▮</button>
       </div>
 
       {/* Reply preview bar */}
@@ -694,12 +702,15 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
           onMouseEnter={() => setHoverEmoji(RANDOM_EMOJI[Math.floor(Math.random() * RANDOM_EMOJI.length)])}
           title="Эмодзи"
         >{hoverEmoji}</button>
+        {isNeo && <span style={{ color: "var(--accent)", ...mono, fontSize: 14, marginRight: 2 }}>&gt;</span>}
         <textarea
           ref={textInputRef}
-          style={s.textInput}
+          style={{ ...s.textInput, ...(isNeo ? mono : {}) }}
           value={text}
           onChange={(e) => { setText(e.target.value); handleTyping(); }}
-          placeholder={`Написать ${chat.is_group ? "в группе" : getChatTitle()}...`}
+          placeholder={isNeo
+            ? `написать_${(chat.is_group ? chat.name : getChatTitle())?.toLowerCase().replace(/\s+/g, "_")}...`
+            : `Написать ${chat.is_group ? "в группе" : getChatTitle()}...`}
           rows={1}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.ctrlKey && !e.shiftKey) {
@@ -711,7 +722,10 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
             }
           }}
         />
-        <button type="submit" style={s.sendBtn} disabled={!text.trim()}>➤</button>
+        <button type="submit" style={{
+          ...s.sendBtn,
+          ...(isNeo ? { ...mono, borderRadius: 0, width: "auto", padding: "9px 16px", fontSize: 12, fontWeight: 700, letterSpacing: 1 } : {}),
+        }} disabled={!text.trim()}>{isNeo ? "SEND" : "➤"}</button>
       </form>
     </div>
   );
