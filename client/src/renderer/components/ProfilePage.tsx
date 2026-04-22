@@ -220,7 +220,7 @@ const s: Record<string, React.CSSProperties> = {
   editRow: { display: "flex", gap: 6, alignItems: "center" },
   input: { flex: 1, background: "var(--bg-tertiary)", border: "1px solid var(--accent)", borderRadius: 4, padding: "8px 12px", fontSize: 14, color: "var(--text-primary)" },
   editBtn: { background: "none", color: "var(--text-muted)", fontSize: 14, cursor: "pointer", padding: 4 },
-  saveBtn: { background: "var(--accent)", color: "#fff", border: "none", borderRadius: 4, padding: "8px 12px", fontSize: 14, cursor: "pointer" },
+  saveBtn: { background: "var(--accent)", color: "var(--accent-text)", border: "none", borderRadius: 4, padding: "8px 12px", fontSize: 14, cursor: "pointer" },
   cancelBtn: { background: "var(--bg-tertiary)", color: "var(--text-muted)", border: "none", borderRadius: 4, padding: "8px 12px", fontSize: 14, cursor: "pointer" },
   error: { color: "#ed4245", fontSize: 12, marginTop: 4, display: "block" as const },
 };

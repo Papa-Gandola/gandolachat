@@ -178,7 +178,7 @@ const styles: Record<string, React.CSSProperties> = {
   checkbox: { width: 16, height: 16, accentColor: "var(--accent)" },
   checkboxLabel: { color: "var(--text-secondary)", fontSize: 13 },
   error: { color: "var(--danger)", fontSize: 13 },
-  btn: { background: "var(--accent)", color: "#fff", fontSize: 16, fontWeight: 600, padding: "12px", borderRadius: 4, width: "100%", marginTop: 8 },
+  btn: { background: "var(--accent)", color: "var(--accent-text)", fontSize: 16, fontWeight: 600, padding: "12px", borderRadius: 4, width: "100%", marginTop: 8 },
   toggle: { color: "var(--text-secondary)", textAlign: "center", marginTop: 16, fontSize: 13 },
   link: { color: "var(--text-link)", cursor: "pointer" },
 };

@@ -307,7 +307,7 @@ const s: Record<string, React.CSSProperties> = {
   resizer: { width: 4, cursor: "col-resize", background: "var(--border)", flexShrink: 0 },
   closeDialogOverlay: { position: "fixed" as const, inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 500 },
   closeDialog: { background: "var(--bg-primary)", borderRadius: 8, padding: 24, width: 320, boxShadow: "0 8px 32px rgba(0,0,0,0.5)" },
-  closeDialogBtn: { background: "var(--accent)", color: "#fff", border: "none", borderRadius: 6, padding: "10px 16px", fontSize: 14, fontWeight: 600, cursor: "pointer" },
+  closeDialogBtn: { background: "var(--accent)", color: "var(--accent-text)", border: "none", borderRadius: 6, padding: "10px 16px", fontSize: 14, fontWeight: 600, cursor: "pointer" },
   incomingCallBanner: {
     background: "#5865f2", display: "flex", alignItems: "center",
     justifyContent: "space-between", padding: "10px 16px", color: "#fff", fontWeight: 600,
