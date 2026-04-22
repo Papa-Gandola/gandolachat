@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useTheme } from "../services/theme";
 
 // Parse markdown-like syntax into React nodes
 // Supports: **bold**, *italic*, ~~strike~~, __underline__, ||spoiler||
@@ -64,14 +65,19 @@ function renderNodes(nodes: Node[], key = 0): React.ReactNode[] {
 }
 
 function Spoiler({ children }: { children: React.ReactNode }) {
+  const theme = useTheme();
+  const isNeo = theme === "neo";
   const [revealed, setRevealed] = useState(false);
   return (
     <span
       onClick={(e) => { e.stopPropagation(); setRevealed(!revealed); }}
       style={{
-        background: revealed ? "rgba(255,255,255,0.1)" : "#1a1b1e",
+        background: revealed
+          ? (isNeo ? "rgba(198,255,61,0.15)" : "rgba(255,255,255,0.1)")
+          : (isNeo ? "#000" : "#1a1b1e"),
         color: revealed ? "inherit" : "transparent",
-        borderRadius: 3,
+        borderRadius: isNeo ? 0 : 3,
+        border: isNeo && !revealed ? "1px solid var(--accent)" : undefined,
         padding: "0 3px",
         cursor: "pointer",
         transition: "all 0.2s",

@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { ChatOut, UserOut, userApi, chatApi } from "../services/api";
+import { useTheme } from "../services/theme";
 
 interface Props {
   chat: ChatOut;
@@ -11,6 +12,9 @@ interface Props {
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 export default function MemberList({ chat, currentUser, onChatUpdate, onDeleteChat }: Props) {
+  const theme = useTheme();
+  const isNeo = theme === "neo";
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
   const [search, setSearch] = useState("");
   const [results, setResults] = useState<UserOut[]>([]);
 
@@ -31,38 +35,50 @@ export default function MemberList({ chat, currentUser, onChatUpdate, onDeleteCh
 
   return (
     <div style={s.root}>
-      <div style={s.header}>УЧАСТНИКИ — {chat.members.length}/7</div>
+      <div style={{ ...s.header, ...mono, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.08em" } : {}) }}>
+        {isNeo ? `// УЧАСТНИКИ [${chat.members.length}/7]` : `УЧАСТНИКИ — ${chat.members.length}/7`}
+      </div>
 
       <div style={s.list}>
         {chat.members.map((m) => (
-          <div key={m.id} style={s.member}>
-            <Avatar name={m.username} url={m.avatar_url} />
-            <span style={s.name}>{m.username}{m.id === currentUser.id ? " (вы)" : ""}</span>
+          <div key={m.id} style={{ ...s.member, ...(isNeo ? { borderRadius: 0 } : {}) }}>
+            <Avatar name={m.username} url={m.avatar_url} isNeo={isNeo} />
+            <span style={{ ...s.name, ...mono }}>
+              {isNeo ? `@${m.username}` : m.username}
+              {m.id === currentUser.id ? (isNeo ? "_you" : " (вы)") : ""}
+            </span>
           </div>
         ))}
       </div>
 
-      <button style={s.leaveBtn} onClick={async () => {
-        await chatApi.leaveChat(chat.id);
-        window.location.reload();
-      }}>Покинуть группу</button>
+      <button
+        style={{ ...s.leaveBtn, ...mono, ...(isNeo ? { borderRadius: 0, background: "transparent", border: "1px solid var(--border)", color: "var(--text-primary)", letterSpacing: "0.05em" } : {}) }}
+        onClick={async () => { await chatApi.leaveChat(chat.id); window.location.reload(); }}
+      >
+        {isNeo ? "[ПОКИНУТЬ_ГРУППУ]" : "Покинуть группу"}
+      </button>
 
       {onDeleteChat && (
-        <button style={s.deleteBtn} onClick={onDeleteChat}>Удалить группу</button>
+        <button
+          style={{ ...s.deleteBtn, ...mono, ...(isNeo ? { borderRadius: 0, background: "transparent", border: "1px solid #ed4245", color: "#ed4245", letterSpacing: "0.05em" } : {}) }}
+          onClick={onDeleteChat}
+        >
+          {isNeo ? "[УДАЛИТЬ_ГРУППУ]" : "Удалить группу"}
+        </button>
       )}
 
       {chat.members.length < 7 && (
         <div style={s.addSection}>
           <input
-            style={s.input}
-            placeholder="Добавить участника..."
+            style={{ ...s.input, ...mono, ...(isNeo ? { borderRadius: 0, border: "1px solid var(--accent)" } : {}) }}
+            placeholder={isNeo ? "> добавить_участника..." : "Добавить участника..."}
             value={search}
             onChange={(e) => searchUsers(e.target.value)}
           />
           {results.map((u) => (
-            <div key={u.id} style={s.result} onClick={() => addMember(u)}>
-              <Avatar name={u.username} url={u.avatar_url} />
-              <span style={s.name}>{u.username}</span>
+            <div key={u.id} style={{ ...s.result, ...(isNeo ? { borderRadius: 0 } : {}) }} onClick={() => addMember(u)}>
+              <Avatar name={u.username} url={u.avatar_url} isNeo={isNeo} />
+              <span style={{ ...s.name, ...mono }}>{isNeo ? `@${u.username}` : u.username}</span>
             </div>
           ))}
         </div>
@@ -71,17 +87,20 @@ export default function MemberList({ chat, currentUser, onChatUpdate, onDeleteCh
   );
 }
 
-function Avatar({ name, url }: { name: string; url: string | null }) {
+function Avatar({ name, url, isNeo }: { name: string; url: string | null; isNeo?: boolean }) {
   const colors = ["#5865f2", "#57f287", "#fee75c", "#ed4245", "#eb459e", "#faa61a", "#00b0f4"];
   let hash = 0;
   for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  const bg = colors[Math.abs(hash) % colors.length];
+  const bg = isNeo ? "#0a0a0a" : colors[Math.abs(hash) % colors.length];
+  const radius = isNeo ? 6 : "50%";
+  const border = isNeo ? "1px solid var(--accent)" : "none";
+  const fg = isNeo ? "var(--accent)" : "#fff";
 
   return url ? (
     <img src={url.startsWith("http") ? url : `${BASE_URL}${url}`}
-      style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} alt={name} />
+      style={{ width: 32, height: 32, borderRadius: radius, border, objectFit: "cover", flexShrink: 0 }} alt={name} />
   ) : (
-    <div style={{ width: 32, height: 32, borderRadius: "50%", background: bg, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>
+    <div style={{ width: 32, height: 32, borderRadius: radius, border, background: bg, display: "flex", alignItems: "center", justifyContent: "center", color: fg, fontWeight: 700, fontSize: 13, flexShrink: 0, fontFamily: isNeo ? "var(--font-mono)" : undefined }}>
       {name.charAt(0).toUpperCase()}
     </div>
   );

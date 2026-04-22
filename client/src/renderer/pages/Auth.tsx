@@ -1,11 +1,15 @@
 import React, { useState } from "react";
 import { authApi } from "../services/api";
+import { useTheme } from "../services/theme";
 
 interface Props {
   onLogin: (token: string, user: any) => void;
 }
 
 export default function Auth({ onLogin }: Props) {
+  const theme = useTheme();
+  const isNeo = theme === "neo";
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
   const [mode, setMode] = useState<"login" | "register">("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -46,23 +50,39 @@ export default function Auth({ onLogin }: Props) {
   }
 
   if (pendingMessage) {
+    const neoCardExtraP: React.CSSProperties = isNeo ? {
+      borderRadius: 0,
+      border: "1.5px solid var(--accent)",
+      boxShadow: "0 0 24px rgba(198,255,61,0.15)",
+      position: "relative",
+    } : {};
     return (
       <div style={styles.root}>
-        <div style={styles.card}>
+        <div style={{ ...styles.card, ...neoCardExtraP }}>
+          {isNeo && <CornerBrackets />}
           <div style={styles.logo}>
-            <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-              <circle cx="24" cy="24" r="24" fill="#5865f2" />
-              <text x="50%" y="55%" dominantBaseline="middle" textAnchor="middle"
-                fill="white" fontSize="22" fontWeight="700" fontFamily="Inter">G</text>
-            </svg>
-            <h1 style={styles.appName}>GandolaChat</h1>
+            {isNeo ? (
+              <div style={{ width: 48, height: 48, border: "2px solid var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-mono)", fontSize: 22, fontWeight: 700, color: "var(--accent)", background: "#0a0a0a" }}>G</div>
+            ) : (
+              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                <circle cx="24" cy="24" r="24" fill="#5865f2" />
+                <text x="50%" y="55%" dominantBaseline="middle" textAnchor="middle"
+                  fill="white" fontSize="22" fontWeight="700" fontFamily="Inter">G</text>
+              </svg>
+            )}
+            <h1 style={{ ...styles.appName, ...mono }}>{isNeo ? <>Gandola<span style={{ color: "var(--accent)" }}>Chat</span></> : "GandolaChat"}</h1>
           </div>
           <div style={{ textAlign: "center", padding: "24px 0" }}>
             <span style={{ fontSize: 48 }}>⏳</span>
-            <h2 style={{ color: "var(--text-header)", fontSize: 20, margin: "16px 0 8px" }}>Заявка отправлена</h2>
-            <p style={{ color: "var(--text-secondary)", lineHeight: 1.6 }}>{pendingMessage}</p>
-            <button style={{ ...styles.btn, marginTop: 24, background: "var(--bg-active)" }} onClick={() => { setPendingMessage(""); setMode("login"); }}>
-              Попробовать войти
+            <h2 style={{ ...mono, color: isNeo ? "var(--accent)" : "var(--text-header)", fontSize: 20, margin: "16px 0 8px", letterSpacing: isNeo ? "0.05em" : undefined }}>
+              {isNeo ? "// ЗАЯВКА_ОТПРАВЛЕНА" : "Заявка отправлена"}
+            </h2>
+            <p style={{ ...mono, color: "var(--text-secondary)", lineHeight: 1.6 }}>{pendingMessage}</p>
+            <button
+              style={{ ...styles.btn, ...mono, marginTop: 24, background: "var(--bg-active)", color: "var(--text-primary)", ...(isNeo ? { borderRadius: 0, border: "1px solid var(--accent)", background: "transparent", color: "var(--accent)", letterSpacing: "0.08em" } : {}) }}
+              onClick={() => { setPendingMessage(""); setMode("login"); }}
+            >
+              {isNeo ? "[ПОПРОБОВАТЬ_ВОЙТИ]" : "Попробовать войти"}
             </button>
           </div>
         </div>
@@ -70,34 +90,53 @@ export default function Auth({ onLogin }: Props) {
     );
   }
 
+  const neoCardExtra: React.CSSProperties = isNeo ? {
+    borderRadius: 0,
+    border: "1.5px solid var(--accent)",
+    boxShadow: "0 0 24px rgba(198,255,61,0.15)",
+    position: "relative",
+  } : {};
+  const neoInputExtra: React.CSSProperties = isNeo ? { borderRadius: 0, fontFamily: "var(--font-mono)" } : {};
+
   return (
     <div style={styles.root}>
-      <button style={styles.closeAppBtn} onClick={() => (window as any).electron?.close()} title="Закрыть">✕</button>
-      <div style={styles.card}>
+      <button style={{ ...styles.closeAppBtn, ...mono, ...(isNeo ? { color: "var(--accent)" } : {}) }} onClick={() => (window as any).electron?.close()} title="Закрыть">✕</button>
+      <div style={{ ...styles.card, ...neoCardExtra }}>
+        {isNeo && <CornerBrackets />}
         <div style={styles.logo}>
-          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-            <circle cx="24" cy="24" r="24" fill="#5865f2" />
-            <text x="50%" y="55%" dominantBaseline="middle" textAnchor="middle"
-              fill="white" fontSize="22" fontWeight="700" fontFamily="Inter">G</text>
-          </svg>
-          <h1 style={styles.appName}>GandolaChat</h1>
+          {isNeo ? (
+            <div style={{ width: 48, height: 48, border: "2px solid var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-mono)", fontSize: 22, fontWeight: 700, color: "var(--accent)", background: "#0a0a0a" }}>G</div>
+          ) : (
+            <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+              <circle cx="24" cy="24" r="24" fill="#5865f2" />
+              <text x="50%" y="55%" dominantBaseline="middle" textAnchor="middle"
+                fill="white" fontSize="22" fontWeight="700" fontFamily="Inter">G</text>
+            </svg>
+          )}
+          <h1 style={{ ...styles.appName, ...mono, ...(isNeo ? { letterSpacing: "0.08em" } : {}) }}>
+            {isNeo ? <>Gandola<span style={{ color: "var(--accent)" }}>Chat</span></> : "GandolaChat"}
+          </h1>
         </div>
 
-        <h2 style={styles.title}>
-          {mode === "login" ? "Добро пожаловать!" : "Создать аккаунт"}
+        <h2 style={{ ...styles.title, ...mono, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.05em", textAlign: "left" as const } : {}) }}>
+          {isNeo
+            ? (mode === "login" ? "> Добро_пожаловать_" : "> Новый_аккаунт_")
+            : (mode === "login" ? "Добро пожаловать!" : "Создать аккаунт")}
         </h2>
-        <p style={styles.subtitle}>
-          {mode === "login" ? "Рады видеть тебя снова" : "Зарегистрируйся и начни общение"}
+        <p style={{ ...styles.subtitle, ...mono, ...(isNeo ? { textAlign: "left" as const, letterSpacing: "0.03em" } : {}) }}>
+          {isNeo
+            ? (mode === "login" ? "// рады_видеть_тебя_снова" : "// зарегистрируйся_и_начни_общение")
+            : (mode === "login" ? "Рады видеть тебя снова" : "Зарегистрируйся и начни общение")}
         </p>
 
         <form onSubmit={handleSubmit} style={styles.form}>
           <div style={styles.field}>
-            <label style={styles.label}>ИМЯ ПОЛЬЗОВАТЕЛЯ</label>
+            <label style={{ ...styles.label, ...mono }}>{isNeo ? "// ИМЯ_ПОЛЬЗОВАТЕЛЯ" : "ИМЯ ПОЛЬЗОВАТЕЛЯ"}</label>
             <input
-              style={styles.input}
+              style={{ ...styles.input, ...neoInputExtra }}
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="gandola"
+              placeholder={isNeo ? "> gandola" : "gandola"}
               required
               minLength={2}
               maxLength={50}
@@ -105,10 +144,10 @@ export default function Auth({ onLogin }: Props) {
           </div>
 
           <div style={styles.field}>
-            <label style={styles.label}>ПАРОЛЬ</label>
+            <label style={{ ...styles.label, ...mono }}>{isNeo ? "// ПАРОЛЬ" : "ПАРОЛЬ"}</label>
             <div style={{ position: "relative" }}>
               <input
-                style={{ ...styles.input, paddingRight: 40 }}
+                style={{ ...styles.input, ...neoInputExtra, paddingRight: 40 }}
                 type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -129,35 +168,52 @@ export default function Auth({ onLogin }: Props) {
               onChange={(e) => setRememberMe(e.target.checked)}
               style={styles.checkbox}
             />
-            <span style={styles.checkboxLabel}>Запомнить меня</span>
+            <span style={{ ...styles.checkboxLabel, ...mono }}>{isNeo ? "[ ] запомнить_меня".replace("[ ]", rememberMe ? "[x]" : "[ ]") : "Запомнить меня"}</span>
           </label>
 
-          {error && <p style={styles.error}>{error}</p>}
+          {error && <p style={{ ...styles.error, ...mono }}>{isNeo ? `! ${error}` : error}</p>}
 
-          <button style={styles.btn} type="submit" disabled={loading}>
-            {loading ? "Загрузка..." : mode === "login" ? "Войти" : "Зарегистрироваться"}
+          <button style={{ ...styles.btn, ...mono, ...(isNeo ? { borderRadius: 0, letterSpacing: "0.08em", textTransform: "uppercase" as const } : {}) }} type="submit" disabled={loading}>
+            {isNeo
+              ? (loading ? "[ЗАГРУЗКА...]" : mode === "login" ? "[ВОЙТИ]" : "[РЕГИСТРАЦИЯ]")
+              : (loading ? "Загрузка..." : mode === "login" ? "Войти" : "Зарегистрироваться")}
           </button>
         </form>
 
-        <p style={styles.toggle}>
+        <p style={{ ...styles.toggle, ...mono }}>
           {mode === "login" ? (
             <>
-              Нет аккаунта?{" "}
-              <span style={styles.link} onClick={() => { setMode("register"); setError(""); }}>
-                Зарегистрироваться
+              {isNeo ? "// нет_аккаунта? " : "Нет аккаунта? "}
+              <span style={{ ...styles.link, ...(isNeo ? { color: "var(--accent)" } : {}) }} onClick={() => { setMode("register"); setError(""); }}>
+                {isNeo ? "[зарегистрироваться]" : "Зарегистрироваться"}
               </span>
             </>
           ) : (
             <>
-              Уже есть аккаунт?{" "}
-              <span style={styles.link} onClick={() => { setMode("login"); setError(""); }}>
-                Войти
+              {isNeo ? "// уже_есть_аккаунт? " : "Уже есть аккаунт? "}
+              <span style={{ ...styles.link, ...(isNeo ? { color: "var(--accent)" } : {}) }} onClick={() => { setMode("login"); setError(""); }}>
+                {isNeo ? "[войти]" : "Войти"}
               </span>
             </>
           )}
         </p>
       </div>
     </div>
+  );
+}
+
+function CornerBrackets() {
+  const size = 16;
+  const thick = 2;
+  const color = "var(--accent)";
+  const base: React.CSSProperties = { position: "absolute", width: size, height: size, pointerEvents: "none" };
+  return (
+    <>
+      <span style={{ ...base, top: -1, left: -1, borderTop: `${thick}px solid ${color}`, borderLeft: `${thick}px solid ${color}` }} />
+      <span style={{ ...base, top: -1, right: -1, borderTop: `${thick}px solid ${color}`, borderRight: `${thick}px solid ${color}` }} />
+      <span style={{ ...base, bottom: -1, left: -1, borderBottom: `${thick}px solid ${color}`, borderLeft: `${thick}px solid ${color}` }} />
+      <span style={{ ...base, bottom: -1, right: -1, borderBottom: `${thick}px solid ${color}`, borderRight: `${thick}px solid ${color}` }} />
+    </>
   );
 }
 

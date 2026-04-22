@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useTheme } from "../services/theme";
 
 const CATEGORIES: Record<string, string[]> = {
   "Частые": ["😀", "😂", "🤣", "😊", "😍", "🥰", "😎", "🤔", "😭", "😡", "🥺", "😱", "🤮", "💀", "🤡", "👍", "👎", "❤️", "🔥", "💯", "🗿", "🫠", "🫡", "💅", "🥴", "🤯"],
@@ -15,25 +16,31 @@ interface Props {
 }
 
 export default function EmojiPicker({ onSelect, onClose }: Props) {
+  const theme = useTheme();
+  const isNeo = theme === "neo";
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
   const [category, setCategory] = useState("Частые");
 
   return (
     <div style={s.overlay} onClick={onClose}>
-      <div style={s.picker} onClick={(e) => e.stopPropagation()}>
-        <div style={s.tabs}>
+      <div
+        style={{ ...s.picker, ...(isNeo ? { borderRadius: 0, border: "1.5px solid var(--accent)", boxShadow: "0 0 16px rgba(198,255,61,0.25)" } : {}) }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ ...s.tabs, ...(isNeo ? { borderBottomColor: "var(--accent)" } : {}) }}>
           {Object.keys(CATEGORIES).map((cat) => (
             <button
               key={cat}
-              style={{ ...s.tab, ...(cat === category ? s.tabActive : {}) }}
+              style={{ ...s.tab, ...mono, ...(cat === category ? s.tabActive : {}), ...(isNeo ? { borderRadius: 0, letterSpacing: "0.03em" } : {}) }}
               onClick={() => setCategory(cat)}
             >
-              {cat}
+              {isNeo ? `// ${cat.toLowerCase()}` : cat}
             </button>
           ))}
         </div>
         <div style={s.grid}>
           {CATEGORIES[category].map((emoji, i) => (
-            <button key={i} style={s.emoji} onClick={() => onSelect(emoji)}>
+            <button key={i} style={{ ...s.emoji, ...(isNeo ? { borderRadius: 0 } : {}) }} onClick={() => onSelect(emoji)}>
               {emoji}
             </button>
           ))}
