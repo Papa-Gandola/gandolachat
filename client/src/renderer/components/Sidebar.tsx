@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { ChatOut, UserOut, chatApi, userApi, authApi, getFileUrl } from "../services/api";
 import { wsService } from "../services/ws";
+import { applyTheme, getTheme, Theme } from "../services/theme";
 
 interface Props {
   chats: ChatOut[];
@@ -26,6 +27,7 @@ export default function Sidebar({
   const [pendingUsers, setPendingUsers] = useState<Array<{ id: number; username: string; created_at: string }>>([]);
   const [showPending, setShowPending] = useState(false);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
+  const [currentTheme, setCurrentTheme] = useState<Theme>(getTheme());
   const [chatContextMenu, setChatContextMenu] = useState<{ x: number; y: number; chat: ChatOut } | null>(null);
   const isAdmin = currentUser.username === "Papa Gandola";
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
@@ -387,6 +389,15 @@ export default function Sidebar({
                 <button style={s.settingsMenuItem} onClick={() => { setShowSettingsMenu(false); onOpenProfile(); }}>
                   ✏️ Профиль
                 </button>
+                <div style={{ ...s.settingsMenuItem, display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "default" }}>
+                  <span>🎨 Тема</span>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    <button style={{ ...s.themeBtn, background: currentTheme === "discord" ? "var(--accent)" : "var(--bg-hover)", color: currentTheme === "discord" ? "var(--accent-text)" : "var(--text-muted)" }}
+                      onClick={() => { applyTheme("discord"); setCurrentTheme("discord"); }}>Discord</button>
+                    <button style={{ ...s.themeBtn, background: currentTheme === "neo" ? "var(--accent)" : "var(--bg-hover)", color: currentTheme === "neo" ? "var(--accent-text)" : "var(--text-muted)" }}
+                      onClick={() => { applyTheme("neo"); setCurrentTheme("neo"); }}>Neo</button>
+                  </div>
+                </div>
                 <button style={s.settingsMenuItem} onClick={() => {
                   setShowSettingsMenu(false);
                   setUpdateStatus(null);
@@ -476,6 +487,7 @@ const s: Record<string, React.CSSProperties> = {
   chatCtxMenu: { position: "fixed" as const, background: "var(--bg-tertiary)", borderRadius: 6, padding: 4, boxShadow: "0 4px 16px rgba(0,0,0,0.4)", zIndex: 200, minWidth: 180 },
   chatCtxItem: { display: "block", width: "100%", background: "none", border: "none", padding: "8px 12px", fontSize: 13, textAlign: "left" as const, borderRadius: 4, cursor: "pointer", color: "var(--text-primary)" },
   settingsMenuItem: { display: "block", width: "100%", textAlign: "left" as const, background: "none", border: "none", color: "var(--text-primary)", padding: "8px 12px", fontSize: 13, borderRadius: 4, cursor: "pointer" },
+  themeBtn: { border: "none", padding: "3px 8px", fontSize: 10, fontWeight: 700, cursor: "pointer", borderRadius: 3, letterSpacing: 0.5 },
   editNameInput: { flex: 1, background: "var(--bg-tertiary)", border: "1px solid var(--accent)", borderRadius: 4, padding: "4px 6px", fontSize: 12, color: "var(--text-primary)", minWidth: 0, width: "100%" },
   editNameSave: { background: "var(--accent)", color: "#fff", border: "none", borderRadius: 4, padding: "4px 6px", fontSize: 12, cursor: "pointer", flexShrink: 0 },
   logoutBtn: { background: "none", color: "var(--text-muted)", fontSize: 18 },

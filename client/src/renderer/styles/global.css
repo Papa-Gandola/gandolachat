@@ -1,5 +1,5 @@
-/* Discord-like dark theme */
-:root {
+/* Discord-like dark theme (default) */
+:root, body.theme-discord {
   --bg-primary: #36393f;
   --bg-secondary: #2f3136;
   --bg-tertiary: #202225;
@@ -16,6 +16,7 @@
   --text-link: #00b0f4;
 
   --accent: #5865f2;
+  --accent-text: #ffffff;
   --accent-hover: #4752c4;
   --accent-active: #3c45a5;
 
@@ -28,9 +29,53 @@
   --scrollbar-thumb: #484c52;
 
   --border: #42454a;
+  --border-strong: #42454a;
   --shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
   --radius: 8px;
   --radius-sm: 4px;
+
+  --font-sans: "Inter", sans-serif;
+  --font-mono: "JetBrains Mono", "Consolas", monospace;
+}
+
+/* Neo Venezia theme — terminal-ish, acid-lime accent, mono-heavy */
+body.theme-neo {
+  --bg-primary: #0a0a0a;
+  --bg-secondary: #0d0d0d;
+  --bg-tertiary: #070707;
+  --bg-hover: #111111;
+  --bg-active: #111111;
+  --bg-message: #131313;
+  --bg-input: #050505;
+  --bg-modal: #0d0d0d;
+
+  --text-primary: #e6e6e6;
+  --text-secondary: #888888;
+  --text-muted: #555555;
+  --text-header: #ffffff;
+  --text-link: #5cc8ff;
+
+  --accent: #c6ff3d;
+  --accent-text: #0a0a0a;
+  --accent-hover: #b5ee2c;
+  --accent-active: #9edb1f;
+
+  --danger: #ff3d6b;
+  --danger-hover: #e02555;
+  --success: #c6ff3d;
+  --warning: #ffb84d;
+
+  --scrollbar: #070707;
+  --scrollbar-thumb: #2a2a2a;
+
+  --border: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.12);
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.8);
+  --radius: 0px;
+  --radius-sm: 0px;
+
+  --font-sans: "Inter", sans-serif;
+  --font-mono: "JetBrains Mono", "Consolas", monospace;
 }
 
 * {
@@ -45,7 +90,7 @@ html, body, #root {
 }
 
 body {
-  font-family: "Inter", sans-serif;
+  font-family: var(--font-sans);
   font-size: 14px;
   color: var(--text-primary);
   background: var(--bg-primary);
@@ -90,6 +135,34 @@ a { color: var(--text-link); text-decoration: none; }
 .msg-row-hover:hover {
   background: rgba(4, 4, 5, 0.12);
 }
+
+/* Neo Venezia decoration */
+@keyframes neo-blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+.neo-blink {
+  animation: neo-blink 1s step-end infinite;
+}
+
+.neo-scanlines {
+  position: relative;
+}
+body.theme-neo .neo-scanlines::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.04;
+  background-image: repeating-linear-gradient(0deg, transparent, transparent 2px, #fff 2px, #fff 3px);
+  z-index: 0;
+}
+body.theme-neo .neo-scanlines > * {
+  position: relative;
+  z-index: 1;
+}
+
+body.theme-neo .mono { font-family: var(--font-mono); }
 
 /* Utility */
 .flex { display: flex; }
