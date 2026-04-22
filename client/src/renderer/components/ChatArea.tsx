@@ -573,7 +573,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                       </div>
                     ) : (
                       <>
-                        {msg.content && <p style={s.msgText}><FormattedText text={msg.content} /></p>}
+                        {msg.content && <p style={{ ...s.msgText, ...(isNeo && isMine ? { color: "#0a0a0a" } : {}) }}><FormattedText text={msg.content} /></p>}
                         {/* Reactions display */}
                         {reactions.get(msg.id)?.length ? (
                           <div style={s.reactionsRow}>
