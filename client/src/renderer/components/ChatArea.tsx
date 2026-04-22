@@ -479,11 +479,26 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
               const isGrouped = prev && prev.sender_id === msg.sender_id &&
                 (new Date(msg.created_at).getTime() - new Date(prev.created_at).getTime()) < 5 * 60000;
 
+              const neoBubble = isNeo ? {
+                maxWidth: "68%",
+                padding: "9px 13px",
+                background: isMine ? "var(--accent)" : "var(--bg-message)",
+                color: isMine ? "var(--accent-text)" : "var(--text-primary)",
+                border: isMine ? "none" : "1px solid var(--border)",
+                borderRadius: 14,
+                borderTopLeftRadius: isMine ? 14 : 6,
+                borderTopRightRadius: isMine ? 6 : 14,
+              } : {};
+
               return (
                 <div
                   key={msg.id}
                   className="msg-row-hover"
-                  style={{ ...s.msgRow, marginTop: isGrouped ? 2 : 16 }}
+                  style={{
+                    ...s.msgRow,
+                    marginTop: isGrouped ? 2 : 16,
+                    ...(isNeo ? { justifyContent: isMine ? "flex-end" : "flex-start" } : {}),
+                  }}
                   onDoubleClick={() => setReplyTo(msg)}
                   onContextMenu={(e) => {
                     e.preventDefault();
@@ -494,7 +509,8 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                     setContextMenu({ x, y, msg });
                   }}
                 >
-                  {!isGrouped ? (
+                  {/* Avatar: hidden for own messages in Neo; always visible otherwise */}
+                  {!(isNeo && isMine) && (!isGrouped ? (
                     <div style={{ ...s.avatarSmall, cursor: "pointer" }} onClick={() => {
                       const member = chat.members.find((m) => m.id === msg.sender_id);
                       if (member && onOpenProfile) onOpenProfile(member);
@@ -503,12 +519,17 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                     </div>
                   ) : (
                     <div style={{ width: 40 }} />
-                  )}
-                  <div style={s.msgContent}>
+                  ))}
+                  <div style={{ ...s.msgContent, ...(isNeo ? { flex: "0 1 auto", ...neoBubble } : {}) }}>
                     {!isGrouped && (
                       <div style={s.msgMeta}>
                         <span
-                          style={{ ...s.msgAuthor, color: isMine ? "var(--accent)" : "var(--text-header)", cursor: isMine ? "default" : "pointer", ...(isNeo ? mono : {}) }}
+                          style={{
+                            ...s.msgAuthor,
+                            color: isNeo && isMine ? "rgba(10,10,10,0.85)" : (isMine ? "var(--accent)" : "var(--text-header)"),
+                            cursor: isMine ? "default" : "pointer",
+                            ...(isNeo ? mono : {}),
+                          }}
                           onClick={() => {
                             if (isMine) return;
                             const member = chat.members.find((m) => m.id === msg.sender_id);
@@ -517,12 +538,13 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                         >
                           {isMine ? "Вы" : msg.sender_username}
                         </span>
-                        <span style={{ ...s.msgTime, ...(isNeo ? mono : {}) }}>{formatTime(msg.created_at)}</span>
-                        {msg.is_edited && <span style={{ ...s.editedTag, ...(isNeo ? mono : {}) }}>{isNeo ? "(ред.)" : "(ред.)"}</span>}
+                        <span style={{ ...s.msgTime, ...(isNeo ? mono : {}), ...(isNeo && isMine ? { color: "rgba(10,10,10,0.55)" } : {}) }}>{formatTime(msg.created_at)}</span>
+                        {msg.is_edited && <span style={{ ...s.editedTag, ...(isNeo ? mono : {}), ...(isNeo && isMine ? { color: "rgba(10,10,10,0.55)" } : {}) }}>(ред.)</span>}
                         {isMine && (() => {
                           const otherMembers = chat.members.filter((m) => m.id !== currentUser.id);
                           const allRead = otherMembers.every((m) => (readBy.get(m.id) || 0) >= msg.id);
-                          return <span style={{ ...s.readCheck, color: allRead ? "var(--accent)" : "var(--text-muted)", ...(isNeo ? mono : {}) }}>{allRead ? "✓✓" : "✓"}</span>;
+                          const neoMineColor = isNeo && isMine ? "rgba(10,10,10,0.75)" : (allRead ? "var(--accent)" : "var(--text-muted)");
+                          return <span style={{ ...s.readCheck, color: neoMineColor, ...(isNeo ? mono : {}) }}>{allRead ? "✓✓" : "✓"}</span>;
                         })()}
                       </div>
                     )}
