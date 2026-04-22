@@ -164,6 +164,13 @@ body.theme-neo .neo-scanlines > * {
 
 body.theme-neo .mono { font-family: var(--font-mono); }
 
+/* Online dot styling for Neo */
+body.theme-neo .online-dot {
+  border-radius: 0 !important;
+  background: var(--accent) !important;
+  box-shadow: 0 0 0 2px var(--bg-secondary), 0 0 6px var(--accent) !important;
+}
+
 /* Utility */
 .flex { display: flex; }
 .flex-col { flex-direction: column; }

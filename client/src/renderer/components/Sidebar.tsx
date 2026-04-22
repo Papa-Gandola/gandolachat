@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { ChatOut, UserOut, chatApi, userApi, authApi, getFileUrl } from "../services/api";
 import { wsService } from "../services/ws";
-import { applyTheme, getTheme, Theme } from "../services/theme";
+import { applyTheme, getTheme, Theme, useTheme } from "../services/theme";
 
 interface Props {
   chats: ChatOut[];
@@ -28,6 +28,9 @@ export default function Sidebar({
   const [showPending, setShowPending] = useState(false);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [currentTheme, setCurrentTheme] = useState<Theme>(getTheme());
+  const theme = useTheme();
+  const isNeo = theme === "neo";
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
   const [chatContextMenu, setChatContextMenu] = useState<{ x: number; y: number; chat: ChatOut } | null>(null);
   const isAdmin = currentUser.username === "Papa Gandola";
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
@@ -182,7 +185,11 @@ export default function Sidebar({
     return (
       <div
         key={chat.id}
-        style={{ ...s.chatItem, background: isActive ? "var(--bg-active)" : "transparent" }}
+        style={{
+          ...s.chatItem,
+          background: isActive ? (isNeo ? "#111" : "var(--bg-active)") : "transparent",
+          borderLeft: isNeo && isActive ? "2px solid var(--accent)" : "2px solid transparent",
+        }}
         onClick={() => selectChat(chat)}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -194,19 +201,26 @@ export default function Sidebar({
       >
         <div style={{ position: "relative", flexShrink: 0 }}>
           <Avatar url={avatarUrl} name={name} size={32} isGroup={chat.is_group} />
-          {online && <div style={s.onlineDot} />}
+          {online && <div className="online-dot" style={s.onlineDot} />}
         </div>
         <div style={s.chatInfo}>
-          <span style={s.chatName}>{name}</span>
+          <span style={{ ...s.chatName, ...(isNeo ? mono : {}) }}>{name}</span>
           {hasActiveCall ? (
-            <span style={s.callIndicator}>📞 Звонок...</span>
+            <span style={{ ...s.callIndicator, ...(isNeo ? mono : {}) }}>
+              {isNeo ? "● LIVE" : "📞 Звонок..."}
+            </span>
           ) : chat.last_message ? (
-            <span style={s.chatPreview}>
+            <span style={{ ...s.chatPreview, ...(isNeo ? mono : {}) }}>
               {chat.last_message.content || chat.last_message.file_name || "Файл"}
             </span>
           ) : null}
         </div>
-        {unreadCount > 0 && <span style={s.unreadBadge}>{unreadCount}</span>}
+        {unreadCount > 0 && (
+          <span style={{
+            ...s.unreadBadge,
+            ...(isNeo ? { background: "var(--accent)", color: "var(--accent-text)", borderRadius: 0, ...mono } : {}),
+          }}>{unreadCount}</span>
+        )}
       </div>
     );
   }
@@ -215,7 +229,13 @@ export default function Sidebar({
     <div style={{ ...s.root, width }}>
       {/* Header */}
       <div style={s.header}>
-        <span style={s.headerTitle}>GandolaChat</span>
+        {isNeo ? (
+          <span style={{ ...s.headerTitle, ...mono }}>
+            Gandola<span style={{ color: "var(--accent)" }}>Chat</span>
+          </span>
+        ) : (
+          <span style={s.headerTitle}>GandolaChat</span>
+        )}
       </div>
 
       {/* Admin: pending users */}
@@ -246,12 +266,24 @@ export default function Sidebar({
 
       {/* Search bar */}
       <div style={s.searchWrap}>
-        <input
-          style={s.searchInput}
-          placeholder="Найти пользователя..."
-          value={search}
-          onChange={(e) => handleSearch(e.target.value)}
-        />
+        {isNeo ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--bg-tertiary)", border: "1px solid var(--border)", padding: "7px 10px" }}>
+            <span style={{ color: "var(--accent)", ...mono, fontSize: 12 }}>/</span>
+            <input
+              style={{ ...s.searchInput, ...mono, background: "transparent", padding: 0, fontSize: 12 }}
+              placeholder="найти..."
+              value={search}
+              onChange={(e) => handleSearch(e.target.value)}
+            />
+          </div>
+        ) : (
+          <input
+            style={s.searchInput}
+            placeholder="Найти пользователя..."
+            value={search}
+            onChange={(e) => handleSearch(e.target.value)}
+          />
+        )}
       </div>
 
       {/* Search results */}
@@ -318,15 +350,19 @@ export default function Sidebar({
         {/* Groups section */}
         {chats.some((c) => c.is_group) && (
           <div style={s.sectionHeader}>
-            <span style={s.sectionTitle}>ГРУППЫ</span>
+            <span style={{ ...s.sectionTitle, ...mono }}>{isNeo ? "// ГРУППЫ" : "ГРУППЫ"}</span>
+            {isNeo && <span style={{ color: "var(--text-muted)", ...mono, fontSize: 10, opacity: 0.7 }}>[{chats.filter((c) => c.is_group).length}]</span>}
           </div>
         )}
         {[...chats].filter((c) => c.is_group).sort(sortByLastMessage).map((chat) => renderChatItem(chat))}
 
         {/* DMs section */}
         <div style={s.sectionHeader}>
-          <span style={s.sectionTitle}>ЛИЧНЫЕ СООБЩЕНИЯ</span>
-          <button style={s.newGroupBtn} title="Создать группу" onClick={() => setShowNewGroup(true)}>+</button>
+          <span style={{ ...s.sectionTitle, ...mono }}>{isNeo ? "// ЛИЧНЫЕ СООБЩЕНИЯ" : "ЛИЧНЫЕ СООБЩЕНИЯ"}</span>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            {isNeo && <span style={{ color: "var(--text-muted)", ...mono, fontSize: 10, opacity: 0.7 }}>[{chats.filter((c) => !c.is_group).length}]</span>}
+            <button style={{ ...s.newGroupBtn, color: isNeo ? "var(--accent)" : s.newGroupBtn.color }} title="Создать группу" onClick={() => setShowNewGroup(true)}>+</button>
+          </div>
         </div>
         {[...chats].filter((c) => !c.is_group).sort(sortByLastMessage).map((chat) => renderChatItem(chat))}
       </div>
@@ -372,8 +408,8 @@ export default function Sidebar({
           <input type="file" accept="image/*" style={{ display: "none" }} onChange={uploadAvatar} />
         </label>
         <div style={s.userInfo} onClick={onOpenProfile} role="button">
-          <span style={s.userName}>{currentUser.username}</span>
-          {currentUser.status && <span style={s.userSub}>{currentUser.status}</span>}
+          <span style={{ ...s.userName, ...(isNeo ? mono : {}) }}>{currentUser.username}</span>
+          {currentUser.status && <span style={{ ...s.userSub, ...(isNeo ? mono : {}) }}>{isNeo ? currentUser.status + "_" : currentUser.status}</span>}
         </div>
         <div style={{ position: "relative" }}>
           <button style={s.settingsBtn} title="Настройки" onClick={() => setShowSettingsMenu(!showSettingsMenu)}>
@@ -419,20 +455,27 @@ export default function Sidebar({
 }
 
 function Avatar({ url, name, size, isGroup }: { url: string | null; name: string; size: number; isGroup?: boolean }) {
-  const bg = isGroup ? "#5865f2" : stringToColor(name);
+  const isNeo = typeof document !== "undefined" && document.body.classList.contains("theme-neo");
+  const radius = isNeo ? (size * 0.18) : "50%";
+  const fontFamily = isNeo ? "var(--font-mono)" : undefined;
+  const bg = isGroup ? (isNeo ? "#1a1a1a" : "#5865f2") : stringToColor(name);
+  const groupChar = isNeo ? "#" : "#";
+  const groupColor = isNeo ? "var(--accent)" : "#fff";
   return url ? (
     <img
       src={url.startsWith("http") ? url : `${import.meta.env.VITE_API_URL || "http://localhost:8000"}${url}`}
-      style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }}
+      style={{ width: size, height: size, borderRadius: radius, objectFit: "cover", flexShrink: 0 }}
       alt={name}
     />
   ) : (
     <div style={{
-      width: size, height: size, borderRadius: "50%", background: bg,
+      width: size, height: size, borderRadius: radius, background: bg,
       display: "flex", alignItems: "center", justifyContent: "center",
-      color: "#fff", fontWeight: 700, fontSize: size * 0.42, flexShrink: 0,
+      color: isGroup ? groupColor : "#fff", fontWeight: 700, fontSize: size * 0.42, flexShrink: 0,
+      border: isNeo && isGroup ? "1px solid var(--border)" : undefined,
+      fontFamily,
     }}>
-      {isGroup ? "#" : name.charAt(0).toUpperCase()}
+      {isGroup ? groupChar : name.charAt(0).toUpperCase()}
     </div>
   );
 }
