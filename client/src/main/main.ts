@@ -41,7 +41,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       webSecurity: false,
-      backgroundThrottling: true,
+      backgroundThrottling: false,
     },
   });
 
