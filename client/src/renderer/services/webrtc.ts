@@ -59,11 +59,18 @@ class WebRTCService {
     this._createPeer(initiatorId, false);
 
     // Flush queued signals (webcam AND screen) that arrived before we got our stream.
+    // Key format: `${userId}:${purpose}:${role}`
     for (const [key, signals] of Array.from(this.pendingSignals.entries())) {
-      const [uidStr, purpose] = key.split(":");
+      const [uidStr, purpose, role] = key.split(":");
       const userId = Number(uidStr);
-      const targetMap = purpose === "screen" ? this.screenReceivingPeers : this.peers;
-      if (!targetMap.has(userId)) {
+      let targetMap: Map<number, SimplePeer.Instance>;
+      if (purpose === "screen") {
+        targetMap = role === "receiver" ? this.screenSendingPeers : this.screenReceivingPeers;
+      } else {
+        targetMap = this.peers;
+      }
+      // For receiver-role screens, the sendingPeer should already exist. For others, create non-initiator.
+      if (!targetMap.has(userId) && !(purpose === "screen" && role === "receiver")) {
         this._createPeer(userId, false, purpose === "screen" ? "screen" : "webcam");
       }
       for (const sig of signals) {
@@ -140,6 +147,10 @@ class WebRTCService {
         target_user_id: targetUserId,
         signal,
         purpose,
+        // For screen peers the remote has two matching connections (sending +
+        // receiving). Tell them which of ours emitted the signal so they can
+        // route the reply to the correct peer on their side.
+        ...(purpose === "screen" ? { role: initiator ? "sender" : "receiver" } : {}),
       });
     });
 
@@ -185,30 +196,53 @@ class WebRTCService {
   private _handleSignal = (data: any) => {
     const fromId = data.from_user_id;
     const purpose: "webcam" | "screen" = data.purpose === "screen" ? "screen" : "webcam";
-    const key = `${fromId}:${purpose}`;
-    console.log(`[WebRTC] signal IN ←`, fromId, `purpose=${data.purpose ?? "<missing-from-server>"}`);
+    const remoteRole: "sender" | "receiver" | undefined = data.role;
+    console.log(`[WebRTC] signal IN ←`, fromId, `purpose=${data.purpose ?? "<missing>"} role=${remoteRole ?? "-"}`);
 
+    // Queue pre-join signals under a key that also distinguishes role, so
+    // flush later routes them correctly.
+    const queueKey = `${fromId}:${purpose}:${remoteRole ?? "?"}`;
     if (!this.localStream) {
-      if (!this.pendingSignals.has(key)) this.pendingSignals.set(key, []);
-      this.pendingSignals.get(key)!.push(data.signal);
+      if (!this.pendingSignals.has(queueKey)) this.pendingSignals.set(queueKey, []);
+      this.pendingSignals.get(queueKey)!.push(data.signal);
       return;
     }
 
-    // An incoming signal from `fromId` about screen means THEY initiated — we respond.
-    // It routes to our "receiving" screen peer, separate from our "sending" one.
-    const map = purpose === "screen" ? this.screenReceivingPeers : this.peers;
+    // Route based on remote role:
+    //  - remote "sender" (their initiator peer) → my receiving peer (create if missing)
+    //  - remote "receiver" (their responder peer) → my sending peer (must already exist)
+    //  - webcam (no role) → my single webcam peer
+    let map: Map<number, SimplePeer.Instance>;
+    let createIfMissing: boolean;
+    if (purpose === "screen") {
+      if (remoteRole === "receiver") {
+        map = this.screenSendingPeers;
+        createIfMissing = false;
+      } else {
+        map = this.screenReceivingPeers;
+        createIfMissing = true;
+      }
+    } else {
+      map = this.peers;
+      createIfMissing = true;
+    }
+
     if (!map.has(fromId)) {
+      if (!createIfMissing) {
+        console.warn(`[WebRTC] got ${purpose} signal from ${fromId} but no matching peer (role=${remoteRole})`);
+        return;
+      }
       this._createPeer(fromId, false, purpose);
     }
 
     try {
       map.get(fromId)?.signal(data.signal);
     } catch (err) {
-      console.error(`[WebRTC] ${purpose} signal error, recreating peer`, fromId, err);
-      this._createPeer(fromId, false, purpose);
-      try {
-        map.get(fromId)?.signal(data.signal);
-      } catch {}
+      console.error(`[WebRTC] ${purpose} signal error`, fromId, err);
+      if (createIfMissing) {
+        this._createPeer(fromId, false, purpose);
+        try { map.get(fromId)?.signal(data.signal); } catch {}
+      }
     }
   };
 
