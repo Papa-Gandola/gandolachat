@@ -30,6 +30,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   const isNeo = theme === "neo";
   const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
   const [remoteVideos, setRemoteVideos] = useState<VideoEntry[]>([]);
+  const [remoteScreens, setRemoteScreens] = useState<VideoEntry[]>([]);
   const [muted, setMuted] = useState(false);
   const [videoOff, setVideoOff] = useState(false);
   const [deafened, setDeafened] = useState(false);
@@ -161,8 +162,21 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
       });
     };
 
+    webrtcService.onScreenStream = (userId, stream) => {
+      setRemoteScreens((prev) => {
+        const exists = prev.find((v) => v.userId === userId);
+        if (exists) return prev.map((v) => v.userId === userId ? { ...v, stream } : v);
+        return [...prev, { userId, stream }];
+      });
+    };
+
+    webrtcService.onScreenEnded = (userId) => {
+      setRemoteScreens((prev) => prev.filter((v) => v.userId !== userId));
+    };
+
     webrtcService.onPeerLeft = (userId) => {
       setRemoteVideos((prev) => prev.filter((v) => v.userId !== userId));
+      setRemoteScreens((prev) => prev.filter((v) => v.userId !== userId));
     };
 
     webrtcService.onCallEnded = () => {
@@ -242,28 +256,22 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
           },
         },
       });
-      const screenTrack = stream.getVideoTracks()[0];
-      // Send screen to peers but keep local webcam running
-      webrtcService.replaceVideoTrack(screenTrack);
+      // Open a dedicated peer connection per member carrying the screen stream,
+      // so remote peers see webcam AND screen simultaneously (two separate tiles).
+      webrtcService.startScreenShare(stream);
       setScreenStream(stream);
       setScreenSharing(true);
       wsService.send({ type: "screen_share_status", chat_id: chat.id, sharing: true });
-      // Don't change localVideoRef — keep showing webcam
+      const screenTrack = stream.getVideoTracks()[0];
       screenTrack.onended = () => stopScreenShare();
     } catch {}
   }
 
   function stopScreenShare() {
-    screenStream?.getTracks().forEach((t) => t.stop());
+    webrtcService.stopScreenShare();
     setScreenStream(null);
     setScreenSharing(false);
     wsService.send({ type: "screen_share_status", chat_id: chat.id, sharing: false });
-    // Restore webcam track to peers
-    const ls = webrtcService.getLocalStream();
-    const camTrack = ls?.getVideoTracks()[0];
-    if (camTrack) {
-      webrtcService.replaceVideoTrack(camTrack);
-    }
   }
 
   function changePeerVolume(userId: number, volume: number) {
@@ -450,17 +458,17 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
           );
         })()}
 
-        {/* Remote videos */}
+        {/* Remote videos (webcams) */}
         {remoteVideos.map((entry, idx) => (
           <RemoteVideo
-            key={entry.userId}
+            key={`cam-${entry.userId}`}
             entry={entry}
             chat={chat}
             enlarged={enlarged === String(entry.userId)}
             deafened={deafened}
             peerMuted={mutedPeers.has(entry.userId)}
             peerVideoOff={videoOffPeers.has(entry.userId)}
-            peerScreenSharing={screenSharingPeers.has(entry.userId)}
+            peerScreenSharing={false}
             volume={peerVolumes.get(entry.userId) ?? 100}
             onVolumeChange={(v) => changePeerVolume(entry.userId, v)}
             onClick={() => !freeMode && setEnlarged(enlarged === String(entry.userId) ? null : String(entry.userId))}
@@ -470,6 +478,36 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
             isNeo={isNeo}
           />
         ))}
+
+        {/* Remote screens — rendered as separate tiles in addition to webcams */}
+        {remoteScreens.map((entry, idx) => {
+          const screenKey = `screen-${entry.userId}`;
+          const pos = freeMode ? getTilePos(screenKey, remoteVideos.length + idx + 2) : null;
+          const member = chat.members.find((m) => m.id === entry.userId);
+          return (
+            <div
+              key={screenKey}
+              data-tile-id={screenKey}
+              style={{
+                ...s.videoWrap,
+                ...(!freeMode && enlarged === screenKey ? s.enlarged : {}),
+                ...(freeMode && pos ? { position: "absolute" as const, left: pos.x, top: pos.y, width: pos.w, height: pos.h } : {}),
+                cursor: freeMode ? "move" : "pointer",
+                border: isNeo ? "1px solid var(--accent)" : "2px solid #5865f2",
+                ...(isNeo ? { borderRadius: 0 } : {}),
+              }}
+              onMouseDown={(e) => freeMode && startDrag(screenKey, e, "move")}
+              onClick={() => !freeMode && setEnlarged(enlarged === screenKey ? null : screenKey)}
+            >
+              <RemoteScreenVideo stream={entry.stream} freeMode={!!freeMode} enlarged={enlarged === screenKey} />
+              {isNeo && <NeoCorners />}
+              <span style={{ ...s.videoLabel, ...mono, ...(isNeo ? { background: "rgba(10,10,10,0.85)", color: "var(--accent)", borderRadius: 0, border: "1px solid var(--accent)", letterSpacing: "0.05em" } : {}) }}>
+                📺 {isNeo ? `@${member?.username || "?"}_screen` : `${member?.username || "?"} (экран)`}
+              </span>
+              {freeMode && <div style={s.resizeCorner} onMouseDown={(e) => { e.stopPropagation(); startDrag(screenKey, e, "resize"); }} />}
+            </div>
+          );
+        })}
 
         {remoteVideos.length === 0 && (
           <div style={s.waiting}>
@@ -828,6 +866,27 @@ function NeoCorners() {
       <span style={{ ...base, bottom: 6, left: 6, borderBottom: `${thick}px solid ${color}`, borderLeft: `${thick}px solid ${color}` }} />
       <span style={{ ...base, bottom: 6, right: 6, borderBottom: `${thick}px solid ${color}`, borderRight: `${thick}px solid ${color}` }} />
     </>
+  );
+}
+
+function RemoteScreenVideo({ stream, freeMode, enlarged }: { stream: MediaStream; freeMode: boolean; enlarged: boolean }) {
+  const ref = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.srcObject = stream;
+      ref.current.muted = true; // screens don't send audio; mute just in case
+    }
+  }, [stream]);
+  return (
+    <video
+      ref={ref}
+      autoPlay
+      playsInline
+      muted
+      style={freeMode
+        ? { width: "100%", height: "100%", objectFit: "contain" as const, display: "block", pointerEvents: "none" as const }
+        : (enlarged ? { width: "100%", height: "auto", maxHeight: "60vh", objectFit: "contain" as const, display: "block" } : { width: 280, height: 210, objectFit: "contain" as const, display: "block" })}
+    />
   );
 }
 

@@ -13,12 +13,18 @@ type OnCallEndedCallback = () => void;
 
 class WebRTCService {
   private peers: Map<number, SimplePeer.Instance> = new Map();
+  // Separate peer connections dedicated to screen share (one per remote user).
+  // This lets remote users see webcam AND screen simultaneously in two tiles.
+  private screenPeers: Map<number, SimplePeer.Instance> = new Map();
   private localStream: MediaStream | null = null;
+  private localScreenStream: MediaStream | null = null;
   private currentChatId: number | null = null;
   private myUserId: number | null = null;
-  private pendingSignals: Map<number, any[]> = new Map();
+  private pendingSignals: Map<string, any[]> = new Map(); // key = `${userId}:${purpose}`
 
   onStream: OnStreamCallback | null = null;
+  onScreenStream: OnStreamCallback | null = null;
+  onScreenEnded: OnPeerLeftCallback | null = null;
   onPeerLeft: OnPeerLeftCallback | null = null;
   onCallEnded: OnCallEndedCallback | null = null;
 
@@ -50,23 +56,28 @@ class WebRTCService {
     this._createPeer(initiatorId, false);
 
     // Flush signals that arrived before we joined
-    const queued = this.pendingSignals.get(initiatorId) || [];
+    const queued = this.pendingSignals.get(`${initiatorId}:webcam`) || [];
     for (const signal of queued) {
       this.peers.get(initiatorId)?.signal(signal);
     }
-    this.pendingSignals.delete(initiatorId);
+    this.pendingSignals.delete(`${initiatorId}:webcam`);
 
     // Also flush signals from other users (group call - multiple people may have sent signals)
-    for (const [userId, signals] of this.pendingSignals.entries()) {
+    for (const [key, signals] of this.pendingSignals.entries()) {
+      const [uidStr, purpose] = key.split(":");
+      const userId = Number(uidStr);
+      if (purpose !== "webcam") continue;
       if (!this.peers.has(userId)) {
-        // In a group call, if someone else sent signals, we're the non-initiator
         this._createPeer(userId, false);
       }
       for (const sig of signals) {
         this.peers.get(userId)?.signal(sig);
       }
     }
-    this.pendingSignals.clear();
+    // Drop all webcam-queued signals; screen signals will process when screen peer is created
+    Array.from(this.pendingSignals.keys()).forEach((k) => {
+      if (k.endsWith(":webcam")) this.pendingSignals.delete(k);
+    });
 
     return this.localStream;
   }
@@ -79,22 +90,27 @@ class WebRTCService {
     }
   }
 
-  private _createPeer(targetUserId: number, initiator: boolean) {
-    if (!this.localStream) {
-      console.error("[WebRTC] Cannot create peer - no local stream");
+  private _createPeer(targetUserId: number, initiator: boolean, purpose: "webcam" | "screen" = "webcam") {
+    const map = purpose === "screen" ? this.screenPeers : this.peers;
+    const stream = purpose === "screen" ? this.localScreenStream : this.localStream;
+
+    if (!stream && purpose === "webcam") {
+      console.error("[WebRTC] Cannot create webcam peer - no local stream");
       return;
+    }
+    if (purpose === "screen" && !stream) {
+      // Remote screen peer: we're receiving, no local screen to send → create without stream
     }
 
     // Destroy existing peer if any (reconnect case)
-    const existing = this.peers.get(targetUserId);
+    const existing = map.get(targetUserId);
     if (existing) {
       existing.destroy();
-      this.peers.delete(targetUserId);
+      map.delete(targetUserId);
     }
 
-    const peer = new SimplePeer({
+    const peerOpts: any = {
       initiator,
-      stream: this.localStream,
       trickle: true,
       channelConfig: { ordered: false, maxRetransmits: 0 },
       config: {
@@ -115,7 +131,9 @@ class WebRTCService {
           },
         ],
       },
-    });
+    };
+    if (stream) peerOpts.stream = stream;
+    const peer = new SimplePeer(peerOpts);
 
     peer.on("signal", (signal) => {
       wsService.send({
@@ -123,70 +141,62 @@ class WebRTCService {
         chat_id: this.currentChatId,
         target_user_id: targetUserId,
         signal,
+        purpose,
       });
     });
 
-    peer.on("stream", (stream) => {
-      console.log("[WebRTC] Stream received from", targetUserId, "tracks:", stream.getTracks().map((t) => `${t.kind}:${t.id.slice(0, 8)}`));
-      this.onStream?.(targetUserId, stream);
-    });
-
-    peer.on("track", (track) => {
-      console.log("[WebRTC] Track received from", targetUserId, track.kind, track.id.slice(0, 8));
+    peer.on("stream", (s) => {
+      console.log(`[WebRTC] ${purpose} stream received from`, targetUserId);
+      if (purpose === "screen") this.onScreenStream?.(targetUserId, s);
+      else this.onStream?.(targetUserId, s);
     });
 
     peer.on("connect", () => {
-      console.log("[WebRTC] Connected to peer", targetUserId);
+      console.log(`[WebRTC] ${purpose} connected to peer`, targetUserId);
     });
 
-    // Log ICE connection state changes
-    const pc = (peer as any)._pc;
-    if (pc) {
-      pc.addEventListener("iceconnectionstatechange", () => {
-        console.log("[WebRTC] ICE state with", targetUserId, "→", pc.iceConnectionState);
-      });
-      pc.addEventListener("connectionstatechange", () => {
-        console.log("[WebRTC] Connection state with", targetUserId, "→", pc.connectionState);
-      });
-    }
-
     peer.on("close", () => {
-      this.peers.delete(targetUserId);
-      this.onPeerLeft?.(targetUserId);
+      map.delete(targetUserId);
+      if (purpose === "screen") this.onScreenEnded?.(targetUserId);
+      else this.onPeerLeft?.(targetUserId);
     });
 
     peer.on("error", (err) => {
-      console.error("[WebRTC] Peer error with", targetUserId, err);
-      this.peers.delete(targetUserId);
-      this.onPeerLeft?.(targetUserId);
+      console.error(`[WebRTC] ${purpose} peer error with`, targetUserId, err);
+      map.delete(targetUserId);
+      if (purpose === "screen") this.onScreenEnded?.(targetUserId);
+      else this.onPeerLeft?.(targetUserId);
     });
 
-    this.peers.set(targetUserId, peer);
+    map.set(targetUserId, peer);
   }
 
   private _handleSignal = (data: any) => {
     const fromId = data.from_user_id;
+    const purpose: "webcam" | "screen" = data.purpose === "screen" ? "screen" : "webcam";
+    const key = `${fromId}:${purpose}`;
 
+    // If we haven't joined the call yet, queue webcam signals; screen signals we handle immediately
+    // (but only once we're in a call).
     if (!this.localStream) {
-      if (!this.pendingSignals.has(fromId)) {
-        this.pendingSignals.set(fromId, []);
-      }
-      this.pendingSignals.get(fromId)!.push(data.signal);
+      if (!this.pendingSignals.has(key)) this.pendingSignals.set(key, []);
+      this.pendingSignals.get(key)!.push(data.signal);
       return;
     }
 
-    if (!this.peers.has(fromId)) {
-      // New participant joining — they initiated, we respond
-      this._createPeer(fromId, false);
+    const map = purpose === "screen" ? this.screenPeers : this.peers;
+    if (!map.has(fromId)) {
+      // Remote is initiating — we respond as non-initiator
+      this._createPeer(fromId, false, purpose);
     }
 
     try {
-      this.peers.get(fromId)?.signal(data.signal);
+      map.get(fromId)?.signal(data.signal);
     } catch (err) {
-      console.error("[WebRTC] Signal error, recreating peer", fromId, err);
-      this._createPeer(fromId, false);
+      console.error(`[WebRTC] ${purpose} signal error, recreating peer`, fromId, err);
+      this._createPeer(fromId, false, purpose);
       try {
-        this.peers.get(fromId)?.signal(data.signal);
+        map.get(fromId)?.signal(data.signal);
       } catch {}
     }
   };
@@ -195,11 +205,16 @@ class WebRTCService {
     const fromId = data.from_user_id;
     this.peers.get(fromId)?.destroy();
     this.peers.delete(fromId);
+    this.screenPeers.get(fromId)?.destroy();
+    this.screenPeers.delete(fromId);
+    this.onScreenEnded?.(fromId);
     this.onPeerLeft?.(fromId);
 
     if (this.peers.size === 0 && this.localStream) {
       this.localStream.getTracks().forEach((t) => t.stop());
       this.localStream = null;
+      this.localScreenStream?.getTracks().forEach((t) => t.stop());
+      this.localScreenStream = null;
       this.currentChatId = null;
       this.onCallEnded?.();
     }
@@ -211,8 +226,12 @@ class WebRTCService {
     }
     this.peers.forEach((p) => p.destroy());
     this.peers.clear();
+    this.screenPeers.forEach((p) => p.destroy());
+    this.screenPeers.clear();
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.localStream = null;
+    this.localScreenStream?.getTracks().forEach((t) => t.stop());
+    this.localScreenStream = null;
     this.currentChatId = null;
     this.pendingSignals.clear();
     if (this.gainContext) {
@@ -222,6 +241,7 @@ class WebRTCService {
     }
   }
 
+  // Deprecated — kept for backwards compat if callers still reference it.
   replaceVideoTrack(newTrack: MediaStreamTrack) {
     this.peers.forEach((peer) => {
       const pc = (peer as any)._pc;
@@ -233,6 +253,23 @@ class WebRTCService {
         });
       }
     });
+  }
+
+  // Starts a dedicated screen-share peer connection to every current webcam peer.
+  // This runs in addition to the existing webcam stream, so remote peers see both tiles.
+  startScreenShare(screenStream: MediaStream) {
+    this.localScreenStream = screenStream;
+    const targets = Array.from(this.peers.keys());
+    for (const uid of targets) {
+      this._createPeer(uid, true, "screen");
+    }
+  }
+
+  stopScreenShare() {
+    this.screenPeers.forEach((p) => p.destroy());
+    this.screenPeers.clear();
+    this.localScreenStream?.getTracks().forEach((t) => t.stop());
+    this.localScreenStream = null;
   }
 
   // Mic gain (0-200%) via Web Audio API

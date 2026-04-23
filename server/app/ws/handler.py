@@ -201,6 +201,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                         "from_user_id": user_id,
                         "chat_id": chat_id,
                         "signal": data.get("signal"),
+                        "purpose": data.get("purpose", "webcam"),
                     })
 
             elif event == "call_end":
