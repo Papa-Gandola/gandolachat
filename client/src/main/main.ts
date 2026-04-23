@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell, desktopCapturer, session, Tray, Menu, nativeImage } from "electron";
 import { autoUpdater } from "electron-updater";
 import path from "path";
+import fs from "fs";
 const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
 
 // Performance flags for high refresh rate monitors
@@ -181,6 +182,32 @@ ipcMain.on("window:quit", () => { isQuitting = true; app.quit(); });
 // Unread badge on taskbar icon (Telegram-style red circle with number).
 // Renderer builds the PNG via canvas (Electron on Windows doesn't decode SVG
 // reliably for overlay icons), main just wraps it into a nativeImage.
+// Expose base app icon to the renderer so it can composite a red-dot tray
+// version when there are unread messages.
+ipcMain.handle("tray:getBaseIcon", () => {
+  try {
+    const iconPath = path.join(__dirname, "../../assets/icon.png");
+    const buf = fs.readFileSync(iconPath);
+    return "data:image/png;base64," + buf.toString("base64");
+  } catch (err) {
+    console.error("[tray] base icon read failed", err);
+    return null;
+  }
+});
+
+ipcMain.on("tray:setImage", (_e, dataUrl: string) => {
+  if (!tray || !dataUrl) return;
+  try {
+    let img = nativeImage.createFromDataURL(dataUrl);
+    if (img.isEmpty()) return;
+    // Windows tray prefers 16x16 / 32x32. Resize to a sane tray size.
+    img = img.resize({ width: 16, height: 16 });
+    tray.setImage(img);
+  } catch (err) {
+    console.error("[tray] setImage failed", err);
+  }
+});
+
 ipcMain.on("badge:set", (_e, count: number, pngDataUrl?: string) => {
   if (!mainWindow) return;
   if (typeof count !== "number" || count < 0) count = 0;

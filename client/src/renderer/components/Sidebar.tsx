@@ -149,6 +149,54 @@ export default function Sidebar({
     electron.setBadgeCount(total, dataUrl);
   }, [unread]);
 
+  // Tray icon: put a red dot on top-right when there are unread messages (Telegram-style).
+  // Base app icon comes from main; we composite here via canvas and send back.
+  const trayBaseIconRef = React.useRef<string | null>(null);
+  useEffect(() => {
+    const electron = (window as any).electron;
+    if (!electron?.getTrayBaseIcon || !electron?.setTrayImage) return;
+    const applyDot = (hasUnread: boolean) => {
+      const baseDataUrl = trayBaseIconRef.current;
+      if (!baseDataUrl) return;
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        ctx.drawImage(img, 0, 0);
+        if (hasUnread) {
+          const r = Math.max(img.width * 0.22, 4);
+          const cx = img.width - r - 2;
+          const cy = r + 2;
+          // White halo for contrast on dark trays
+          ctx.beginPath();
+          ctx.arc(cx, cy, r + 1.5, 0, Math.PI * 2);
+          ctx.fillStyle = "#ffffff";
+          ctx.fill();
+          // Red dot
+          ctx.beginPath();
+          ctx.arc(cx, cy, r, 0, Math.PI * 2);
+          ctx.fillStyle = "#ed4245";
+          ctx.fill();
+        }
+        electron.setTrayImage(canvas.toDataURL("image/png"));
+      };
+      img.src = baseDataUrl;
+    };
+    const total = Array.from(unread.values()).reduce((a, b) => a + b, 0);
+    if (trayBaseIconRef.current) {
+      applyDot(total > 0);
+    } else {
+      electron.getTrayBaseIcon().then((base: string | null) => {
+        if (!base) return;
+        trayBaseIconRef.current = base;
+        applyDot(total > 0);
+      });
+    }
+  }, [unread]);
+
   function selectChat(chat: ChatOut) {
     setUnread((prev) => { const n = new Map(prev); n.delete(chat.id); return n; });
     onSelectChat(chat);
