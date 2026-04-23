@@ -12,5 +12,5 @@ contextBridge.exposeInMainWorld("electron", {
     ipcRenderer.on("update:status", (_e, status, info) => callback(status, info));
   },
   getScreenSources: () => ipcRenderer.invoke("screen:getSources"),
-  setBadgeCount: (count: number) => ipcRenderer.send("badge:set", count),
+  setBadgeCount: (count: number, pngDataUrl?: string) => ipcRenderer.send("badge:set", count, pngDataUrl),
 });

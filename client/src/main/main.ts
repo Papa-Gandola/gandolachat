@@ -178,27 +178,27 @@ ipcMain.on("window:close", () => { isQuitting = true; app.quit(); });
 ipcMain.on("window:hide", () => mainWindow?.hide());
 ipcMain.on("window:quit", () => { isQuitting = true; app.quit(); });
 
-// Unread badge on taskbar icon (Telegram-style red circle with number)
-function buildBadgeIcon(count: number) {
-  // Render a 32x32 red circle with the count centered, via canvas in a data URL.
-  // Main process has no DOM canvas, so we build a tiny SVG and let nativeImage decode it.
-  const label = count > 99 ? "99+" : String(count);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-    <circle cx="16" cy="16" r="14" fill="#ed4245"/>
-    <text x="16" y="21" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="${label.length >= 3 ? 12 : 16}" font-weight="700" fill="white">${label}</text>
-  </svg>`;
-  return nativeImage.createFromDataURL("data:image/svg+xml;base64," + Buffer.from(svg).toString("base64"));
-}
-
-ipcMain.on("badge:set", (_e, count: number) => {
+// Unread badge on taskbar icon (Telegram-style red circle with number).
+// Renderer builds the PNG via canvas (Electron on Windows doesn't decode SVG
+// reliably for overlay icons), main just wraps it into a nativeImage.
+ipcMain.on("badge:set", (_e, count: number, pngDataUrl?: string) => {
   if (!mainWindow) return;
   if (typeof count !== "number" || count < 0) count = 0;
-  // Cross-platform numeric badge — works on macOS and Linux (Unity)
+  // Cross-platform numeric badge (macOS/Linux Unity)
   app.setBadgeCount(count);
   // Windows: overlay icon on the taskbar button
   if (process.platform === "win32") {
-    if (count > 0) {
-      mainWindow.setOverlayIcon(buildBadgeIcon(count), `${count} непрочитанных`);
+    if (count > 0 && pngDataUrl) {
+      try {
+        const img = nativeImage.createFromDataURL(pngDataUrl);
+        if (!img.isEmpty()) {
+          mainWindow.setOverlayIcon(img, `${count} непрочитанных`);
+        } else {
+          mainWindow.setOverlayIcon(null, "");
+        }
+      } catch {
+        mainWindow.setOverlayIcon(null, "");
+      }
     } else {
       mainWindow.setOverlayIcon(null, "");
     }

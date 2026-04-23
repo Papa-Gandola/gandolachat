@@ -116,10 +116,37 @@ export default function Sidebar({
     }
   }, [activeChatId]);
 
-  // Push total unread count to Electron taskbar badge (Telegram-style)
+  // Push total unread count to Electron taskbar badge (Telegram-style).
+  // We render the red circle with the number to a PNG data URL here (main
+  // process can't use SVG/canvas reliably), then hand it off via IPC.
   useEffect(() => {
     const total = Array.from(unread.values()).reduce((a, b) => a + b, 0);
-    (window as any).electron?.setBadgeCount?.(total);
+    const electron = (window as any).electron;
+    if (!electron?.setBadgeCount) return;
+    if (total === 0) {
+      electron.setBadgeCount(0);
+      return;
+    }
+    const label = total > 99 ? "99+" : String(total);
+    const size = 32;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) { electron.setBadgeCount(total); return; }
+    // Red circle background
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size / 2 - 1, 0, Math.PI * 2);
+    ctx.fillStyle = "#ed4245";
+    ctx.fill();
+    // Count text
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `700 ${label.length >= 3 ? 13 : 18}px "Segoe UI", sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, size / 2, size / 2 + 1);
+    const dataUrl = canvas.toDataURL("image/png");
+    electron.setBadgeCount(total, dataUrl);
   }, [unread]);
 
   function selectChat(chat: ChatOut) {
