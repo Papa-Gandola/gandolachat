@@ -267,12 +267,45 @@ export default function Main({ token, user, onLogout }: Props) {
                 </>
               ) : (
                 <>
-                  <div className="discord-gandola-wrap" aria-hidden="true">
-                    <svg width="96" height="96" viewBox="0 0 96 96" fill="none">
-                      <circle cx="48" cy="48" r="44" fill="#5865f2"/>
-                      <path d="M28 35c0-3 2-5 5-5h30c3 0 5 2 5 5v18c0 3-2 5-5 5H44l-9 9v-9h-2c-3 0-5-2-5-5V35z" fill="#fff" opacity="0.95"/>
-                      <circle cx="40" cy="44" r="3" fill="#5865f2"/>
-                      <circle cx="56" cy="44" r="3" fill="#5865f2"/>
+                  <div className="gondola-scene" aria-hidden="true">
+                    {/* Boat */}
+                    <svg className="gondola-boat" width="90" height="70" viewBox="0 0 90 70" fill="none">
+                      {/* Hull: classic gondola shape — long pointed crescent */}
+                      <path d="M4 44 C 14 52, 30 56, 45 56 C 60 56, 76 52, 86 44 L 82 48 C 72 55, 58 58, 45 58 C 32 58, 18 55, 8 48 Z"
+                            fill="#2a2a2a" opacity="0.9"/>
+                      <path d="M4 44 C 14 50, 30 54, 45 54 C 60 54, 76 50, 86 44 L 86 46 C 76 52, 60 56, 45 56 C 30 56, 14 52, 4 46 Z"
+                            fill="#1a1a1a"/>
+                      {/* Prow curl (front) */}
+                      <path d="M86 44 C 88 40, 86 36, 84 38 C 83 40, 84 42, 86 44 Z" fill="#2a2a2a"/>
+                      {/* Stern flat */}
+                      <path d="M4 44 C 2 42, 3 40, 5 41 Z" fill="#2a2a2a"/>
+                      {/* Deck plank */}
+                      <rect x="18" y="42" width="54" height="3" rx="1" fill="#4a3a28"/>
+                      {/* Gondolier — body */}
+                      <rect x="42" y="22" width="6" height="22" rx="1.5" fill="#1e2a42"/>
+                      {/* Head */}
+                      <circle cx="45" cy="18" r="4" fill="#e8c7a0"/>
+                      {/* Striped shirt */}
+                      <rect x="42" y="24" width="6" height="2" fill="#fff"/>
+                      <rect x="42" y="28" width="6" height="2" fill="#fff"/>
+                      <rect x="42" y="32" width="6" height="2" fill="#fff"/>
+                      {/* Straw hat — with ribbon */}
+                      <ellipse cx="45" cy="13" rx="8" ry="1.6" fill="#d9b272"/>
+                      <path d="M40 13 Q 45 8 50 13 L 50 14 Q 45 10 40 14 Z" fill="#d9b272"/>
+                      <rect x="41" y="12.5" width="8" height="1" fill="#ed4245"/>
+                      {/* Oar (leaning) */}
+                      <line x1="52" y1="26" x2="78" y2="60" stroke="#8b6b3d" strokeWidth="1.8" strokeLinecap="round"/>
+                      <path d="M76 58 L 82 64 L 80 66 L 74 60 Z" fill="#8b6b3d"/>
+                    </svg>
+                    {/* Back waves (slower, paler) */}
+                    <svg className="gondola-waves-back" viewBox="0 0 300 40" fill="none" preserveAspectRatio="none">
+                      <path d="M0 20 Q 15 10 30 20 T 60 20 T 90 20 T 120 20 T 150 20 T 180 20 T 210 20 T 240 20 T 270 20 T 300 20 L 300 40 L 0 40 Z"
+                            fill="#5865f2"/>
+                    </svg>
+                    {/* Front waves (faster, stronger) */}
+                    <svg className="gondola-waves-front" viewBox="0 0 300 40" fill="none" preserveAspectRatio="none">
+                      <path d="M0 22 Q 10 14 20 22 T 40 22 T 60 22 T 80 22 T 100 22 T 120 22 T 140 22 T 160 22 T 180 22 T 200 22 T 220 22 T 240 22 T 260 22 T 280 22 T 300 22 L 300 40 L 0 40 Z"
+                            fill="#4752c4"/>
                     </svg>
                   </div>
                   <h2 style={s.emptyTitle}>Выбери чат</h2>

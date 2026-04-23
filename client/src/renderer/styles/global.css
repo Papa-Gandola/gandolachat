@@ -152,20 +152,50 @@ a { color: var(--text-link); text-decoration: none; }
   50% { transform: translateY(-6px); }
 }
 
-@keyframes discord-float {
-  0%, 100% { transform: translateY(0) rotate(-3deg); }
-  50% { transform: translateY(-12px) rotate(3deg); }
+/* Gondola rocking on waves (Discord empty chat) */
+@keyframes gondola-rock {
+  0%, 100% { transform: translateY(0) rotate(-4deg); }
+  50%      { transform: translateY(-4px) rotate(4deg); }
 }
-@keyframes discord-pulse {
-  0%, 100% { opacity: 0.9; filter: drop-shadow(0 0 12px rgba(88,101,242,0.35)); }
-  50% { opacity: 1; filter: drop-shadow(0 0 24px rgba(88,101,242,0.6)); }
+@keyframes wave-drift {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-40px); }
 }
-.discord-gandola-wrap {
-  display: inline-block;
-  animation: discord-float 5s ease-in-out infinite;
+@keyframes wave-drift-slow {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-60px); }
 }
-.discord-gandola-wrap svg {
-  animation: discord-pulse 3.5s ease-in-out infinite;
+.gondola-scene {
+  position: relative;
+  width: 220px;
+  height: 140px;
+  overflow: hidden;
+  filter: drop-shadow(0 6px 18px rgba(88,101,242,0.25));
+}
+.gondola-boat {
+  position: absolute;
+  left: 50%;
+  bottom: 52px;
+  transform-origin: 50% 70%;
+  animation: gondola-rock 4s ease-in-out infinite;
+  margin-left: -45px;
+}
+.gondola-waves-back,
+.gondola-waves-front {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 300px;
+  height: 40px;
+}
+.gondola-waves-back {
+  animation: wave-drift-slow 6s linear infinite;
+  opacity: 0.45;
+  bottom: 16px;
+}
+.gondola-waves-front {
+  animation: wave-drift 4s linear infinite;
+  bottom: 4px;
 }
 @keyframes neo-eye-blink {
   0%, 92%, 100% { transform: scaleY(1); }
