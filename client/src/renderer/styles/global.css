@@ -137,6 +137,15 @@ a { color: var(--text-link); text-decoration: none; }
 .msg-row-hover:hover {
   background: rgba(4, 4, 5, 0.12);
 }
+/* Brief flash when you jump to a message via reply preview */
+.msg-row-hover.msg-highlight {
+  background: rgba(88, 101, 242, 0.18);
+  transition: background 0.35s ease;
+}
+body.theme-neo .msg-row-hover.msg-highlight {
+  background: rgba(198, 255, 61, 0.12);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
 
 /* Neo Venezia decoration */
 @keyframes neo-blink {

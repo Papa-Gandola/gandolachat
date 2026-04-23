@@ -52,10 +52,16 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   });
   const [showFormatBar, setShowFormatBar] = useState(() => localStorage.getItem("showFormatBar") !== "false");
   const [sendFlash, setSendFlash] = useState(false);
+  const [highlightMsgId, setHighlightMsgId] = useState<number | null>(null);
+  const [atBottom, setAtBottom] = useState(true);
+  const [pendingSeenId, setPendingSeenId] = useState<number>(0); // highest msg id actually seen in viewport
+  const unreadSinceScrollRef = useRef<number>(0);
+  const [unreadSinceScroll, setUnreadSinceScroll] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const textInputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const atBottomRef = useRef(true);
 
   useEffect(() => {
     setMessages([]);
@@ -94,16 +100,31 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
           return next;
         });
       }
-      // Auto mark as read
-      wsService.send({ type: "mark_read", chat_id: chat.id, message_id: data.id });
-      if (data.sender_id !== currentUser.id) {
+      const isMine = data.sender_id === currentUser.id;
+      const atBottomNow = atBottomRef.current;
+      if (!isMine) {
         const isMuted = JSON.parse(localStorage.getItem("mutedChats") || "[]").includes(chat.id);
         if (!isMuted) {
           playMessageSound();
           showNotification(data.sender_username, data.content || "Sent a file");
         }
+        // Only auto-mark-read if the new message is going to be visible (we're at the bottom
+        // and the window has focus). Otherwise leave it unread — IntersectionObserver will
+        // mark it once it actually scrolls into view.
+        if (atBottomNow && document.hasFocus()) {
+          wsService.send({ type: "mark_read", chat_id: chat.id, message_id: data.id });
+        } else {
+          unreadSinceScrollRef.current += 1;
+          setUnreadSinceScroll(unreadSinceScrollRef.current);
+        }
+      } else {
+        // My own message: always mark as read (server knows this but keeps things consistent)
+        wsService.send({ type: "mark_read", chat_id: chat.id, message_id: data.id });
       }
-      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+      // Auto-scroll only if we were already at the bottom (or the new message is ours)
+      if (isMine || atBottomNow) {
+        setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+      }
     };
 
     const reconnectHandler = () => {
@@ -232,6 +253,46 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
 
   const [hasMore, setHasMore] = useState(true);
   const messagesRef = useRef<HTMLDivElement>(null);
+  const seenIdRef = useRef<number>(0);
+
+  // Mark messages as read only when they actually become visible in the viewport.
+  useEffect(() => {
+    const root = messagesRef.current;
+    if (!root) return;
+    const obs = new IntersectionObserver((entries) => {
+      let maxSeen = seenIdRef.current;
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const idStr = (entry.target as HTMLElement).dataset.msgId;
+        if (!idStr) continue;
+        const id = Number(idStr);
+        if (id > maxSeen && id > 0) maxSeen = id;
+      }
+      if (maxSeen > seenIdRef.current && document.hasFocus()) {
+        seenIdRef.current = maxSeen;
+        wsService.send({ type: "mark_read", chat_id: chat.id, message_id: maxSeen });
+      }
+    }, { root, threshold: 0.6 });
+    // Observe every rendered message row
+    root.querySelectorAll("[data-msg-id]").forEach((el) => obs.observe(el));
+    return () => obs.disconnect();
+  }, [chat.id, messages.length, pendingMsgs.length]);
+
+  // When the user focuses the window and we're at the bottom, flush-mark the last visible message.
+  useEffect(() => {
+    const onFocus = () => {
+      if (!atBottomRef.current) return;
+      const last = messages[messages.length - 1];
+      if (last && last.id > seenIdRef.current) {
+        seenIdRef.current = last.id;
+        wsService.send({ type: "mark_read", chat_id: chat.id, message_id: last.id });
+        unreadSinceScrollRef.current = 0;
+        setUnreadSinceScroll(0);
+      }
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [chat.id, messages]);
 
   async function loadMessages() {
     setLoading(true);
@@ -248,12 +309,13 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
         }
       });
       setReactions(rMap);
-      // Mark messages as read
-      if (res.data.length > 0) {
-        const lastMsg = res.data[res.data.length - 1];
-        wsService.send({ type: "mark_read", chat_id: chat.id, message_id: lastMsg.id });
-      }
-      setTimeout(() => bottomRef.current?.scrollIntoView(), 100);
+      // Don't mark-read blindly on load — IntersectionObserver will mark as
+      // messages actually scroll into view. Scroll to bottom on first open.
+      setTimeout(() => {
+        bottomRef.current?.scrollIntoView();
+        atBottomRef.current = true;
+        setAtBottom(true);
+      }, 100);
     } finally {
       setLoading(false);
     }
@@ -273,9 +335,24 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   }
 
   function handleMessagesScroll(e: React.UIEvent<HTMLDivElement>) {
-    if (e.currentTarget.scrollTop === 0 && hasMore) {
+    const el = e.currentTarget;
+    if (el.scrollTop === 0 && hasMore) {
       loadOlderMessages();
     }
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const isAtBottom = distanceFromBottom < 80;
+    atBottomRef.current = isAtBottom;
+    setAtBottom(isAtBottom);
+    if (isAtBottom && unreadSinceScrollRef.current > 0) {
+      unreadSinceScrollRef.current = 0;
+      setUnreadSinceScroll(0);
+    }
+  }
+
+  function jumpToBottom() {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    unreadSinceScrollRef.current = 0;
+    setUnreadSinceScroll(0);
   }
 
   function wrapSelection(marker: string) {
@@ -293,6 +370,20 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
       const newPos = end + marker.length * 2;
       ta.setSelectionRange(newPos, newPos);
     }, 0);
+  }
+
+  async function scrollToMessage(msgId: number) {
+    // If the target isn't in the current list, page older messages in until it is (or we run out).
+    let attempts = 0;
+    while (!messages.some((m) => m.id === msgId) && hasMore && attempts < 5) {
+      await loadOlderMessages();
+      attempts++;
+    }
+    const el = messagesRef.current?.querySelector(`[data-msg-id="${msgId}"]`);
+    if (!el) return;
+    (el as HTMLElement).scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightMsgId(msgId);
+    setTimeout(() => setHighlightMsgId((curr) => (curr === msgId ? null : curr)), 1500);
   }
 
   function handleTyping() {
@@ -376,11 +467,20 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   }
 
   function showNotification(title: string, body: string) {
+    const build = () => {
+      const n = new Notification(title, { body });
+      n.onclick = () => {
+        (window as any).electron?.focus?.();
+        window.dispatchEvent(new CustomEvent("switch-chat", { detail: { chatId: chat.id } }));
+        n.close();
+      };
+      return n;
+    };
     if (Notification.permission === "granted") {
-      new Notification(title, { body });
+      build();
     } else if (Notification.permission !== "denied") {
       Notification.requestPermission().then((p) => {
-        if (p === "granted") new Notification(title, { body });
+        if (p === "granted") build();
       });
     }
   }
@@ -556,7 +656,8 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
               return (
                 <div
                   key={msg.id}
-                  className="msg-row-hover"
+                  data-msg-id={msg.id}
+                  className={`msg-row-hover ${highlightMsgId === msg.id ? "msg-highlight" : ""}`}
                   style={{
                     ...s.msgRow,
                     marginTop: isGrouped ? 2 : 16,
@@ -615,7 +716,11 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                     )}
                     {/* Reply preview */}
                     {msg.reply_to_id && msg.reply_to_username && (
-                      <div style={s.replyPreview}>
+                      <div
+                        style={{ ...s.replyPreview, cursor: "pointer" }}
+                        onClick={(e) => { e.stopPropagation(); scrollToMessage(msg.reply_to_id!); }}
+                        title="Перейти к сообщению"
+                      >
                         <span style={s.replyAuthor}>{msg.reply_to_username}</span>
                         <span style={s.replyText}>{msg.reply_to_content || "..."}</span>
                       </div>
@@ -721,6 +826,57 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
         ))}
         <div ref={bottomRef} />
       </div>
+
+      {/* Jump-to-bottom floating button (Telegram-style) */}
+      {!atBottom && (
+        <button
+          onClick={jumpToBottom}
+          title="К последним сообщениям"
+          style={{
+            position: "absolute",
+            right: 24,
+            bottom: 130,
+            width: 44,
+            height: 44,
+            borderRadius: isNeo ? 0 : "50%",
+            background: isNeo ? "transparent" : "var(--bg-secondary)",
+            border: isNeo ? "1.5px solid var(--accent)" : "1px solid var(--border)",
+            color: isNeo ? "var(--accent)" : "var(--text-primary)",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+            zIndex: 40,
+            fontSize: 18,
+          }}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+          {unreadSinceScroll > 0 && (
+            <span style={{
+              position: "absolute",
+              top: -6,
+              right: -6,
+              minWidth: 20,
+              height: 20,
+              borderRadius: isNeo ? 0 : 10,
+              background: "#ed4245",
+              color: "#fff",
+              fontSize: 11,
+              fontWeight: 700,
+              padding: "0 5px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontFamily: isNeo ? "var(--font-mono)" : undefined,
+            }}>
+              {unreadSinceScroll > 99 ? "99+" : unreadSinceScroll}
+            </span>
+          )}
+        </button>
+      )}
 
       {/* Context menu */}
       {contextMenu && (

@@ -86,6 +86,18 @@ export default function Main({ token, user, onLogout }: Props) {
     return () => clearInterval(interval);
   }, [incomingCalls.length]);
 
+  // Switch to a chat when a notification is clicked (dispatched from ChatArea)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const chatId = (e as CustomEvent<{ chatId: number }>).detail?.chatId;
+      if (!chatId) return;
+      const target = chats.find((c) => c.id === chatId);
+      if (target) setActiveChat(target);
+    };
+    window.addEventListener("switch-chat", handler as EventListener);
+    return () => window.removeEventListener("switch-chat", handler as EventListener);
+  }, [chats]);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -168,7 +180,7 @@ export default function Main({ token, user, onLogout }: Props) {
       <div style={s.titleBar}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={s.titleText}>GandolaChat</span>
-          <span style={{ ...s.titleText, fontSize: 10, opacity: 0.6 }}>v2.0.5</span>
+          <span style={{ ...s.titleText, fontSize: 10, opacity: 0.6 }}>v2.0.6</span>
           <span
             style={{
               width: 8, height: 8, borderRadius: "50%", marginLeft: 4,
@@ -187,15 +199,40 @@ export default function Main({ token, user, onLogout }: Props) {
       </div>
 
       {/* Incoming call banners — multiple */}
-      {incomingCalls.map((call) => (
-        <div key={call.chatId} style={s.incomingCallBanner}>
-          <span>📞 Звонок: {getChatName(chats.find((c) => c.id === call.chatId) || { id: 0, name: "...", is_group: false, members: [], last_message: null })}</span>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button style={s.acceptBtn} onClick={() => acceptCall(call)}>Принять</button>
-            <button style={s.rejectBtn} onClick={() => rejectCall(call.chatId)}>Отклонить</button>
+      {incomingCalls.map((call) => {
+        const chatName = getChatName(chats.find((c) => c.id === call.chatId) || { id: 0, name: "...", is_group: false, members: [], last_message: null });
+        const neoStyle: React.CSSProperties = isNeo ? {
+          background: "transparent",
+          color: "var(--accent)",
+          border: "1.5px solid var(--accent)",
+          borderRadius: 0,
+          fontFamily: "var(--font-mono)",
+          letterSpacing: "0.05em",
+          boxShadow: "0 0 16px rgba(198,255,61,0.25)",
+        } : {};
+        const acceptNeo: React.CSSProperties = isNeo ? {
+          background: "var(--accent)", color: "var(--accent-text)",
+          borderRadius: 0, fontFamily: "var(--font-mono)", letterSpacing: "0.06em",
+        } : {};
+        const rejectNeo: React.CSSProperties = isNeo ? {
+          background: "transparent", color: "#ff3d6b",
+          border: "1px solid #ff3d6b", borderRadius: 0,
+          fontFamily: "var(--font-mono)", letterSpacing: "0.06em",
+        } : {};
+        return (
+          <div key={call.chatId} style={{ ...s.incomingCallBanner, ...neoStyle }}>
+            <span>{isNeo ? `● ВХОДЯЩИЙ · ${chatName}` : `📞 Звонок: ${chatName}`}</span>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button style={{ ...s.acceptBtn, ...acceptNeo }} onClick={() => acceptCall(call)}>
+                {isNeo ? "[ПРИНЯТЬ]" : "Принять"}
+              </button>
+              <button style={{ ...s.rejectBtn, ...rejectNeo }} onClick={() => rejectCall(call.chatId)}>
+                {isNeo ? "[ОТКЛОНИТЬ]" : "Отклонить"}
+              </button>
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
 
       <div style={s.body}>
         <Sidebar

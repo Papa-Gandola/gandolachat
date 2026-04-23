@@ -50,10 +50,45 @@ function parse(text: string): Node[] {
   return nodes;
 }
 
+// URLs (http(s)://…), stopped at whitespace. Trailing punctuation trimmed after match.
+const URL_RE = /(https?:\/\/[^\s<>]+)/gi;
+
+function renderText(text: string, keyBase: string): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  let lastIdx = 0;
+  let match: RegExpExecArray | null;
+  URL_RE.lastIndex = 0;
+  let counter = 0;
+  while ((match = URL_RE.exec(text)) !== null) {
+    let url = match[0];
+    // Trim common trailing punctuation that isn't part of the URL
+    const trailing = url.match(/[.,!?;:)\]}]+$/);
+    if (trailing) url = url.slice(0, url.length - trailing[0].length);
+    if (match.index > lastIdx) {
+      out.push(<React.Fragment key={`${keyBase}-t${counter++}`}>{text.slice(lastIdx, match.index)}</React.Fragment>);
+    }
+    out.push(
+      <a
+        key={`${keyBase}-l${counter++}`}
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        style={{ color: "var(--text-link)", textDecoration: "underline" }}
+      >{url}</a>
+    );
+    lastIdx = match.index + url.length;
+  }
+  if (lastIdx < text.length) {
+    out.push(<React.Fragment key={`${keyBase}-t${counter++}`}>{text.slice(lastIdx)}</React.Fragment>);
+  }
+  return out;
+}
+
 function renderNodes(nodes: Node[], key = 0): React.ReactNode[] {
   return nodes.map((node, idx) => {
     const k = `${key}-${idx}`;
-    if (node.type === "text") return <React.Fragment key={k}>{node.content as string}</React.Fragment>;
+    if (node.type === "text") return <React.Fragment key={k}>{renderText(node.content as string, k)}</React.Fragment>;
     const inner = renderNodes(node.content as Node[], idx);
     if (node.type === "bold") return <strong key={k}>{inner}</strong>;
     if (node.type === "italic") return <em key={k}>{inner}</em>;

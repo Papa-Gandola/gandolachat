@@ -15,4 +15,5 @@ contextBridge.exposeInMainWorld("electron", {
   setBadgeCount: (count: number, pngDataUrl?: string) => ipcRenderer.send("badge:set", count, pngDataUrl),
   getTrayBaseIcon: () => ipcRenderer.invoke("tray:getBaseIcon"),
   setTrayImage: (dataUrl: string) => ipcRenderer.send("tray:setImage", dataUrl),
+  focus: () => ipcRenderer.send("window:focus"),
 });

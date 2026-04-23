@@ -37,9 +37,20 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   const [screenSharing, setScreenSharing] = useState(false);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const [screenSources, setScreenSources] = useState<any[] | null>(null);
+  const [screenShareAudio, setScreenShareAudio] = useState(false);
   const [enlarged, setEnlarged] = useState<string | null>(null);
   const screenVideoRef = useRef<HTMLVideoElement>(null);
   const [minimized, setMinimized] = useState(false);
+  const [miniPos, setMiniPos] = useState(() => {
+    try {
+      const raw = localStorage.getItem("callMiniPos");
+      if (raw) {
+        const p = JSON.parse(raw);
+        if (typeof p.x === "number" && typeof p.y === "number") return p;
+      }
+    } catch {}
+    return { x: window.innerWidth - 280 - 16, y: window.innerHeight - 60 - 80, w: 280, h: 52 };
+  });
   const [callStartTime] = useState(Date.now());
   const [callDuration, setCallDuration] = useState("00:00");
   const [freeMode, setFreeMode] = useState(false);
@@ -177,6 +188,8 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
     webrtcService.onPeerLeft = (userId) => {
       setRemoteVideos((prev) => prev.filter((v) => v.userId !== userId));
       setRemoteScreens((prev) => prev.filter((v) => v.userId !== userId));
+      // Let everyone still in the call hear the drop sound when someone leaves.
+      playCallEndSound();
     };
 
     webrtcService.onCallEnded = () => {
@@ -225,8 +238,11 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   function toggleDeafen() {
     const newDeaf = !deafened;
     setDeafened(newDeaf);
-    // Mute/unmute all remote audio
+    // Mute/unmute all remote audio (webcam + any screen audio)
     remoteVideos.forEach((entry) => {
+      entry.stream.getAudioTracks().forEach((t) => (t.enabled = !newDeaf));
+    });
+    remoteScreens.forEach((entry) => {
       entry.stream.getAudioTracks().forEach((t) => (t.enabled = !newDeaf));
     });
   }
@@ -244,18 +260,44 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
     }
   }
 
-  async function startScreenShare(sourceId: string) {
+  async function startScreenShare(sourceId: string, withAudio: boolean) {
     setScreenSources(null);
     try {
-      const stream = await (navigator.mediaDevices as any).getUserMedia({
-        audio: false,
-        video: {
-          mandatory: {
-            chromeMediaSource: "desktop",
-            chromeMediaSourceId: sourceId,
-          },
+      // Windows: Chromium supports capturing desktop audio alongside desktop video
+      // when BOTH audio and video constraints use chromeMediaSource: "desktop".
+      // audio-only constraint without video raises NotSupportedError on most OSes.
+      const videoConstraint: any = {
+        mandatory: {
+          chromeMediaSource: "desktop",
+          chromeMediaSourceId: sourceId,
         },
-      });
+      };
+      const audioConstraint: any = withAudio ? {
+        mandatory: {
+          chromeMediaSource: "desktop",
+          // No sourceId here — Electron uses the default desktop loopback on Windows
+        },
+      } : false;
+
+      let stream: MediaStream;
+      try {
+        stream = await (navigator.mediaDevices as any).getUserMedia({
+          audio: audioConstraint,
+          video: videoConstraint,
+        });
+      } catch (err) {
+        // Fallback: maybe OS refused loopback audio — retry video-only.
+        if (withAudio) {
+          console.warn("[screen] audio capture rejected, retrying without audio", err);
+          stream = await (navigator.mediaDevices as any).getUserMedia({
+            audio: false,
+            video: videoConstraint,
+          });
+        } else {
+          throw err;
+        }
+      }
+
       // Open a dedicated peer connection per member carrying the screen stream,
       // so remote peers see webcam AND screen simultaneously (two separate tiles).
       webrtcService.startScreenShare(stream);
@@ -264,7 +306,9 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
       wsService.send({ type: "screen_share_status", chat_id: chat.id, sharing: true });
       const screenTrack = stream.getVideoTracks()[0];
       screenTrack.onended = () => stopScreenShare();
-    } catch {}
+    } catch (err) {
+      console.error("[screen] failed to start share", err);
+    }
   }
 
   function stopScreenShare() {
@@ -329,6 +373,49 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
 
   const callName = chat.is_group ? chat.name : chat.members.find((m) => m.id !== currentUser.id)?.username;
 
+  function startMiniDrag(e: React.MouseEvent, mode: "move" | "resize") {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startPos = { ...miniPos };
+    let last = { ...startPos };
+    let raf: number | null = null;
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (mode === "move") {
+        const maxX = window.innerWidth - last.w;
+        const maxY = window.innerHeight - last.h;
+        last = {
+          ...startPos,
+          x: Math.max(0, Math.min(maxX, startPos.x + dx)),
+          y: Math.max(40, Math.min(maxY, startPos.y + dy)),
+        };
+      } else {
+        const maxW = window.innerWidth - startPos.x - 4;
+        const maxH = window.innerHeight - startPos.y - 4;
+        last = {
+          ...startPos,
+          w: Math.max(180, Math.min(maxW, startPos.w + dx)),
+          h: Math.max(44, Math.min(maxH, startPos.h + dy)),
+        };
+      }
+      if (raf === null) {
+        raf = requestAnimationFrame(() => { setMiniPos(last); raf = null; });
+      }
+    };
+    const onUp = () => {
+      if (raf !== null) cancelAnimationFrame(raf);
+      setMiniPos(last);
+      try { localStorage.setItem("callMiniPos", JSON.stringify(last)); } catch {}
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
   if (minimized) {
     return (
       <>
@@ -338,39 +425,80 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
         ))}
         <div
           style={{
-            ...s.miniBar,
-            ...(isNeo ? {
-              background: "#0a0a0a",
-              border: "1.5px solid var(--accent)",
-              borderRadius: 0,
-              boxShadow: "0 0 12px rgba(198,255,61,0.35)",
-            } : {}),
+            position: "fixed",
+            left: miniPos.x,
+            top: miniPos.y,
+            width: miniPos.w,
+            height: miniPos.h,
+            zIndex: 200,
+            background: isNeo ? "#0a0a0a" : "#3ba55d",
+            border: isNeo ? "1.5px solid var(--accent)" : "none",
+            borderRadius: isNeo ? 0 : 8,
+            boxShadow: isNeo ? "0 0 12px rgba(198,255,61,0.35)" : "0 4px 12px rgba(0,0,0,0.3)",
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            padding: "8px 14px",
+            cursor: "move",
+            userSelect: "none",
           }}
-          onClick={() => setMinimized(false)}
+          onMouseDown={(e) => {
+            // Skip drag if click started on a button or the resize corner
+            const target = e.target as HTMLElement;
+            if (target.closest("button") || target.closest("[data-mini-resize]")) return;
+            startMiniDrag(e, "move");
+          }}
+          onDoubleClick={() => setMinimized(false)}
+          title="Перетаскивай за панель • Двойной клик — развернуть • Правый нижний угол — ресайз"
         >
-          <span style={{ ...s.miniText, ...mono, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.05em" } : {}) }}>
+          <span style={{ ...s.miniText, ...mono, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.05em" } : {}), flex: 1, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
             {isNeo ? (
               <><span style={{ animation: "neo-blink 1.2s infinite" }}>●</span> LIVE · {callName} · [{remoteVideos.length + 1}]</>
             ) : (
-              <>📞 {callName} — {remoteVideos.length + 1} участник(ов)</>
+              <>📞 {callName} — {remoteVideos.length + 1}</>
             )}
           </span>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
             <button
               style={{ ...s.miniBtn, ...(isNeo ? { borderRadius: 0, border: "1px solid var(--border)", background: "transparent" } : {}) }}
               onClick={(e) => { e.stopPropagation(); toggleMute(); }}
+              title={muted ? "Включить микрофон" : "Заглушить"}
             >
               <MicIcon muted={muted} color={isNeo ? "var(--accent)" : "#fff"} />
             </button>
             <button
+              style={{ ...s.miniBtn, background: "transparent", border: "1px solid rgba(255,255,255,0.4)", ...(isNeo ? { borderRadius: 0, borderColor: "var(--accent)" } : {}) }}
+              onClick={(e) => { e.stopPropagation(); setMinimized(false); }}
+              title="Развернуть"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={isNeo ? "var(--accent)" : "white"} strokeWidth="2.5" strokeLinecap="round"><polyline points="4 10 10 4 10 10" /><polyline points="20 14 14 20 14 14" /></svg>
+            </button>
+            <button
               style={{ ...s.miniBtn, background: "#ed4245", ...(isNeo ? { borderRadius: 0 } : {}) }}
               onClick={(e) => { e.stopPropagation(); handleEnd(); }}
+              title="Завершить"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="white">
                 <path d="M12 9c-1.66 0-3 1.34-3 3v2H5c-1.1 0-2-.9-2-2v-1c0-3.87 3.13-7 7-7h4c3.87 0 7 3.13 7 7v1c0 1.1-.9 2-2 2h-4v-2c0-1.66-1.34-3-3-3z" transform="rotate(135 12 12)"/>
               </svg>
             </button>
           </div>
+          {/* Resize handle (bottom-right corner) */}
+          <div
+            data-mini-resize
+            onMouseDown={(e) => startMiniDrag(e, "resize")}
+            style={{
+              position: "absolute",
+              right: 0,
+              bottom: 0,
+              width: 14,
+              height: 14,
+              cursor: "nwse-resize",
+              background: isNeo ? "var(--accent)" : "rgba(255,255,255,0.5)",
+              clipPath: "polygon(100% 0, 100% 100%, 0 100%)",
+              opacity: 0.6,
+            }}
+          />
         </div>
       </>
     );
@@ -499,7 +627,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
               onMouseDown={(e) => freeMode && startDrag(screenKey, e, "move")}
               onClick={() => !freeMode && setEnlarged(enlarged === screenKey ? null : screenKey)}
             >
-              <RemoteScreenVideo stream={entry.stream} freeMode={!!freeMode} enlarged={enlarged === screenKey} />
+              <RemoteScreenVideo stream={entry.stream} freeMode={!!freeMode} enlarged={enlarged === screenKey} deafened={deafened} />
               {isNeo && <NeoCorners />}
               <span style={{ ...s.videoLabel, ...mono, ...(isNeo ? { background: "rgba(10,10,10,0.85)", color: "var(--accent)", borderRadius: 0, border: "1px solid var(--accent)", letterSpacing: "0.05em" } : {}) }}>
                 📺 {isNeo ? `@${member?.username || "?"}_screen` : `${member?.username || "?"} (экран)`}
@@ -524,9 +652,19 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
           <div style={{ ...s.sourceTitle, ...mono, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.08em", textTransform: "uppercase" } : {}) }}>
             {isNeo ? "// ВЫБЕРИ_ЭКРАН" : "Выберите экран для демонстрации"}
           </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", cursor: "pointer", color: isNeo ? "var(--accent)" : "var(--text-primary)", fontSize: 13, ...mono }}>
+            <input
+              type="checkbox"
+              checked={screenShareAudio}
+              onChange={(e) => setScreenShareAudio(e.target.checked)}
+              style={{ accentColor: "var(--accent)" }}
+            />
+            {isNeo ? "// захватить_звук_системы" : "Захватить звук системы"}
+            <span style={{ fontSize: 11, opacity: 0.6, marginLeft: "auto" }}>{isNeo ? "(Windows)" : "(только Windows)"}</span>
+          </label>
           <div style={s.sourceGrid}>
             {screenSources.map((src: any) => (
-              <div key={src.id} style={{ ...s.sourceItem, ...(isNeo ? { borderRadius: 0, border: "1px solid var(--border)", background: "transparent" } : {}) }} onClick={() => startScreenShare(src.id)}>
+              <div key={src.id} style={{ ...s.sourceItem, ...(isNeo ? { borderRadius: 0, border: "1px solid var(--border)", background: "transparent" } : {}) }} onClick={() => startScreenShare(src.id, screenShareAudio)}>
                 <img src={src.thumbnail} style={{ ...s.sourceThumbnail, ...(isNeo ? { borderRadius: 0 } : {}) }} alt={src.name} />
                 <span style={{ ...s.sourceName, ...mono }}>{src.name}</span>
               </div>
@@ -869,29 +1007,22 @@ function NeoCorners() {
   );
 }
 
-function RemoteScreenVideo({ stream, freeMode, enlarged }: { stream: MediaStream; freeMode: boolean; enlarged: boolean }) {
+function RemoteScreenVideo({ stream, freeMode, enlarged, deafened }: { stream: MediaStream; freeMode: boolean; enlarged: boolean; deafened?: boolean }) {
   const ref = useRef<HTMLVideoElement>(null);
+  const hasAudio = stream.getAudioTracks().length > 0;
   useEffect(() => {
     if (!ref.current) return;
-    const tracks = stream.getTracks().map((t) => `${t.kind}:${t.readyState}:enabled=${t.enabled}:muted=${t.muted}`);
-    console.log("[UI] RemoteScreenVideo mounting stream", tracks);
     ref.current.srcObject = stream;
-    ref.current.muted = true;
-    ref.current.play().catch((err) => console.warn("[UI] screen video.play() rejected:", err.message));
-    // Also react to track additions in case stream was created before tracks attached
-    const onAddTrack = () => {
-      console.log("[UI] screen track added late", stream.getTracks().length);
-    };
-    stream.addEventListener("addtrack", onAddTrack);
-    return () => stream.removeEventListener("addtrack", onAddTrack);
-  }, [stream]);
+    // Mute only when there's no audio to play (or user has deafened everyone).
+    ref.current.muted = !hasAudio || !!deafened;
+    ref.current.play().catch(() => {});
+  }, [stream, hasAudio, deafened]);
   return (
     <video
       ref={ref}
       autoPlay
       playsInline
-      muted
-      onLoadedMetadata={() => console.log("[UI] screen video metadata loaded")}
+      muted={!hasAudio || !!deafened}
       style={freeMode
         ? { width: "100%", height: "100%", objectFit: "contain" as const, display: "block", pointerEvents: "none" as const }
         : (enlarged ? { width: "100%", height: "auto", maxHeight: "60vh", objectFit: "contain" as const, display: "block" } : { width: 280, height: 210, objectFit: "contain" as const, display: "block" })}
@@ -947,6 +1078,7 @@ const s: Record<string, React.CSSProperties> = {
   videoWrap: {
     position: "relative", borderRadius: 8, overflow: "hidden",
     background: "#18191c", transition: "all 0.3s",
+    width: 280, height: 210, minWidth: 280, minHeight: 210,
   },
   enlarged: { width: "50%", maxWidth: "50%" },
   video: { width: 280, height: 210, objectFit: "cover", display: "block" },

@@ -4,10 +4,8 @@ import path from "path";
 import fs from "fs";
 const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
 
-// Performance flags for high refresh rate monitors
+// Let Chromium hibernate rendering when the window is fully covered (idle CPU win).
 app.commandLine.appendSwitch("enable-features", "CalculateNativeWinOcclusion");
-app.commandLine.appendSwitch("disable-frame-rate-limit");
-app.commandLine.appendSwitch("disable-gpu-vsync");
 
 let tray: Tray | null = null;
 let isQuitting = false;
@@ -43,7 +41,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       webSecurity: false,
-      backgroundThrottling: false,
+      backgroundThrottling: true,
     },
   });
 
@@ -76,7 +74,7 @@ function createWindow() {
 
 function createTray() {
   if (tray) return;
-  tray = new Tray(path.join(__dirname, "../../assets/icon.ico"));
+  tray = new Tray(path.join(__dirname, "../../assets/gandola.ico"));
   tray.setToolTip("GandolaChat");
   const showWin = () => {
     if (!mainWindow) return;
@@ -178,6 +176,12 @@ ipcMain.on("window:maximize", () => {
 ipcMain.on("window:close", () => { isQuitting = true; app.quit(); });
 ipcMain.on("window:hide", () => mainWindow?.hide());
 ipcMain.on("window:quit", () => { isQuitting = true; app.quit(); });
+ipcMain.on("window:focus", () => {
+  if (!mainWindow) return;
+  if (!mainWindow.isVisible()) mainWindow.show();
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.focus();
+});
 
 // Unread badge on taskbar icon (Telegram-style red circle with number).
 // Renderer builds the PNG via canvas (Electron on Windows doesn't decode SVG
@@ -185,14 +189,21 @@ ipcMain.on("window:quit", () => { isQuitting = true; app.quit(); });
 // Expose base app icon to the renderer so it can composite a red-dot tray
 // version when there are unread messages.
 ipcMain.handle("tray:getBaseIcon", () => {
-  try {
-    const iconPath = path.join(__dirname, "../../assets/icon.png");
-    const buf = fs.readFileSync(iconPath);
-    return "data:image/png;base64," + buf.toString("base64");
-  } catch (err) {
-    console.error("[tray] base icon read failed", err);
-    return null;
+  // Return the base PNG for the tray renderer to composite a red-dot version over.
+  // Prefer a PNG if present (canvas Image handles it cleanly); fall back to the ICO bytes.
+  const tryPaths = [
+    path.join(__dirname, "../../assets/gandola.png"),
+    path.join(__dirname, "../../assets/icon.png"),
+    path.join(__dirname, "../../assets/gandola.ico"),
+  ];
+  for (const p of tryPaths) {
+    try {
+      const buf = fs.readFileSync(p);
+      const mime = p.endsWith(".png") ? "image/png" : "image/x-icon";
+      return `data:${mime};base64,` + buf.toString("base64");
+    } catch {}
   }
+  return null;
 });
 
 ipcMain.on("tray:setImage", (_e, dataUrl: string) => {
