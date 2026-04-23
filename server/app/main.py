@@ -62,7 +62,10 @@ async def cleanup_expired_messages():
     async with AsyncSessionLocal() as db:
         now = datetime.now(timezone.utc)
         await db.execute(
-            Message.__table__.delete().where(Message.expires_at < now)
+            Message.__table__.delete().where(
+                Message.expires_at.is_not(None),
+                Message.expires_at < now,
+            )
         )
         await db.commit()
 
@@ -73,6 +76,14 @@ _scheduler = None
 async def startup():
     global _scheduler
     await init_db()
+    # Preserve existing messages: drop TTL from any rows still carrying one.
+    async with AsyncSessionLocal() as db:
+        await db.execute(
+            Message.__table__.update()
+            .where(Message.expires_at.is_not(None))
+            .values(expires_at=None)
+        )
+        await db.commit()
     _scheduler = AsyncIOScheduler()
     _scheduler.add_job(cleanup_expired_messages, "interval", hours=1)
     _scheduler.start()

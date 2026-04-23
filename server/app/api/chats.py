@@ -236,6 +236,24 @@ async def leave_chat(
     return {"ok": True}
 
 
+@router.delete("/admin/messages/old")
+async def admin_delete_old_messages(
+    before_days: int = 30,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.username != "Papa Gandola":
+        raise HTTPException(403, "Admin only")
+    if before_days < 1:
+        raise HTTPException(400, "before_days must be >= 1")
+    cutoff = datetime.now(timezone.utc) - timedelta(days=before_days)
+    result = await db.execute(
+        delete(Message).where(Message.created_at < cutoff)
+    )
+    await db.commit()
+    return {"deleted": result.rowcount, "before": cutoff.isoformat()}
+
+
 @router.delete("/{chat_id}")
 async def delete_chat(
     chat_id: int,
@@ -320,13 +338,11 @@ async def upload_file(
             raise HTTPException(400, f"File too large (max {settings.MAX_FILE_SIZE_MB}MB)")
         await f.write(content)
 
-    expires_at = datetime.now(timezone.utc) + timedelta(days=settings.MESSAGE_TTL_DAYS)
     msg = Message(
         chat_id=chat_id,
         sender_id=current_user.id,
         file_url=f"/uploads/files/{filename}",
         file_name=file.filename,
-        expires_at=expires_at,
     )
     db.add(msg)
     await db.commit()

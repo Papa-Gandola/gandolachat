@@ -201,6 +201,79 @@ body.theme-neo .online-dot {
   box-shadow: 0 0 0 2px var(--bg-secondary), 0 0 6px var(--accent) !important;
 }
 
+/* ReadBar — per-message status indicator (3 notches) */
+.readbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  vertical-align: middle;
+  margin-left: 4px;
+}
+.readbar .notch {
+  width: 5px;
+  height: 8px;
+  background: currentColor;
+  opacity: 0.25;
+  border-radius: 1px;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.readbar .notch.on {
+  opacity: 1;
+}
+body.theme-neo .readbar .notch {
+  border-radius: 0;
+  width: 3px;
+  height: 10px;
+}
+.readbar.just-updated .notch.on {
+  animation: readbar-pulse 0.4s ease;
+}
+@keyframes readbar-pulse {
+  0% { transform: scaleY(0.6); }
+  50% { transform: scaleY(1.2); }
+  100% { transform: scaleY(1); }
+}
+@keyframes readbar-shimmer {
+  0%, 100% { opacity: 0.2; }
+  50% { opacity: 0.6; }
+}
+.readbar .notch.shimmer {
+  animation: readbar-shimmer 1s ease-in-out infinite;
+}
+.readbar .notch.shimmer:nth-child(2) { animation-delay: 0.15s; }
+.readbar .notch.shimmer:nth-child(3) { animation-delay: 0.3s; }
+
+/* Date divider: centered line with label */
+.date-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0 8px;
+}
+.date-divider::before,
+.date-divider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+body.theme-neo .date-divider::before,
+body.theme-neo .date-divider::after {
+  border-top-color: var(--accent);
+  opacity: 0.35;
+}
+.date-divider .label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+body.theme-neo .date-divider .label {
+  font-family: var(--font-mono);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
 /* Utility */
 .flex { display: flex; }
 .flex-col { flex-direction: column; }

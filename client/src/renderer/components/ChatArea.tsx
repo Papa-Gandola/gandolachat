@@ -49,6 +49,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     const muted = JSON.parse(localStorage.getItem("mutedChats") || "[]");
     return muted.includes(chat.id);
   });
+  const [showFormatBar, setShowFormatBar] = useState(() => localStorage.getItem("showFormatBar") !== "false");
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const textInputRef = useRef<HTMLTextAreaElement>(null);
@@ -466,12 +467,8 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
 
         {grouped.map((group) => (
           <div key={group.date}>
-            <div style={s.dateSep}>
-              {!isNeo && <hr style={s.dateLine} />}
-              <span style={{ ...s.dateLabel, ...(isNeo ? { ...mono, letterSpacing: 1, textTransform: "uppercase" as const } : {}) }}>
-                {isNeo ? `── ${group.date} ──` : group.date}
-              </span>
-              {!isNeo && <hr style={s.dateLine} />}
+            <div className="date-divider">
+              <span className="label">{group.date}</span>
             </div>
             {group.messages.map((msg, i) => {
               const prev = group.messages[i - 1];
@@ -539,13 +536,6 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                           {isMine ? "Вы" : msg.sender_username}
                         </span>
                         <span style={{ ...s.msgTime, ...(isNeo ? mono : {}), ...(isNeo && isMine ? { color: "rgba(10,10,10,0.55)" } : {}) }}>{formatTime(msg.created_at)}</span>
-                        {msg.is_edited && <span style={{ ...s.editedTag, ...(isNeo ? mono : {}), ...(isNeo && isMine ? { color: "rgba(10,10,10,0.55)" } : {}) }}>(ред.)</span>}
-                        {isMine && (() => {
-                          const otherMembers = chat.members.filter((m) => m.id !== currentUser.id);
-                          const allRead = otherMembers.every((m) => (readBy.get(m.id) || 0) >= msg.id);
-                          const neoMineColor = isNeo && isMine ? "rgba(10,10,10,0.75)" : (allRead ? "var(--accent)" : "var(--text-muted)");
-                          return <span style={{ ...s.readCheck, color: neoMineColor, ...(isNeo ? mono : {}) }}>{allRead ? "✓✓" : "✓"}</span>;
-                        })()}
                       </div>
                     )}
                     {/* Reply preview */}
@@ -617,6 +607,34 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                         </a>
                       )
                     )}
+                    {/* Per-message footer: edited marker + ReadBar — shown on every own/edited msg */}
+                    {(msg.is_edited || isMine) && (
+                      <div style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "flex-end",
+                        gap: 6,
+                        marginTop: 2,
+                        fontSize: 10,
+                        color: isNeo && isMine ? "rgba(10,10,10,0.6)" : "var(--text-muted)",
+                        fontFamily: "var(--font-mono)",
+                      }}>
+                        {msg.is_edited && (
+                          <span style={{
+                            letterSpacing: 0.5,
+                            opacity: 0.75,
+                            textTransform: "lowercase" as const,
+                          }}>[ред.]</span>
+                        )}
+                        {isMine && (() => {
+                          const otherMembers = chat.members.filter((m) => m.id !== currentUser.id);
+                          const anyRead = otherMembers.some((m) => (readBy.get(m.id) || 0) >= msg.id);
+                          const allRead = otherMembers.length > 0 && otherMembers.every((m) => (readBy.get(m.id) || 0) >= msg.id);
+                          const status: ReadStatus = allRead ? "read" : (anyRead ? "delivered" : "sent");
+                          return <ReadBar status={status} />;
+                        })()}
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -653,14 +671,30 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
         {isNeo ? `> ${typingText.replace("печатает...", "typing_")}` : typingText}
       </div>}
 
-      {/* Format toolbar */}
-      <div style={s.formatBar}>
+      {/* Format toolbar — collapsible drawer */}
+      <div style={{ ...s.formatBar, overflow: "hidden", padding: showFormatBar ? "4px 16px" : "0 16px", maxHeight: showFormatBar ? 40 : 0, transition: "max-height 0.2s ease, padding 0.2s ease", borderTop: showFormatBar ? "1px solid var(--border)" : "none" }}>
         <button type="button" style={{ ...s.formatBtn, ...(isNeo ? mono : {}) }} onClick={() => wrapSelection("**")} title="Жирный"><b>B</b></button>
         <button type="button" style={{ ...s.formatBtn, ...(isNeo ? mono : {}) }} onClick={() => wrapSelection("*")} title="Курсив"><i>I</i></button>
         <button type="button" style={{ ...s.formatBtn, ...(isNeo ? mono : {}) }} onClick={() => wrapSelection("__")} title="Подчёркнутый"><u>U</u></button>
         <button type="button" style={{ ...s.formatBtn, ...(isNeo ? mono : {}) }} onClick={() => wrapSelection("~~")} title="Зачёркнутый"><s>S</s></button>
         <button type="button" style={{ ...s.formatBtn, ...(isNeo ? mono : {}) }} onClick={() => wrapSelection("||")} title="Спойлер">▮</button>
+        <button
+          type="button"
+          title="Скрыть панель форматирования"
+          onClick={() => { setShowFormatBar(false); localStorage.setItem("showFormatBar", "false"); }}
+          style={{ ...s.formatBtn, marginLeft: "auto", color: "var(--text-muted)" }}
+        >▾</button>
       </div>
+      {!showFormatBar && (
+        <div style={{ display: "flex", justifyContent: "center", padding: "2px 0", borderTop: "1px solid var(--border)" }}>
+          <button
+            type="button"
+            title="Показать форматирование"
+            onClick={() => { setShowFormatBar(true); localStorage.setItem("showFormatBar", "true"); }}
+            style={{ background: "none", color: "var(--text-muted)", fontSize: 10, padding: "2px 12px", letterSpacing: 2, ...(isNeo ? mono : {}) }}
+          >▴ Aa</button>
+        </div>
+      )}
 
       {/* Reply preview bar */}
       {replyTo && (
@@ -750,6 +784,35 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
         }} disabled={!text.trim()}>{isNeo ? "SEND" : "➤"}</button>
       </form>
     </div>
+  );
+}
+
+type ReadStatus = "sending" | "sent" | "delivered" | "read";
+
+function ReadBar({ status }: { status: ReadStatus }) {
+  const fill = { sending: 0, sent: 1, delivered: 2, read: 3 }[status];
+  const [pulse, setPulse] = React.useState(false);
+  const prev = React.useRef(status);
+  React.useEffect(() => {
+    if (prev.current !== status && fill > 0) {
+      setPulse(true);
+      const t = setTimeout(() => setPulse(false), 400);
+      prev.current = status;
+      return () => clearTimeout(t);
+    }
+    prev.current = status;
+  }, [status, fill]);
+  return (
+    <span className={`readbar ${pulse ? "just-updated" : ""}`} aria-label={status}>
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          className={
+            `notch ${i < fill ? "on" : ""} ${status === "sending" ? "shimmer" : ""}`
+          }
+        />
+      ))}
+    </span>
   );
 }
 

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { ChatOut, UserOut, chatApi, userApi, authApi, getFileUrl } from "../services/api";
 import { wsService } from "../services/ws";
-import { applyTheme, getTheme, Theme, useTheme } from "../services/theme";
+import { applyTheme, getTheme, Theme, useTheme, getNeoColors, saveNeoColors, resetNeoColors, DEFAULT_NEO_COLORS } from "../services/theme";
 
 interface Props {
   chats: ChatOut[];
@@ -28,6 +28,7 @@ export default function Sidebar({
   const [showPending, setShowPending] = useState(false);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [currentTheme, setCurrentTheme] = useState<Theme>(getTheme());
+  const [neoColors, setNeoColors] = useState(getNeoColors());
   const theme = useTheme();
   const isNeo = theme === "neo";
   const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
@@ -70,7 +71,11 @@ export default function Sidebar({
     if (isAdmin) wsService.on("new_pending_user", onPending);
     chatApi.getUnreadCounts().then((res) => {
       const m = new Map<number, number>();
-      Object.entries(res.data).forEach(([k, v]) => m.set(Number(k), v));
+      Object.entries(res.data).forEach(([k, v]) => {
+        const id = Number(k);
+        if (id === activeChatId) return;
+        m.set(id, v);
+      });
       setUnread(m);
     }).catch(() => {});
 
@@ -411,6 +416,28 @@ export default function Sidebar({
           <span style={{ ...s.userName, ...(isNeo ? mono : {}) }}>{currentUser.username}</span>
           {currentUser.status && <span style={{ ...s.userSub, ...(isNeo ? mono : {}) }}>{isNeo ? currentUser.status + "_" : currentUser.status}</span>}
         </div>
+        {(() => {
+          const total = Array.from(unread.values()).reduce((a, b) => a + b, 0);
+          if (total === 0) return null;
+          return (
+            <span
+              title={`Непрочитанных: ${total}`}
+              style={{
+                background: "var(--accent)",
+                color: "var(--accent-text)",
+                fontSize: 11,
+                fontWeight: 700,
+                padding: "2px 7px",
+                borderRadius: isNeo ? 0 : 10,
+                minWidth: 18,
+                textAlign: "center",
+                ...(isNeo ? mono : {}),
+              }}
+            >
+              {total > 99 ? "99+" : total}
+            </span>
+          );
+        })()}
         <div style={{ position: "relative" }}>
           <button style={s.settingsBtn} title="Настройки" onClick={() => setShowSettingsMenu(!showSettingsMenu)}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -434,6 +461,48 @@ export default function Sidebar({
                       onClick={() => { applyTheme("neo"); setCurrentTheme("neo"); }}>Neo</button>
                   </div>
                 </div>
+                {currentTheme === "neo" && (
+                  <>
+                    <div style={{ ...s.settingsMenuItem, cursor: "default", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                      <span style={{ fontSize: 12 }}>🖼 Фон</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <input
+                          type="color"
+                          value={neoColors.bg}
+                          onChange={(e) => {
+                            const next = { ...neoColors, bg: e.target.value };
+                            setNeoColors(next);
+                            saveNeoColors(next);
+                          }}
+                          style={{ width: 28, height: 20, border: "none", background: "none", cursor: "pointer", padding: 0 }}
+                        />
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-muted)" }}>{neoColors.bg}</span>
+                      </div>
+                    </div>
+                    <div style={{ ...s.settingsMenuItem, cursor: "default", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                      <span style={{ fontSize: 12 }}>⚡ Акцент</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <input
+                          type="color"
+                          value={neoColors.accent}
+                          onChange={(e) => {
+                            const next = { ...neoColors, accent: e.target.value };
+                            setNeoColors(next);
+                            saveNeoColors(next);
+                          }}
+                          style={{ width: 28, height: 20, border: "none", background: "none", cursor: "pointer", padding: 0 }}
+                        />
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-muted)" }}>{neoColors.accent}</span>
+                      </div>
+                    </div>
+                    <button
+                      style={{ ...s.settingsMenuItem, fontSize: 12, color: "var(--text-muted)" }}
+                      onClick={() => { resetNeoColors(); setNeoColors(DEFAULT_NEO_COLORS); }}
+                    >
+                      ↺ Сбросить цвета
+                    </button>
+                  </>
+                )}
                 <button style={s.settingsMenuItem} onClick={() => {
                   setShowSettingsMenu(false);
                   setUpdateStatus(null);

@@ -50,13 +50,11 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                 if target_chat_id and original_content:
                     sender_result = await db.execute(select(User).where(User.id == user_id))
                     sender = sender_result.scalar_one()
-                    expires_at = datetime.now(timezone.utc) + timedelta(days=settings.MESSAGE_TTL_DAYS)
                     fwd_content = f"[Переслано от {original_author}]\n{original_content}"
                     msg = Message(
                         chat_id=target_chat_id,
                         sender_id=user_id,
                         content=fwd_content,
-                        expires_at=expires_at,
                     )
                     db.add(msg)
                     await db.commit()
@@ -289,8 +287,6 @@ async def handle_message(data: dict, sender_id: int, db: AsyncSession):
     sender_result = await db.execute(select(User).where(User.id == sender_id))
     sender = sender_result.scalar_one()
 
-    expires_at = datetime.now(timezone.utc) + timedelta(days=settings.MESSAGE_TTL_DAYS)
-
     # Build reply info
     reply_to_username = None
     reply_to_content = None
@@ -309,7 +305,6 @@ async def handle_message(data: dict, sender_id: int, db: AsyncSession):
         sender_id=sender_id,
         content=content,
         reply_to_id=reply_to_id,
-        expires_at=expires_at,
     )
     db.add(msg)
 
