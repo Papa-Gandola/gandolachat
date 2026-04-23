@@ -168,7 +168,7 @@ export default function Main({ token, user, onLogout }: Props) {
       <div style={s.titleBar}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={s.titleText}>GandolaChat</span>
-          <span style={{ ...s.titleText, fontSize: 10, opacity: 0.6 }}>v2.0.3</span>
+          <span style={{ ...s.titleText, fontSize: 10, opacity: 0.6 }}>v2.0.4</span>
           <span
             style={{
               width: 8, height: 8, borderRadius: "50%", marginLeft: 4,
