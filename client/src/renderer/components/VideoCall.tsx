@@ -872,10 +872,18 @@ function NeoCorners() {
 function RemoteScreenVideo({ stream, freeMode, enlarged }: { stream: MediaStream; freeMode: boolean; enlarged: boolean }) {
   const ref = useRef<HTMLVideoElement>(null);
   useEffect(() => {
-    if (ref.current) {
-      ref.current.srcObject = stream;
-      ref.current.muted = true; // screens don't send audio; mute just in case
-    }
+    if (!ref.current) return;
+    const tracks = stream.getTracks().map((t) => `${t.kind}:${t.readyState}:enabled=${t.enabled}:muted=${t.muted}`);
+    console.log("[UI] RemoteScreenVideo mounting stream", tracks);
+    ref.current.srcObject = stream;
+    ref.current.muted = true;
+    ref.current.play().catch((err) => console.warn("[UI] screen video.play() rejected:", err.message));
+    // Also react to track additions in case stream was created before tracks attached
+    const onAddTrack = () => {
+      console.log("[UI] screen track added late", stream.getTracks().length);
+    };
+    stream.addEventListener("addtrack", onAddTrack);
+    return () => stream.removeEventListener("addtrack", onAddTrack);
   }, [stream]);
   return (
     <video
@@ -883,6 +891,7 @@ function RemoteScreenVideo({ stream, freeMode, enlarged }: { stream: MediaStream
       autoPlay
       playsInline
       muted
+      onLoadedMetadata={() => console.log("[UI] screen video metadata loaded")}
       style={freeMode
         ? { width: "100%", height: "100%", objectFit: "contain" as const, display: "block", pointerEvents: "none" as const }
         : (enlarged ? { width: "100%", height: "auto", maxHeight: "60vh", objectFit: "contain" as const, display: "block" } : { width: 280, height: 210, objectFit: "contain" as const, display: "block" })}

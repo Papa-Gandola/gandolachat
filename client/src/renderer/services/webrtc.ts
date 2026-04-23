@@ -133,6 +133,7 @@ class WebRTCService {
     const peer = new SimplePeer(peerOpts);
 
     peer.on("signal", (signal) => {
+      console.log(`[WebRTC] ${purpose} signal out →`, targetUserId, initiator ? "(I am initiator)" : "(I am responder)");
       wsService.send({
         type: "call_signal",
         chat_id: this.currentChatId,
@@ -143,13 +144,18 @@ class WebRTCService {
     });
 
     peer.on("stream", (s) => {
-      console.log(`[WebRTC] ${purpose} stream received from`, targetUserId);
+      const tracks = s.getTracks().map((t) => `${t.kind}:${t.readyState}:enabled=${t.enabled}`);
+      console.log(`[WebRTC] ${purpose} stream RECEIVED from`, targetUserId, "tracks:", tracks);
       if (purpose === "screen") this.onScreenStream?.(targetUserId, s);
       else this.onStream?.(targetUserId, s);
     });
 
+    peer.on("track", (track, stream) => {
+      console.log(`[WebRTC] ${purpose} track RECEIVED from`, targetUserId, track.kind, track.id.slice(0, 8), "readyState:", track.readyState);
+    });
+
     peer.on("connect", () => {
-      console.log(`[WebRTC] ${purpose} connected to peer`, targetUserId);
+      console.log(`[WebRTC] ${purpose} CONNECTED to peer`, targetUserId);
     });
 
     peer.on("close", () => {
@@ -180,6 +186,7 @@ class WebRTCService {
     const fromId = data.from_user_id;
     const purpose: "webcam" | "screen" = data.purpose === "screen" ? "screen" : "webcam";
     const key = `${fromId}:${purpose}`;
+    console.log(`[WebRTC] signal IN ←`, fromId, `purpose=${data.purpose ?? "<missing-from-server>"}`);
 
     if (!this.localStream) {
       if (!this.pendingSignals.has(key)) this.pendingSignals.set(key, []);
