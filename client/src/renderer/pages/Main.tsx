@@ -267,7 +267,14 @@ export default function Main({ token, user, onLogout }: Props) {
                 </>
               ) : (
                 <>
-                  <span style={s.emptyIcon}>💬</span>
+                  <div className="discord-gandola-wrap" aria-hidden="true">
+                    <svg width="96" height="96" viewBox="0 0 96 96" fill="none">
+                      <circle cx="48" cy="48" r="44" fill="#5865f2"/>
+                      <path d="M28 35c0-3 2-5 5-5h30c3 0 5 2 5 5v18c0 3-2 5-5 5H44l-9 9v-9h-2c-3 0-5-2-5-5V35z" fill="#fff" opacity="0.95"/>
+                      <circle cx="40" cy="44" r="3" fill="#5865f2"/>
+                      <circle cx="56" cy="44" r="3" fill="#5865f2"/>
+                    </svg>
+                  </div>
                   <h2 style={s.emptyTitle}>Выбери чат</h2>
                   <p style={s.emptyText}>
                     Найди друга в строке поиска или создай группу нажав +

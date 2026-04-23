@@ -238,15 +238,24 @@ async def leave_chat(
 
 @router.delete("/admin/messages/old")
 async def admin_delete_old_messages(
-    before_days: int = 30,
+    before_days: int | None = None,
+    before_date: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     if current_user.username != "Papa Gandola":
         raise HTTPException(403, "Admin only")
-    if before_days < 1:
-        raise HTTPException(400, "before_days must be >= 1")
-    cutoff = datetime.now(timezone.utc) - timedelta(days=before_days)
+    if before_date:
+        try:
+            cutoff = datetime.fromisoformat(before_date)
+            if cutoff.tzinfo is None:
+                cutoff = cutoff.replace(tzinfo=timezone.utc)
+        except ValueError:
+            raise HTTPException(400, "before_date must be ISO format (YYYY-MM-DD)")
+    elif before_days and before_days >= 1:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=before_days)
+    else:
+        raise HTTPException(400, "provide before_days or before_date")
     result = await db.execute(
         delete(Message).where(Message.created_at < cutoff)
     )

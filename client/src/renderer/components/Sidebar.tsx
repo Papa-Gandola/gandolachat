@@ -374,15 +374,36 @@ export default function Sidebar({
 
       {/* Update banner */}
       {showUpdateBanner && updateStatus === "not-available" && (
-        <div style={s.updateBanner}>У вас последняя версия, че ты тут забыл</div>
+        <div style={{
+          ...s.updateBanner,
+          ...(isNeo ? { background: "transparent", color: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 0, ...mono, letterSpacing: "0.04em" } : {}),
+        }}>
+          {isNeo ? "// последняя_версия. че_ты_тут_забыл" : "У вас последняя версия, че ты тут забыл"}
+        </div>
       )}
       {updateStatus === "downloading" && (
-        <div style={s.updateBannerDownload}>Загрузка обновления... {updatePercent}%</div>
+        <div style={{
+          ...s.updateBannerDownload,
+          ...(isNeo ? { background: "transparent", color: "var(--warning)", border: "1px solid var(--warning)", borderRadius: 0, ...mono, letterSpacing: "0.04em" } : {}),
+        }}>
+          {isNeo ? `> загрузка_обновления... ${updatePercent}%` : `Загрузка обновления... ${updatePercent}%`}
+        </div>
       )}
       {updateStatus === "ready" && (
-        <div style={s.updateBannerReady}>
-          <span>Обновление готово!</span>
-          <button style={s.updateInstallBtn} onClick={() => (window as any).electron?.installUpdate()}>Обновить сейчас</button>
+        <div style={{
+          ...s.updateBannerReady,
+          ...(isNeo ? { background: "transparent", color: "var(--accent)", border: "1px solid var(--accent)", boxShadow: "0 0 12px rgba(198,255,61,0.25)", ...mono, letterSpacing: "0.04em" } : {}),
+        }}>
+          <span>{isNeo ? "● обновление_готово" : "Обновление готово!"}</span>
+          <button
+            style={{
+              ...s.updateInstallBtn,
+              ...(isNeo ? { background: "var(--accent)", color: "var(--accent-text)", borderRadius: 0, fontFamily: "var(--font-mono)", letterSpacing: "0.05em" } : {}),
+            }}
+            onClick={() => (window as any).electron?.installUpdate()}
+          >
+            {isNeo ? "[ОБНОВИТЬ]" : "Обновить сейчас"}
+          </button>
         </div>
       )}
 

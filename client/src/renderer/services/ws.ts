@@ -27,6 +27,9 @@ class WSService {
       this.reconnectAttempts = 0;
       this.quality = "good";
       this.onQualityChange?.("good", 0);
+      // Notify internal listeners that the socket just (re)connected.
+      const openListeners = this.handlers.get("_ws_open") || [];
+      openListeners.forEach((h) => h({}));
       // Ping every 5s
       if (this.pingInterval) clearInterval(this.pingInterval);
       this.pingInterval = setInterval(() => {
@@ -74,10 +77,12 @@ class WSService {
     this.handlers.set(type, list.filter((h) => h !== handler));
   }
 
-  send(data: object) {
+  send(data: object): boolean {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data));
+      return true;
     }
+    return false;
   }
 
   disconnect() {

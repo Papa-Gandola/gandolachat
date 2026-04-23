@@ -352,13 +352,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
               style={{ ...s.miniBtn, ...(isNeo ? { borderRadius: 0, border: "1px solid var(--border)", background: "transparent" } : {}) }}
               onClick={(e) => { e.stopPropagation(); toggleMute(); }}
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={isNeo ? "var(--accent)" : "white"} strokeWidth="2" strokeLinecap="round">
-                {muted ? (
-                  <><rect x="9" y="1" width="6" height="13" rx="3" fill={isNeo ? "var(--accent)" : "white"}/><line x1="1" y1="1" x2="23" y2="23"/></>
-                ) : (
-                  <><rect x="9" y="1" width="6" height="13" rx="3" fill={isNeo ? "var(--accent)" : "white"}/><path d="M5 11a7 7 0 0014 0"/></>
-                )}
-              </svg>
+              <MicIcon muted={muted} color={isNeo ? "var(--accent)" : "#fff"} />
             </button>
             <button
               style={{ ...s.miniBtn, background: "#ed4245", ...(isNeo ? { borderRadius: 0 } : {}) }}
@@ -800,6 +794,25 @@ function CallAvatar({ name, url, isNeo }: { name: string; url: string | null; is
     <div style={{ width: 80, height: 80, borderRadius: radius, border, background: bg, display: "flex", alignItems: "center", justifyContent: "center", color: fg, fontWeight: 700, fontSize: 32, margin: "65px auto", fontFamily: isNeo ? "var(--font-mono)" : undefined }}>
       {name.charAt(0).toUpperCase()}
     </div>
+  );
+}
+
+function MicIcon({ muted, color }: { muted: boolean; color: string }) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      {/* Mic body with inner grill detail */}
+      <rect x="9" y="2" width="6" height="12" rx="3" fill={color} opacity="0.92"/>
+      <line x1="10.5" y1="5" x2="13.5" y2="5" stroke={muted ? color : "rgba(0,0,0,0.35)"} strokeWidth="0.8" opacity="0.55"/>
+      <line x1="10.5" y1="8" x2="13.5" y2="8" stroke={muted ? color : "rgba(0,0,0,0.35)"} strokeWidth="0.8" opacity="0.55"/>
+      <line x1="10.5" y1="11" x2="13.5" y2="11" stroke={muted ? color : "rgba(0,0,0,0.35)"} strokeWidth="0.8" opacity="0.55"/>
+      {/* Arc catcher */}
+      <path d="M5 11a7 7 0 0014 0"/>
+      {/* Stand */}
+      <line x1="12" y1="18" x2="12" y2="22"/>
+      <line x1="8" y1="22" x2="16" y2="22"/>
+      {/* Muted slash */}
+      {muted && <line x1="3" y1="3" x2="21" y2="21" stroke={color} strokeWidth="2.2"/>}
+    </svg>
   );
 }
 

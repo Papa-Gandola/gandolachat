@@ -21,6 +21,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   const isNeo = theme === "neo";
   const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
   const [messages, setMessages] = useState<MessageOut[]>([]);
+  const [pendingMsgs, setPendingMsgs] = useState<MessageOut[]>([]);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
   const [typingUsers, setTypingUsers] = useState<Map<number, string>>(new Map());
@@ -50,6 +51,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     return muted.includes(chat.id);
   });
   const [showFormatBar, setShowFormatBar] = useState(() => localStorage.getItem("showFormatBar") !== "false");
+  const [sendFlash, setSendFlash] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const textInputRef = useRef<HTMLTextAreaElement>(null);
@@ -82,6 +84,16 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     const handler = (data: any) => {
       if (data.chat_id !== chat.id) return;
       setMessages((prev) => [...prev, data as MessageOut]);
+      // If it's our own echoed message, drop the matching pending placeholder
+      if (data.sender_id === currentUser.id) {
+        setPendingMsgs((prev) => {
+          const idx = prev.findIndex((p) => p.content === data.content);
+          if (idx < 0) return prev;
+          const next = [...prev];
+          next.splice(idx, 1);
+          return next;
+        });
+      }
       // Auto mark as read
       wsService.send({ type: "mark_read", chat_id: chat.id, message_id: data.id });
       if (data.sender_id !== currentUser.id) {
@@ -92,6 +104,21 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
         }
       }
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+    };
+
+    const reconnectHandler = () => {
+      // On WS (re)connect, flush the pending queue — server has never seen them.
+      setPendingMsgs((prev) => {
+        prev.forEach((p) => {
+          wsService.send({
+            type: "message",
+            chat_id: chat.id,
+            content: p.content,
+            reply_to_id: p.reply_to_id || null,
+          });
+        });
+        return prev;
+      });
     };
 
     const typingHandler = (data: any) => {
@@ -160,6 +187,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     wsService.on("reaction", reactionHandler);
     wsService.on("reaction_removed", reactionRemovedHandler);
     wsService.on("message_read", readHandler);
+    wsService.on("_ws_open", reconnectHandler);
     return () => {
       wsService.off("message", handler);
       wsService.off("typing", typingHandler);
@@ -168,6 +196,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
       wsService.off("reaction", reactionHandler);
       wsService.off("reaction_removed", reactionRemovedHandler);
       wsService.off("message_read", readHandler);
+      wsService.off("_ws_open", reconnectHandler);
     };
   }, [chat.id, currentUser.id]);
 
@@ -277,14 +306,39 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   function sendMessage(e: React.FormEvent) {
     e.preventDefault();
     if (!text.trim()) return;
+    const content = text.trim();
+    // Optimistic: always enqueue pending placeholder so user sees something immediately,
+    // even when WS is offline. It gets removed when the server echoes the real message.
+    const tempMsg: MessageOut = {
+      id: -Date.now(),
+      chat_id: chat.id,
+      sender_id: currentUser.id,
+      sender_username: currentUser.username,
+      sender_avatar: currentUser.avatar_url,
+      content,
+      file_url: null,
+      file_name: null,
+      is_edited: false,
+      created_at: new Date().toISOString(),
+      reply_to_id: replyTo?.id ?? null,
+      reply_to_username: replyTo?.sender_username ?? null,
+      reply_to_content: replyTo?.content ?? null,
+    };
+    setPendingMsgs((prev) => [...prev, tempMsg]);
     wsService.send({
       type: "message",
       chat_id: chat.id,
-      content: text.trim(),
+      content,
       reply_to_id: replyTo?.id || null,
     });
     setText("");
     setReplyTo(null);
+    // Trigger SEND glow flash
+    setSendFlash(true);
+    setTimeout(() => setSendFlash(false), 300);
+    // Reset textarea height after sending (it shrunk, so we reset autoresize state)
+    if (textInputRef.current) textInputRef.current.style.height = "auto";
+    setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
   }
 
   async function sendFile(file: File) {
@@ -370,8 +424,8 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     ? [...typingUsers.values()].join(", ") + " печатает..."
     : null;
 
-  // Group messages by date
-  const displayMessages = searchResults ?? messages;
+  // Group messages by date (search results never include pending — they came from server)
+  const displayMessages = searchResults ?? [...messages, ...pendingMsgs];
   const grouped: Array<{ date: string; messages: MessageOut[] }> = [];
   displayMessages.forEach((msg) => {
     const date = formatDate(msg.created_at);
@@ -473,6 +527,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
             {group.messages.map((msg, i) => {
               const prev = group.messages[i - 1];
               const isMine = msg.sender_id === currentUser.id;
+              const isPending = msg.id < 0;
               const isGrouped = prev && prev.sender_id === msg.sender_id &&
                 (new Date(msg.created_at).getTime() - new Date(prev.created_at).getTime()) < 5 * 60000;
 
@@ -487,6 +542,17 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                 borderTopRightRadius: isMine ? 6 : 14,
               } : {};
 
+              // Discord bubble: same layout as Neo (own right, other left) but Discord colors
+              const discordBubble = !isNeo ? {
+                maxWidth: "68%",
+                padding: "8px 12px",
+                background: isMine ? "var(--accent)" : "var(--bg-message)",
+                color: isMine ? "#fff" : "var(--text-primary)",
+                borderRadius: 16,
+                borderTopLeftRadius: isMine ? 16 : 4,
+                borderTopRightRadius: isMine ? 4 : 16,
+              } : {};
+
               return (
                 <div
                   key={msg.id}
@@ -494,7 +560,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                   style={{
                     ...s.msgRow,
                     marginTop: isGrouped ? 2 : 16,
-                    ...(isNeo ? { justifyContent: isMine ? "flex-end" : "flex-start" } : {}),
+                    justifyContent: isMine ? "flex-end" : "flex-start",
                   }}
                   onDoubleClick={() => setReplyTo(msg)}
                   onContextMenu={(e) => {
@@ -506,8 +572,8 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                     setContextMenu({ x, y, msg });
                   }}
                 >
-                  {/* Avatar: hidden for own messages in Neo; always visible otherwise */}
-                  {!(isNeo && isMine) && (!isGrouped ? (
+                  {/* Avatar: hidden for own messages; for others show only on first of group */}
+                  {!isMine && (!isGrouped ? (
                     <div style={{ ...s.avatarSmall, cursor: "pointer" }} onClick={() => {
                       const member = chat.members.find((m) => m.id === msg.sender_id);
                       if (member && onOpenProfile) onOpenProfile(member);
@@ -517,13 +583,17 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                   ) : (
                     <div style={{ width: 40 }} />
                   ))}
-                  <div style={{ ...s.msgContent, ...(isNeo ? { flex: "0 1 auto", ...neoBubble } : {}) }}>
+                  <div style={{ ...s.msgContent, flex: "0 1 auto", ...(isNeo ? neoBubble : discordBubble), ...(isPending ? { opacity: 0.7 } : {}) }}>
                     {!isGrouped && (
                       <div style={s.msgMeta}>
                         <span
                           style={{
                             ...s.msgAuthor,
-                            color: isNeo && isMine ? "rgba(10,10,10,0.85)" : (isMine ? "var(--accent)" : "var(--text-header)"),
+                            color: isNeo && isMine
+                              ? "rgba(10,10,10,0.85)"
+                              : (!isNeo && isMine
+                                ? "rgba(255,255,255,0.95)"
+                                : (isMine ? "var(--accent)" : "var(--text-header)")),
                             cursor: isMine ? "default" : "pointer",
                             ...(isNeo ? mono : {}),
                           }}
@@ -535,7 +605,12 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                         >
                           {isMine ? "Вы" : msg.sender_username}
                         </span>
-                        <span style={{ ...s.msgTime, ...(isNeo ? mono : {}), ...(isNeo && isMine ? { color: "rgba(10,10,10,0.55)" } : {}) }}>{formatTime(msg.created_at)}</span>
+                        <span style={{
+                          ...s.msgTime,
+                          ...(isNeo ? mono : {}),
+                          ...(isNeo && isMine ? { color: "rgba(10,10,10,0.55)" } : {}),
+                          ...(!isNeo && isMine ? { color: "rgba(255,255,255,0.7)" } : {}),
+                        }}>{formatTime(msg.created_at)}</span>
                       </div>
                     )}
                     {/* Reply preview */}
@@ -563,7 +638,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                       </div>
                     ) : (
                       <>
-                        {msg.content && <p style={{ ...s.msgText, ...(isNeo && isMine ? { color: "#0a0a0a" } : {}) }}><FormattedText text={msg.content} /></p>}
+                        {msg.content && <p style={{ ...s.msgText, ...(isNeo && isMine ? { color: "#0a0a0a" } : {}), ...(!isNeo && isMine ? { color: "#fff" } : {}) }}><FormattedText text={msg.content} /></p>}
                         {/* Reactions display */}
                         {reactions.get(msg.id)?.length ? (
                           <div style={s.reactionsRow}>
@@ -616,7 +691,9 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                         gap: 6,
                         marginTop: 2,
                         fontSize: 10,
-                        color: isNeo && isMine ? "rgba(10,10,10,0.6)" : "var(--text-muted)",
+                        color: isMine
+                          ? (isNeo ? "rgba(10,10,10,0.6)" : "rgba(255,255,255,0.75)")
+                          : "var(--text-muted)",
                         fontFamily: "var(--font-mono)",
                       }}>
                         {msg.is_edited && (
@@ -627,6 +704,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                           }}>[ред.]</span>
                         )}
                         {isMine && (() => {
+                          if (isPending) return <ReadBar status="sending" />;
                           const otherMembers = chat.members.filter((m) => m.id !== currentUser.id);
                           const anyRead = otherMembers.some((m) => (readBy.get(m.id) || 0) >= msg.id);
                           const allRead = otherMembers.length > 0 && otherMembers.every((m) => (readBy.get(m.id) || 0) >= msg.id);
@@ -761,9 +839,16 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
         {isNeo && <span style={{ color: "var(--accent)", ...mono, fontSize: 14, marginRight: 2 }}>&gt;</span>}
         <textarea
           ref={textInputRef}
-          style={{ ...s.textInput, ...(isNeo ? mono : {}) }}
+          style={{ ...s.textInput, ...(isNeo ? mono : {}), overflowY: "auto" as const }}
           value={text}
-          onChange={(e) => { setText(e.target.value); handleTyping(); }}
+          onChange={(e) => {
+            setText(e.target.value);
+            handleTyping();
+            // Auto-resize: grow upward with content, cap at 160px (~6 lines)
+            const ta = e.target;
+            ta.style.height = "auto";
+            ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
+          }}
           placeholder={isNeo
             ? `написать_${(chat.is_group ? chat.name : getChatTitle())?.toLowerCase().replace(/\s+/g, "_")}...`
             : `Написать ${chat.is_group ? "в группе" : getChatTitle()}...`}
@@ -778,10 +863,15 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
             }
           }}
         />
-        <button type="submit" style={{
-          ...s.sendBtn,
-          ...(isNeo ? { ...mono, borderRadius: 0, width: "auto", padding: "9px 16px", fontSize: 12, fontWeight: 700, letterSpacing: 1 } : {}),
-        }} disabled={!text.trim()}>{isNeo ? "SEND" : "➤"}</button>
+        <button
+          type="submit"
+          className={isNeo ? `send-btn-neo ${sendFlash ? "flash" : ""}` : ""}
+          style={{
+            ...s.sendBtn,
+            ...(isNeo ? { ...mono, borderRadius: 0, width: "auto", padding: "9px 16px", fontSize: 12, fontWeight: 700, letterSpacing: 1 } : {}),
+          }}
+          disabled={!text.trim()}
+        >{isNeo ? "SEND" : "➤"}</button>
       </form>
     </div>
   );

@@ -151,6 +151,22 @@ a { color: var(--text-link); text-decoration: none; }
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-6px); }
 }
+
+@keyframes discord-float {
+  0%, 100% { transform: translateY(0) rotate(-3deg); }
+  50% { transform: translateY(-12px) rotate(3deg); }
+}
+@keyframes discord-pulse {
+  0%, 100% { opacity: 0.9; filter: drop-shadow(0 0 12px rgba(88,101,242,0.35)); }
+  50% { opacity: 1; filter: drop-shadow(0 0 24px rgba(88,101,242,0.6)); }
+}
+.discord-gandola-wrap {
+  display: inline-block;
+  animation: discord-float 5s ease-in-out infinite;
+}
+.discord-gandola-wrap svg {
+  animation: discord-pulse 3.5s ease-in-out infinite;
+}
 @keyframes neo-eye-blink {
   0%, 92%, 100% { transform: scaleY(1); }
   94%, 98% { transform: scaleY(0.1); }
@@ -199,6 +215,23 @@ body.theme-neo .online-dot {
   border-radius: 0 !important;
   background: var(--accent) !important;
   box-shadow: 0 0 0 2px var(--bg-secondary), 0 0 6px var(--accent) !important;
+}
+
+/* SEND button neon glow (Neo theme) */
+.send-btn-neo {
+  transition: box-shadow 0.12s ease, transform 0.1s ease;
+}
+.send-btn-neo:active,
+.send-btn-neo.flash {
+  box-shadow: 0 0 8px var(--accent), 0 0 16px var(--accent), 0 0 24px rgba(198,255,61,0.6);
+}
+.send-btn-neo.flash {
+  animation: send-flash 0.3s ease-out;
+}
+@keyframes send-flash {
+  0% { box-shadow: 0 0 0 var(--accent), 0 0 0 var(--accent), 0 0 0 rgba(198,255,61,0); }
+  40% { box-shadow: 0 0 10px var(--accent), 0 0 22px var(--accent), 0 0 36px rgba(198,255,61,0.85); }
+  100% { box-shadow: 0 0 0 var(--accent), 0 0 0 var(--accent), 0 0 0 rgba(198,255,61,0); }
 }
 
 /* ReadBar — per-message status indicator (3 notches) */

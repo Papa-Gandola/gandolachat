@@ -95,6 +95,12 @@ export const chatApi = {
   getReadStatus: (chatId: number) => api.get<Array<{ user_id: number; last_read_message_id: number }>>(`/api/chats/${chatId}/read-status`),
   getUnreadCounts: () => api.get<Record<string, number>>("/api/chats/unread/counts"),
   getOnlineUsers: () => api.get<{ online_user_ids: number[] }>("/api/chats/online/users"),
+  adminDeleteOldMessages: (opts: { beforeDays?: number; beforeDate?: string }) => {
+    const params = new URLSearchParams();
+    if (opts.beforeDays) params.set("before_days", String(opts.beforeDays));
+    if (opts.beforeDate) params.set("before_date", opts.beforeDate);
+    return api.delete<{ deleted: number; before: string }>(`/api/chats/admin/messages/old?${params}`);
+  },
 };
 
 export const getFileUrl = (url: string) => `${BASE_URL}${url}`;

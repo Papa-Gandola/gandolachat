@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
-import { UserOut, userApi } from "../services/api";
+import { UserOut, userApi, chatApi } from "../services/api";
 import { useTheme } from "../services/theme";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
@@ -218,10 +218,132 @@ export default function ProfilePage({ user: initialUser, currentUser, onClose, o
             {(user.grammar_errors || 0) === 0 ? "✅ пока идеально" : `❌ ошибок: ${user.grammar_errors}`}
           </div>
         </div>
+
+        {isOwn && user.username === "Papa Gandola" && (
+          <AdminCleanup isNeo={isNeo} />
+        )}
       </div>
     </div>
   );
 }
+
+function AdminCleanup({ isNeo }: { isNeo: boolean }) {
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
+  const [date, setDate] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return d.toISOString().slice(0, 10);
+  });
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+
+  async function doDelete() {
+    setBusy(true);
+    setResult(null);
+    try {
+      const res = await chatApi.adminDeleteOldMessages({ beforeDate: date });
+      setResult(`Удалено: ${res.data.deleted}`);
+    } catch (e: any) {
+      setResult(`Ошибка: ${e.response?.data?.detail || e.message}`);
+    } finally {
+      setBusy(false);
+      setConfirming(false);
+    }
+  }
+
+  return (
+    <div style={{ ...cs.field, marginTop: 32, paddingTop: 20, borderTop: "1px solid var(--border)" }}>
+      <label style={{ display: "block", color: isNeo ? "var(--accent)" : "var(--danger)", fontSize: 11, fontWeight: 700, letterSpacing: "0.05em", marginBottom: 6, ...mono }}>
+        {isNeo ? "// АДМИН: ОЧИСТКА СООБЩЕНИЙ" : "АДМИН: ОЧИСТКА СООБЩЕНИЙ"}
+      </label>
+      <p style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 10, ...mono }}>
+        Удалит все сообщения, созданные <b>до</b> выбранной даты.
+      </p>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <input
+          type="date"
+          value={date}
+          onChange={(e) => setDate(e.target.value)}
+          max={new Date().toISOString().slice(0, 10)}
+          style={{
+            background: "var(--bg-tertiary)",
+            border: `1px solid ${isNeo ? "var(--accent)" : "var(--border)"}`,
+            borderRadius: isNeo ? 0 : 4,
+            padding: "8px 12px",
+            fontSize: 13,
+            color: "var(--text-primary)",
+            ...mono,
+          }}
+        />
+        {!confirming ? (
+          <button
+            onClick={() => setConfirming(true)}
+            disabled={busy}
+            style={{
+              background: "transparent",
+              color: isNeo ? "#ff3d6b" : "var(--danger)",
+              border: `1px solid ${isNeo ? "#ff3d6b" : "var(--danger)"}`,
+              borderRadius: isNeo ? 0 : 4,
+              padding: "8px 14px",
+              fontSize: 13,
+              fontWeight: 700,
+              letterSpacing: isNeo ? "0.05em" : undefined,
+              cursor: "pointer",
+              ...mono,
+            }}
+          >
+            {isNeo ? "[ПОЧИСТИТЬ]" : "🗑 Почистить"}
+          </button>
+        ) : (
+          <>
+            <button
+              onClick={doDelete}
+              disabled={busy}
+              style={{
+                background: isNeo ? "#ff3d6b" : "var(--danger)",
+                color: "#fff",
+                border: "none",
+                borderRadius: isNeo ? 0 : 4,
+                padding: "8px 14px",
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: "pointer",
+                ...mono,
+              }}
+            >
+              {busy ? "..." : (isNeo ? "[ПОДТВЕРДИТЬ]" : "Подтвердить")}
+            </button>
+            <button
+              onClick={() => setConfirming(false)}
+              style={{
+                background: "var(--bg-hover)",
+                color: "var(--text-primary)",
+                border: "none",
+                borderRadius: isNeo ? 0 : 4,
+                padding: "8px 14px",
+                fontSize: 13,
+                cursor: "pointer",
+                ...mono,
+              }}
+            >
+              {isNeo ? "[ОТМЕНА]" : "Отмена"}
+            </button>
+          </>
+        )}
+      </div>
+      {result && (
+        <p style={{ marginTop: 10, fontSize: 13, color: result.startsWith("Ошибка") ? "var(--danger)" : "var(--accent)", ...mono }}>
+          {result}
+        </p>
+      )}
+    </div>
+  );
+}
+
+const cs: Record<string, React.CSSProperties> = {
+  field: { marginBottom: 20 },
+};
 
 const s: Record<string, React.CSSProperties> = {
   root: { flex: 1, display: "flex", flexDirection: "column", background: "var(--bg-primary)", height: "100%" },
