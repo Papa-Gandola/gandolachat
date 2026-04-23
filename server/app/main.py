@@ -75,9 +75,15 @@ _scheduler = None
 @app.on_event("startup")
 async def startup():
     global _scheduler
+    from sqlalchemy import text
     await init_db()
-    # Preserve existing messages: drop TTL from any rows still carrying one.
+    # One-time schema migration + data fix so existing messages never auto-expire.
+    # create_all doesn't alter columns, so we drop NOT NULL manually before setting NULLs.
     async with AsyncSessionLocal() as db:
+        try:
+            await db.execute(text("ALTER TABLE messages ALTER COLUMN expires_at DROP NOT NULL"))
+        except Exception:
+            pass  # already nullable
         await db.execute(
             Message.__table__.update()
             .where(Message.expires_at.is_not(None))
