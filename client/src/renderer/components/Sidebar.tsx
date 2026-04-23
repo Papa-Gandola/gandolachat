@@ -116,6 +116,12 @@ export default function Sidebar({
     }
   }, [activeChatId]);
 
+  // Push total unread count to Electron taskbar badge (Telegram-style)
+  useEffect(() => {
+    const total = Array.from(unread.values()).reduce((a, b) => a + b, 0);
+    (window as any).electron?.setBadgeCount?.(total);
+  }, [unread]);
+
   function selectChat(chat: ChatOut) {
     setUnread((prev) => { const n = new Map(prev); n.delete(chat.id); return n; });
     onSelectChat(chat);
@@ -437,28 +443,6 @@ export default function Sidebar({
           <span style={{ ...s.userName, ...(isNeo ? mono : {}) }}>{currentUser.username}</span>
           {currentUser.status && <span style={{ ...s.userSub, ...(isNeo ? mono : {}) }}>{isNeo ? currentUser.status + "_" : currentUser.status}</span>}
         </div>
-        {(() => {
-          const total = Array.from(unread.values()).reduce((a, b) => a + b, 0);
-          if (total === 0) return null;
-          return (
-            <span
-              title={`Непрочитанных: ${total}`}
-              style={{
-                background: "var(--accent)",
-                color: "var(--accent-text)",
-                fontSize: 11,
-                fontWeight: 700,
-                padding: "2px 7px",
-                borderRadius: isNeo ? 0 : 10,
-                minWidth: 18,
-                textAlign: "center",
-                ...(isNeo ? mono : {}),
-              }}
-            >
-              {total > 99 ? "99+" : total}
-            </span>
-          );
-        })()}
         <div style={{ position: "relative" }}>
           <button style={s.settingsBtn} title="Настройки" onClick={() => setShowSettingsMenu(!showSettingsMenu)}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
