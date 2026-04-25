@@ -110,43 +110,47 @@ export default function Poker({ chat, currentUser }: Props) {
 
   async function joinTable(tableId: number) {
     setError(null);
-    // Optimistic: drop a "ghost" seat for the current user immediately so the UI
-    // reacts on the same frame as the click. Server response (or WS broadcast) will
-    // overwrite this with the authoritative state moments later.
-    const ghostSeat: PokerSeatOut = {
-      id: -Date.now(),
-      user_id: currentUser.id,
-      username: currentUser.username,
-      avatar_url: currentUser.avatar_url,
-      seat_index: -1,
-      stack: 0,
-      is_active: true,
-    };
+    const ghostId = -Date.now();
+    // Pick the first locally free seat_index — server may pick differently but the
+    // optimistic placeholder needs a valid slot to render in PokerTableLayout.
+    function buildGhost(forTable: PokerTableOut): PokerSeatOut {
+      const taken = new Set(forTable.seats.map((s) => s.seat_index));
+      let freeIdx = 0;
+      while (taken.has(freeIdx)) freeIdx++;
+      return {
+        id: ghostId,
+        user_id: currentUser.id,
+        username: currentUser.username,
+        avatar_url: currentUser.avatar_url,
+        seat_index: freeIdx,
+        stack: forTable.starting_stack,
+        is_active: true,
+      };
+    }
     setTables((prev) => prev.map((t) => {
       if (t.id !== tableId || t.seats.find((s) => s.user_id === currentUser.id)) return t;
-      return { ...t, seats: [...t.seats, ghostSeat] };
+      return { ...t, seats: [...t.seats, buildGhost(t)] };
     }));
     setActiveTable((cur) => {
       if (!cur || cur.id !== tableId) {
         const t = tables.find((x) => x.id === tableId);
         if (!t) return cur;
-        return t.seats.find((s) => s.user_id === currentUser.id)
-          ? t
-          : { ...t, seats: [...t.seats, ghostSeat] };
+        if (t.seats.find((s) => s.user_id === currentUser.id)) return t;
+        return { ...t, seats: [...t.seats, buildGhost(t)] };
       }
       if (cur.seats.find((s) => s.user_id === currentUser.id)) return cur;
-      return { ...cur, seats: [...cur.seats, ghostSeat] };
+      return { ...cur, seats: [...cur.seats, buildGhost(cur)] };
     });
     try {
       const res = await pokerApi.join(tableId);
       setActiveTable(res.data);
     } catch (e: any) {
-      // Revert optimistic seat
+      // Revert optimistic seat by ghostId
       setTables((prev) => prev.map((t) => t.id !== tableId
         ? t
-        : { ...t, seats: t.seats.filter((s) => s.id !== ghostSeat.id) }));
+        : { ...t, seats: t.seats.filter((s) => s.id !== ghostId) }));
       setActiveTable((cur) => cur && cur.id === tableId
-        ? { ...cur, seats: cur.seats.filter((s) => s.id !== ghostSeat.id) }
+        ? { ...cur, seats: cur.seats.filter((s) => s.id !== ghostId) }
         : cur);
       setError(e.response?.data?.detail || "Не удалось сесть");
     }
