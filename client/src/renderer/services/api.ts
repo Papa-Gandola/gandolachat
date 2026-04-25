@@ -172,6 +172,7 @@ export const pokerApi = {
   join: (tableId: number) => api.post<PokerTableOut>(`/api/poker/${tableId}/join`),
   leave: (tableId: number) => api.post<PokerTableOut | null>(`/api/poker/${tableId}/leave`),
   start: (tableId: number) => api.post<PokerTableOut>(`/api/poker/${tableId}/start`),
+  close: (tableId: number) => api.post<{ ok: boolean }>(`/api/poker/${tableId}/close`),
 };
 
 export const getFileUrl = (url: string) => `${BASE_URL}${url}`;

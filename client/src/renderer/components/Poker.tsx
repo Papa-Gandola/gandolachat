@@ -167,6 +167,18 @@ export default function Poker({ chat, currentUser }: Props) {
     wsService.send({ type: "poker_action", table_id: activeTable.id, action, amount });
   }
 
+  async function closeTable(tableId: number) {
+    if (!confirm("Закрыть стол досрочно? Игра будет завершена для всех.")) return;
+    setBusy(true); setError(null);
+    try {
+      await pokerApi.close(tableId);
+      setActiveTable(null);
+      setGameState(null);
+    } catch (e: any) {
+      setError(e.response?.data?.detail || "Не удалось закрыть стол");
+    } finally { setBusy(false); }
+  }
+
   async function leaveTable(tableId: number) {
     setError(null);
     // Optimistic: remove our seat immediately
@@ -331,6 +343,22 @@ export default function Poker({ chat, currentUser }: Props) {
               }}
             >
               {isNeo ? "[ВСТАТЬ]" : "Встать"}
+            </button>
+          )}
+          {t.created_by === currentUser.id && t.status !== "finished" && (
+            <button
+              onClick={() => closeTable(t.id)}
+              disabled={busy}
+              style={{
+                background: "#ed4245", color: "#fff",
+                border: "none", padding: "6px 12px",
+                borderRadius: isNeo ? 0 : 4, cursor: "pointer", fontSize: 13, fontWeight: 700,
+                ...mono,
+                letterSpacing: isNeo ? "0.05em" : undefined,
+              }}
+              title="Только создатель может закрыть стол"
+            >
+              {isNeo ? "[ЗАКРЫТЬ СТОЛ]" : "✕ Закрыть стол"}
             </button>
           )}
         </div>

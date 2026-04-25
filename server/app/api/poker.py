@@ -269,6 +269,33 @@ async def start_table(
     return await _table_to_out(db, table)
 
 
+@router.post("/{table_id}/close")
+async def close_table(
+    table_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Force-close a table — only the creator can do this."""
+    result = await db.execute(
+        select(PokerTable).options(selectinload(PokerTable.seats)).where(PokerTable.id == table_id)
+    )
+    table = result.scalar_one_or_none()
+    if not table:
+        raise HTTPException(404, "Table not found")
+    if table.created_by != current_user.id:
+        raise HTTPException(403, "Только создатель стола может его закрыть")
+    chat_id = table.chat_id
+    # Drop the in-memory game and the DB row
+    game_store.remove(table_id)
+    await db.delete(table)
+    await db.commit()
+    await manager.broadcast_to_chat(chat_id, {
+        "type": "poker_table_removed",
+        "table_id": table_id,
+    })
+    return {"ok": True}
+
+
 @router.post("/{table_id}/leave", response_model=PokerTableOut | None)
 async def leave_table(
     table_id: int,
