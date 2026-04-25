@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { ChatOut, UserOut, PokerTableOut, PokerSeatOut, pokerApi } from "../services/api";
+import { ChatOut, UserOut, PokerTableOut, PokerSeatOut, PokerGameView, pokerApi } from "../services/api";
 import { wsService } from "../services/ws";
 import { useTheme } from "../services/theme";
 
@@ -18,6 +18,7 @@ export default function Poker({ chat, currentUser }: Props) {
   const [activeTable, setActiveTable] = useState<PokerTableOut | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [gameState, setGameState] = useState<PokerGameView | null>(null);
 
   // Load tables for this chat
   useEffect(() => {
@@ -70,15 +71,32 @@ export default function Poker({ chat, currentUser }: Props) {
       setTables((prev) => prev.filter((t) => t.id !== data.table_id));
       setActiveTable((cur) => (cur && cur.id === data.table_id ? null : cur));
     };
+    const onGameState = (data: any) => {
+      // Multiple tables possible per chat — only update if it's the active one.
+      if (activeTable && data.table_id === activeTable.id) {
+        setGameState(data.state);
+      } else {
+        // Even if we're not viewing this table, keep latest state for restore on open
+        setGameState((prev) => (prev && prev.table_id === data.table_id ? data.state : prev));
+      }
+    };
+    const onPokerError = (data: any) => {
+      setError(data.message || "Ошибка");
+      setTimeout(() => setError(null), 3000);
+    };
     wsService.on("poker_table_created", onCreated);
     wsService.on("poker_table_updated", onUpdated);
     wsService.on("poker_table_removed", onRemoved);
+    wsService.on("poker_game_state", onGameState);
+    wsService.on("poker_error", onPokerError);
     return () => {
       wsService.off("poker_table_created", onCreated);
       wsService.off("poker_table_updated", onUpdated);
       wsService.off("poker_table_removed", onRemoved);
+      wsService.off("poker_game_state", onGameState);
+      wsService.off("poker_error", onPokerError);
     };
-  }, [chat.id]);
+  }, [chat.id, activeTable?.id]);
 
   async function createTable() {
     setBusy(true); setError(null);
@@ -132,6 +150,21 @@ export default function Poker({ chat, currentUser }: Props) {
         : cur);
       setError(e.response?.data?.detail || "Не удалось сесть");
     }
+  }
+
+  async function startGame(tableId: number) {
+    setBusy(true); setError(null);
+    try {
+      const res = await pokerApi.start(tableId);
+      setActiveTable(res.data);
+    } catch (e: any) {
+      setError(e.response?.data?.detail || "Не удалось начать игру");
+    } finally { setBusy(false); }
+  }
+
+  function sendAction(action: "fold" | "check" | "call" | "raise", amount = 0) {
+    if (!activeTable) return;
+    wsService.send({ type: "poker_action", table_id: activeTable.id, action, amount });
   }
 
   async function leaveTable(tableId: number) {
@@ -247,6 +280,9 @@ export default function Poker({ chat, currentUser }: Props) {
   // === Single table view ===
   const t = activeTable;
   const mySeat = t.seats.find((sx) => sx.user_id === currentUser.id);
+  const liveGame = gameState && gameState.table_id === t.id ? gameState : null;
+  const myPlayer = liveGame?.players.find((p) => p.user_id === currentUser.id);
+  const myTurn = !!myPlayer?.is_my_turn;
 
   return (
     <div style={s.root}>
@@ -259,6 +295,12 @@ export default function Poker({ chat, currentUser }: Props) {
         </button>
         <span style={{ ...s.title, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.1em" } : {}) }}>
           {isNeo ? `// СТОЛ #${t.id}` : `Стол #${t.id}`}
+          {liveGame && (
+            <span style={{ ...mono, marginLeft: 12, fontSize: 12, color: "var(--text-muted)", fontWeight: 400 }}>
+              · блайнды {liveGame.small_blind}/{liveGame.big_blind}
+              {liveGame.hand && ` · раздача #${liveGame.hand.hand_no}`}
+            </span>
+          )}
         </span>
         <div style={{ display: "flex", gap: 8 }}>
           {!mySeat && t.status === "lobby" && t.seats.length < t.max_seats && (
@@ -267,6 +309,15 @@ export default function Poker({ chat, currentUser }: Props) {
               style={{ ...s.primaryBtn, ...mono, ...(isNeo ? { borderRadius: 0 } : {}) }}
             >
               {isNeo ? "[СЕСТЬ]" : "Сесть"}
+            </button>
+          )}
+          {t.status === "lobby" && t.created_by === currentUser.id && t.seats.length >= 2 && (
+            <button
+              onClick={() => startGame(t.id)}
+              disabled={busy}
+              style={{ ...s.primaryBtn, ...mono, ...(isNeo ? { borderRadius: 0 } : {}), background: "#3ba55d" }}
+            >
+              {isNeo ? "[НАЧАТЬ ИГРУ]" : "▶ Начать игру"}
             </button>
           )}
           {mySeat && (
@@ -286,13 +337,287 @@ export default function Poker({ chat, currentUser }: Props) {
       </div>
       {error && <div style={{ ...s.error, ...mono }}>{error}</div>}
       <div style={{ ...s.tableArea, position: "relative" }}>
-        <PokerTableLayout table={t} currentUserId={currentUser.id} isNeo={isNeo} />
-        <div style={{ position: "absolute", bottom: 16, left: 0, right: 0, textAlign: "center", color: "var(--text-muted)", fontSize: 12, ...mono }}>
-          {isNeo
-            ? "// раздача_карт_появится_в_следующей_фазе"
-            : "Логика раздачи появится в следующей фазе. Пока можно собирать стол."}
+        {liveGame ? (
+          <LiveTableLayout
+            table={t}
+            game={liveGame}
+            currentUserId={currentUser.id}
+            isNeo={isNeo}
+          />
+        ) : (
+          <PokerTableLayout table={t} currentUserId={currentUser.id} isNeo={isNeo} />
+        )}
+      </div>
+      {liveGame && liveGame.last_summary && liveGame.hand?.street === "done" && (
+        <HandSummaryBar summary={liveGame.last_summary} players={liveGame.players} isNeo={isNeo} />
+      )}
+      {liveGame && myTurn && myPlayer && !myPlayer.has_folded && !myPlayer.is_all_in && (
+        <ActionBar
+          game={liveGame}
+          me={myPlayer}
+          isNeo={isNeo}
+          onAction={sendAction}
+        />
+      )}
+    </div>
+  );
+}
+
+function HandSummaryBar({ summary, players, isNeo }: { summary: any; players: any[]; isNeo: boolean }) {
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
+  const winnerNames = summary.winner_user_ids.map((uid: number) => {
+    const p = players.find((x) => x.user_id === uid);
+    return p ? `#${p.seat_index + 1}` : `#?`;
+  }).join(", ");
+  return (
+    <div style={{
+      padding: "10px 16px",
+      borderTop: `1px solid ${isNeo ? "var(--accent)" : "var(--border)"}`,
+      background: isNeo ? "transparent" : "var(--bg-secondary)",
+      color: isNeo ? "var(--accent)" : "var(--text-primary)",
+      ...mono,
+      fontSize: 13,
+      letterSpacing: isNeo ? "0.04em" : undefined,
+      textAlign: "center",
+    }}>
+      🏆 Победитель: {winnerNames} · Банк {summary.pot.toLocaleString()}
+      {summary.winning_hand ? ` · ${summary.winning_hand}` : ""}
+      {summary.reason === "all_others_folded" && " (все сложили)"}
+      {" · следующая раздача через 5 сек"}
+    </div>
+  );
+}
+
+function ActionBar({ game, me, isNeo, onAction }: {
+  game: PokerGameView;
+  me: any;
+  isNeo: boolean;
+  onAction: (a: "fold" | "check" | "call" | "raise", amount?: number) => void;
+}) {
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
+  const hand = game.hand!;
+  const toCall = Math.max(0, hand.current_bet - me.bet);
+  const minRaise = hand.current_bet + hand.min_raise;
+  const maxRaise = me.bet + me.stack;
+  const [raiseAmount, setRaiseAmount] = useState(Math.min(maxRaise, Math.max(minRaise, hand.current_bet * 2 || game.big_blind * 2)));
+  useEffect(() => {
+    setRaiseAmount(Math.min(maxRaise, Math.max(minRaise, hand.current_bet * 2 || game.big_blind * 2)));
+  }, [hand.current_bet, hand.min_raise, me.stack]);
+
+  const btnBase: React.CSSProperties = {
+    padding: "10px 16px",
+    fontSize: 14,
+    fontWeight: 700,
+    border: "none",
+    cursor: "pointer",
+    borderRadius: isNeo ? 0 : 6,
+    letterSpacing: isNeo ? "0.05em" : undefined,
+    ...mono,
+  };
+
+  return (
+    <div style={{
+      display: "flex",
+      alignItems: "center",
+      gap: 10,
+      padding: "12px 16px",
+      borderTop: `1px solid ${isNeo ? "var(--accent)" : "var(--border)"}`,
+      background: isNeo ? "rgba(198,255,61,0.04)" : "var(--bg-secondary)",
+      flexWrap: "wrap",
+    }}>
+      <button onClick={() => onAction("fold")} style={{ ...btnBase, background: "#ed4245", color: "#fff" }}>
+        {isNeo ? "[FOLD]" : "Сбросить"}
+      </button>
+      {toCall === 0 ? (
+        <button onClick={() => onAction("check")} style={{ ...btnBase, background: "var(--bg-tertiary)", color: "var(--text-primary)" }}>
+          {isNeo ? "[CHECK]" : "Чек"}
+        </button>
+      ) : (
+        <button onClick={() => onAction("call")} style={{ ...btnBase, background: "var(--bg-tertiary)", color: "var(--text-primary)" }}>
+          {isNeo ? `[CALL ${toCall}]` : `Колл ${toCall.toLocaleString()}`}
+        </button>
+      )}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 220 }}>
+        <input
+          type="range"
+          min={Math.min(minRaise, maxRaise)}
+          max={maxRaise}
+          step={game.big_blind}
+          value={raiseAmount}
+          onChange={(e) => setRaiseAmount(Number(e.target.value))}
+          disabled={maxRaise <= toCall}
+          style={{ flex: 1, accentColor: "var(--accent)" }}
+        />
+        <span style={{ ...mono, fontSize: 13, minWidth: 70, textAlign: "right", color: "var(--text-primary)" }}>
+          {raiseAmount.toLocaleString()}
+        </span>
+      </div>
+      <button
+        onClick={() => onAction("raise", raiseAmount)}
+        disabled={raiseAmount < minRaise || raiseAmount > maxRaise}
+        style={{ ...btnBase, background: "var(--accent)", color: "var(--accent-text)" }}
+      >
+        {isNeo ? `[RAISE]` : `Рейз ${raiseAmount.toLocaleString()}`}
+      </button>
+      <button
+        onClick={() => onAction("raise", maxRaise)}
+        disabled={maxRaise <= toCall}
+        style={{ ...btnBase, background: "transparent", color: "var(--text-primary)", border: `1px solid ${isNeo ? "var(--accent)" : "var(--border)"}` }}
+      >
+        {isNeo ? "[ALL-IN]" : "All-in"}
+      </button>
+    </div>
+  );
+}
+
+function LiveTableLayout({ table, game, currentUserId, isNeo }: {
+  table: PokerTableOut;
+  game: PokerGameView;
+  currentUserId: number;
+  isNeo: boolean;
+}) {
+  const N = table.max_seats;
+  const myPlayer = game.players.find((p) => p.user_id === currentUserId);
+  const mySeatIndex = myPlayer?.seat_index ?? 0;
+  const slotPositions: { x: number; y: number }[] = [];
+  for (let i = 0; i < N; i++) {
+    const angle = ((i - mySeatIndex) / N) * Math.PI * 2 + Math.PI / 2;
+    const a = 38, b = 38;
+    slotPositions.push({ x: 50 + a * Math.cos(angle), y: 50 + b * Math.sin(angle) });
+  }
+  const playersBySeat = new Map(game.players.map((p) => [p.seat_index, p]));
+
+  return (
+    <div style={{
+      position: "relative",
+      width: "100%",
+      maxWidth: 760,
+      margin: "0 auto",
+      aspectRatio: "16/10",
+      background: isNeo
+        ? "linear-gradient(180deg, #0a1410 0%, #050a08 100%)"
+        : "radial-gradient(ellipse at center, #1a4a2e 0%, #0e2a18 100%)",
+      borderRadius: isNeo ? 0 : "50%/40%",
+      border: isNeo ? "1.5px solid var(--accent)" : "8px solid #5a3220",
+      boxShadow: isNeo ? "inset 0 0 40px rgba(198,255,61,0.12)" : "inset 0 0 60px rgba(0,0,0,0.5)",
+      overflow: "hidden",
+    }}>
+      {/* Center: pot + community */}
+      <div style={{
+        position: "absolute", left: "50%", top: "50%", transform: "translate(-50%, -50%)",
+        textAlign: "center", color: isNeo ? "var(--accent)" : "#fff",
+        fontFamily: isNeo ? "var(--font-mono)" : undefined,
+      }}>
+        <div style={{ display: "flex", gap: 6, justifyContent: "center", marginBottom: 10 }}>
+          {(game.hand?.community || []).map((c, i) => <CardView key={i} code={c} isNeo={isNeo} />)}
+          {Array.from({ length: 5 - (game.hand?.community.length || 0) }).map((_, i) => (
+            <CardView key={`b${i}`} code={null} isNeo={isNeo} />
+          ))}
+        </div>
+        <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: 1 }}>
+          {isNeo ? "// БАНК · " : "Банк · "}{(game.hand?.pot ?? 0).toLocaleString()}
         </div>
       </div>
+
+      {/* Seats */}
+      {Array.from({ length: N }).map((_, idx) => {
+        const player = playersBySeat.get(idx);
+        const tableSeat = table.seats.find((sx) => sx.seat_index === idx);
+        const pos = slotPositions[idx];
+        const isToAct = game.hand?.to_act_seat === idx;
+        const isButton = game.hand?.button_seat === idx;
+        return (
+          <div key={idx} style={{
+            position: "absolute", left: `${pos.x}%`, top: `${pos.y}%`,
+            transform: "translate(-50%, -50%)",
+            display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+            minWidth: 96,
+          }}>
+            {player ? (
+              <div style={{
+                opacity: player.has_folded ? 0.35 : 1,
+                border: isToAct ? `2px solid ${isNeo ? "var(--accent)" : "#ffd24a"}` : "2px solid transparent",
+                borderRadius: isNeo ? 0 : 8,
+                padding: 4,
+                transition: "border-color 0.2s",
+                position: "relative",
+              }}>
+                <div style={{ display: "flex", gap: 2, justifyContent: "center", marginBottom: 4, height: 56 }}>
+                  {player.hole.map((c, i) => <CardView key={i} code={c === "?" ? null : c} isNeo={isNeo} small />)}
+                </div>
+                <div style={{ textAlign: "center", color: "#fff", fontSize: 12, fontFamily: isNeo ? "var(--font-mono)" : undefined }}>
+                  {tableSeat?.username || "?"}
+                  {isButton && <span style={{ background: "#fff", color: "#000", borderRadius: "50%", padding: "0 5px", fontSize: 9, marginLeft: 4, fontWeight: 700 }}>D</span>}
+                </div>
+                <div style={{ textAlign: "center", color: isNeo ? "var(--accent)" : "#ffd24a", fontSize: 12, fontFamily: isNeo ? "var(--font-mono)" : undefined, fontWeight: 700 }}>
+                  {player.stack.toLocaleString()}
+                </div>
+                {player.bet > 0 && (
+                  <div style={{ textAlign: "center", color: "#fff", fontSize: 10, fontFamily: isNeo ? "var(--font-mono)" : undefined, opacity: 0.85, marginTop: 2 }}>
+                    ставка {player.bet.toLocaleString()}
+                  </div>
+                )}
+                {player.is_all_in && (
+                  <div style={{ position: "absolute", top: -6, right: -6, background: "#ed4245", color: "#fff", fontSize: 9, padding: "1px 5px", borderRadius: isNeo ? 0 : 8, fontFamily: isNeo ? "var(--font-mono)" : undefined, fontWeight: 700 }}>
+                    ALL-IN
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{
+                width: 56, height: 56,
+                borderRadius: isNeo ? 0 : "50%",
+                border: `2px dashed ${isNeo ? "var(--accent)" : "rgba(255,255,255,0.25)"}`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                color: isNeo ? "var(--accent)" : "rgba(255,255,255,0.4)",
+                fontSize: 22,
+              }}>+</div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function CardView({ code, isNeo, small }: { code: string | null; isNeo: boolean; small?: boolean }) {
+  const w = small ? 32 : 44;
+  const h = small ? 46 : 64;
+  if (!code) {
+    // Face-down or empty placeholder
+    return (
+      <div style={{
+        width: w, height: h,
+        borderRadius: isNeo ? 0 : 4,
+        background: isNeo ? "transparent" : "linear-gradient(135deg, #5865f2 0%, #3a45a5 100%)",
+        border: isNeo ? "1px dashed var(--accent)" : "1px solid rgba(255,255,255,0.3)",
+        opacity: 0.55,
+      }}/>
+    );
+  }
+  const rank = code.slice(0, code.length - 1);
+  const suit = code.slice(-1);
+  const isRed = suit === "h" || suit === "d";
+  const suitChar = { s: "♠", h: "♥", d: "♦", c: "♣" }[suit] || "?";
+  return (
+    <div style={{
+      width: w, height: h,
+      borderRadius: isNeo ? 0 : 4,
+      background: isNeo ? "#0a0a0a" : "#fff",
+      border: isNeo ? "1px solid var(--accent)" : "1px solid #ccc",
+      color: isNeo ? (isRed ? "#ff7777" : "var(--accent)") : (isRed ? "#d33" : "#222"),
+      fontFamily: isNeo ? "var(--font-mono)" : "Inter, sans-serif",
+      fontWeight: 700,
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      lineHeight: 1,
+      fontSize: small ? 12 : 16,
+      gap: 2,
+    }}>
+      <span>{rank}</span>
+      <span style={{ fontSize: small ? 14 : 18 }}>{suitChar}</span>
     </div>
   );
 }

@@ -129,12 +129,49 @@ export interface PokerTableOut {
   created_at: string;
 }
 
+export interface PokerPlayerView {
+  user_id: number;
+  seat_index: number;
+  stack: number;
+  bet: number;
+  has_folded: boolean;
+  is_all_in: boolean;
+  is_my_turn: boolean;
+  hole: string[];
+}
+
+export interface PokerHandView {
+  hand_no: number;
+  button_seat: number;
+  community: string[];
+  pot: number;
+  current_bet: number;
+  min_raise: number;
+  to_act_seat: number | null;
+  street: "preflop" | "flop" | "turn" | "river" | "showdown" | "done";
+  last_action: { user_id: number; action: string; amount: number } | null;
+}
+
+export interface PokerGameView {
+  table_id: number;
+  small_blind: number;
+  big_blind: number;
+  blind_level: number;
+  next_blind_at: number;
+  finished: boolean;
+  winner_user_id: number | null;
+  last_summary: any;
+  hand: PokerHandView | null;
+  players: PokerPlayerView[];
+}
+
 export const pokerApi = {
   list: (chatId: number) => api.get<PokerTableOut[]>(`/api/poker?chat_id=${chatId}`),
   create: (chatId: number, maxSeats = 6) =>
     api.post<PokerTableOut>("/api/poker", { chat_id: chatId, max_seats: maxSeats }),
   join: (tableId: number) => api.post<PokerTableOut>(`/api/poker/${tableId}/join`),
   leave: (tableId: number) => api.post<PokerTableOut | null>(`/api/poker/${tableId}/leave`),
+  start: (tableId: number) => api.post<PokerTableOut>(`/api/poker/${tableId}/start`),
 };
 
 export const getFileUrl = (url: string) => `${BASE_URL}${url}`;

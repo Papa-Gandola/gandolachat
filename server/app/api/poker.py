@@ -8,6 +8,7 @@ from app.database import get_db
 from app.models import User, Chat, PokerTable, PokerSeat, Message
 from app.auth import get_current_user
 from app.ws.manager import manager
+from app.poker_game import game_store, new_game, start_hand, public_view
 
 router = APIRouter(prefix="/api/poker", tags=["poker"])
 
@@ -106,6 +107,20 @@ async def _broadcast_table(db: AsyncSession, table: PokerTable, event: str):
         "type": event,
         "table": out.model_dump(mode="json"),
     })
+
+
+async def _broadcast_game_state(table_id: int):
+    """Send each seated player an individualised view of the game (hides others' hole cards)."""
+    g = game_store.get(table_id)
+    if not g:
+        return
+    for uid in g.players.keys():
+        snapshot = public_view(g, uid)
+        await manager.send_to_user(uid, {
+            "type": "poker_game_state",
+            "table_id": table_id,
+            "state": snapshot,
+        })
 
 
 # === Endpoints ===
@@ -214,6 +229,43 @@ async def join_table(
     )
     table = result.scalar_one()
     await _broadcast_table(db, table, "poker_table_updated")
+    return await _table_to_out(db, table)
+
+
+@router.post("/{table_id}/start", response_model=PokerTableOut)
+async def start_table(
+    table_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(PokerTable).options(selectinload(PokerTable.seats)).where(PokerTable.id == table_id)
+    )
+    table = result.scalar_one_or_none()
+    if not table:
+        raise HTTPException(404, "Table not found")
+    if table.created_by != current_user.id:
+        raise HTTPException(403, "Только создатель стола может начать игру")
+    if table.status != "lobby":
+        raise HTTPException(400, "Игра уже идёт или закончена")
+    if len(table.seats) < 2:
+        raise HTTPException(400, "Нужно минимум 2 игрока")
+    table.status = "playing"
+    table.started_at = datetime.now(timezone.utc)
+    await db.commit()
+    # Boot in-memory game and deal first hand
+    g = new_game(
+        table_id=table.id,
+        chat_id=table.chat_id,
+        players_in=[(s.user_id, s.seat_index, table.starting_stack) for s in table.seats],
+        small_blind=table.starting_small_blind,
+        big_blind=table.starting_big_blind,
+        blind_increase_seconds=table.blind_increase_minutes * 60,
+    )
+    game_store.put(g)
+    start_hand(g)
+    await _broadcast_table(db, table, "poker_table_updated")
+    await _broadcast_game_state(table.id)
     return await _table_to_out(db, table)
 
 

@@ -172,6 +172,9 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
             elif event == "delete_message":
                 await handle_delete_message(data, user_id, db)
 
+            elif event == "poker_action":
+                await handle_poker_action(data, user_id, db)
+
             elif event == "call_signal":
                 target_id = data.get("target_user_id")
                 chat_id = data.get("chat_id")
@@ -379,3 +382,89 @@ async def handle_delete_message(data: dict, user_id: int, db: AsyncSession):
         "message_id": msg_id,
         "chat_id": chat_id,
     })
+
+
+async def handle_poker_action(data: dict, user_id: int, db: AsyncSession):
+    """Apply a poker action and broadcast updated state to all seated players."""
+    from app.poker_game import game_store, apply_action, ActionError, start_hand, public_view
+    from app.models import PokerTable, PokerSeat
+    from sqlalchemy.orm import selectinload
+
+    table_id = data.get("table_id")
+    action = data.get("action")
+    amount = int(data.get("amount") or 0)
+    if not table_id or not action:
+        return
+    g = game_store.get(table_id)
+    if not g:
+        await manager.send_to_user(user_id, {
+            "type": "poker_error",
+            "table_id": table_id,
+            "message": "Игра не запущена",
+        })
+        return
+    try:
+        result = apply_action(g, user_id, action, amount)
+    except ActionError as e:
+        await manager.send_to_user(user_id, {
+            "type": "poker_error",
+            "table_id": table_id,
+            "message": str(e),
+        })
+        return
+
+    # Broadcast new individualised game state to all seated players
+    for uid in g.players.keys():
+        await manager.send_to_user(uid, {
+            "type": "poker_game_state",
+            "table_id": table_id,
+            "state": public_view(g, uid),
+        })
+
+    # Hand ended? Persist stacks back to DB and start the next hand after a small pause
+    if g.hand and g.hand.street == "done":
+        # Persist stacks
+        rows = await db.execute(
+            select(PokerSeat).where(PokerSeat.table_id == table_id)
+        )
+        seats = rows.scalars().all()
+        for seat in seats:
+            p = g.players.get(seat.user_id)
+            if p:
+                seat.stack = p.stack
+                if p.stack <= 0:
+                    seat.is_active = False
+        await db.commit()
+
+        alive = [p for p in g.players.values() if p.stack > 0]
+        if len(alive) <= 1:
+            # Tournament over
+            g.finished = True
+            g.winner_user_id = alive[0].user_id if alive else None
+            t_rows = await db.execute(select(PokerTable).where(PokerTable.id == table_id))
+            t = t_rows.scalar_one_or_none()
+            if t:
+                t.status = "finished"
+                from datetime import datetime as _dt, timezone as _tz
+                t.finished_at = _dt.now(_tz.utc)
+                await db.commit()
+            for uid in g.players.keys():
+                await manager.send_to_user(uid, {
+                    "type": "poker_game_state",
+                    "table_id": table_id,
+                    "state": public_view(g, uid),
+                })
+        else:
+            # Auto-start next hand after 5 seconds
+            import asyncio
+            async def _next():
+                await asyncio.sleep(5)
+                if not g.finished:
+                    start_hand(g)
+                    for uid in g.players.keys():
+                        await manager.send_to_user(uid, {
+                            "type": "poker_game_state",
+                            "table_id": table_id,
+                            "state": public_view(g, uid),
+                        })
+            asyncio.create_task(_next())
