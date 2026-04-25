@@ -8,6 +8,7 @@ import ChatArea from "../components/ChatArea";
 import MemberList from "../components/MemberList";
 import VideoCall from "../components/VideoCall";
 import ProfilePage from "../components/ProfilePage";
+import Poker from "../components/Poker";
 import { useTheme } from "../services/theme";
 
 interface Props {
@@ -31,6 +32,10 @@ export default function Main({ token, user, onLogout }: Props) {
   const [connQuality, setConnQuality] = useState<string>("good");
   const [connPing, setConnPing] = useState(0);
   const [showCloseDialog, setShowCloseDialog] = useState(false);
+  const [appMode, setAppMode] = useState<"chat" | "poker">(() => {
+    return (localStorage.getItem("gandola-mode") as "chat" | "poker") || "chat";
+  });
+  const [showModeMenu, setShowModeMenu] = useState(false);
 
   useEffect(() => {
     wsService.connect(token);
@@ -178,9 +183,67 @@ export default function Main({ token, user, onLogout }: Props) {
     <div style={s.root}>
       {/* Title bar */}
       <div style={s.titleBar}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={s.titleText}>GandolaChat</span>
-          <span style={{ ...s.titleText, fontSize: 10, opacity: 0.6 }}>v2.0.6</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, position: "relative", WebkitAppRegion: "no-drag" as any }}>
+          <button
+            onClick={() => setShowModeMenu((v) => !v)}
+            style={{
+              ...s.titleText,
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              padding: "2px 6px",
+              fontFamily: isNeo ? "var(--font-mono)" : undefined,
+              fontWeight: 700,
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+            title="Переключить режим"
+          >
+            <span>Gandola{isNeo ? <span style={{ color: "var(--accent)" }}>{appMode === "chat" ? "Chat" : "Poker"}</span> : (appMode === "chat" ? "Chat" : "Poker")}</span>
+            <span style={{ fontSize: 10, opacity: 0.7 }}>▾</span>
+          </button>
+          {showModeMenu && (
+            <>
+              <div style={{ position: "fixed", inset: 0, zIndex: 90 }} onClick={() => setShowModeMenu(false)} />
+              <div style={{
+                position: "absolute",
+                top: 26,
+                left: 0,
+                background: "var(--bg-tertiary)",
+                border: `1px solid ${isNeo ? "var(--accent)" : "var(--border)"}`,
+                borderRadius: isNeo ? 0 : 6,
+                boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+                zIndex: 100,
+                minWidth: 160,
+                padding: 4,
+                fontFamily: isNeo ? "var(--font-mono)" : undefined,
+              }}>
+                {(["chat", "poker"] as const).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => { setAppMode(m); localStorage.setItem("gandola-mode", m); setShowModeMenu(false); }}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      textAlign: "left",
+                      padding: "8px 12px",
+                      fontSize: 13,
+                      background: appMode === m ? (isNeo ? "var(--accent)" : "var(--bg-active)") : "transparent",
+                      color: appMode === m && isNeo ? "var(--accent-text)" : "var(--text-primary)",
+                      border: "none",
+                      cursor: "pointer",
+                      borderRadius: isNeo ? 0 : 4,
+                      fontFamily: "inherit",
+                    }}
+                  >
+                    Gandola{m === "chat" ? "Chat" : "Poker"}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+          <span style={{ ...s.titleText, fontSize: 10, opacity: 0.6 }}>v2.0.7</span>
           <span
             style={{
               width: 8, height: 8, borderRadius: "50%", marginLeft: 4,
@@ -256,6 +319,10 @@ export default function Main({ token, user, onLogout }: Props) {
               onClose={() => setViewingProfile(null)}
               onUpdate={(u) => { if (u.id === currentUser.id) setCurrentUser(u); }}
             />
+          </div>
+        ) : activeChat && appMode === "poker" ? (
+          <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
+            <Poker chat={activeChat} currentUser={currentUser} />
           </div>
         ) : activeChat ? (
           <>

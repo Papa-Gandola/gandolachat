@@ -103,5 +103,39 @@ export const chatApi = {
   },
 };
 
+export interface PokerSeatOut {
+  id: number;
+  user_id: number;
+  username: string;
+  avatar_url: string | null;
+  seat_index: number;
+  stack: number;
+  is_active: boolean;
+}
+
+export interface PokerTableOut {
+  id: number;
+  chat_id: number;
+  created_by: number;
+  status: "lobby" | "playing" | "finished";
+  starting_stack: number;
+  starting_small_blind: number;
+  starting_big_blind: number;
+  blind_increase_minutes: number;
+  max_seats: number;
+  seats: PokerSeatOut[];
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+}
+
+export const pokerApi = {
+  list: (chatId: number) => api.get<PokerTableOut[]>(`/api/poker?chat_id=${chatId}`),
+  create: (chatId: number, maxSeats = 6) =>
+    api.post<PokerTableOut>("/api/poker", { chat_id: chatId, max_seats: maxSeats }),
+  join: (tableId: number) => api.post<PokerTableOut>(`/api/poker/${tableId}/join`),
+  leave: (tableId: number) => api.post<PokerTableOut | null>(`/api/poker/${tableId}/leave`),
+};
+
 export const getFileUrl = (url: string) => `${BASE_URL}${url}`;
 export default api;

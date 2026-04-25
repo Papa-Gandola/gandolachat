@@ -13,7 +13,7 @@ from app.config import settings
 from app.models import Message
 from app.auth import get_current_user
 from app.ws.handler import websocket_endpoint
-from app.api import auth, users, chats
+from app.api import auth, users, chats, poker
 
 app = FastAPI(title="GandolaChat")
 
@@ -32,6 +32,7 @@ app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads"
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(chats.router)
+app.include_router(poker.router)
 
 
 @app.websocket("/ws")

@@ -82,3 +82,38 @@ read_receipts = Table(
     Column("chat_id", Integer, ForeignKey("chats.id", ondelete="CASCADE"), primary_key=True),
     Column("last_read_message_id", Integer, ForeignKey("messages.id", ondelete="SET NULL"), nullable=True),
 )
+
+
+# === Poker (sit-and-go Texas Hold'em tournaments) ===
+class PokerTable(Base):
+    __tablename__ = "poker_tables"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chat_id: Mapped[int] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), index=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    # Lifecycle: lobby (waiting to start) | playing | finished
+    status: Mapped[str] = mapped_column(String(16), default="lobby")
+    starting_stack: Mapped[int] = mapped_column(default=30000)
+    starting_small_blind: Mapped[int] = mapped_column(default=100)
+    starting_big_blind: Mapped[int] = mapped_column(default=200)
+    blind_increase_minutes: Mapped[int] = mapped_column(default=7)
+    max_seats: Mapped[int] = mapped_column(default=6)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    seats: Mapped[list["PokerSeat"]] = relationship(back_populates="table", cascade="all, delete-orphan")
+
+
+class PokerSeat(Base):
+    __tablename__ = "poker_seats"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    table_id: Mapped[int] = mapped_column(ForeignKey("poker_tables.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    seat_index: Mapped[int] = mapped_column()  # 0..max_seats-1
+    stack: Mapped[int] = mapped_column(default=0)
+    is_active: Mapped[bool] = mapped_column(default=True)  # false = busted out of tournament
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    table: Mapped["PokerTable"] = relationship(back_populates="seats")
