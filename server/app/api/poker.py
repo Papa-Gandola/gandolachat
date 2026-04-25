@@ -5,7 +5,7 @@ from sqlalchemy.orm import selectinload
 from datetime import datetime, timezone
 from pydantic import BaseModel
 from app.database import get_db
-from app.models import User, Chat, PokerTable, PokerSeat
+from app.models import User, Chat, PokerTable, PokerSeat, Message
 from app.auth import get_current_user
 from app.ws.manager import manager
 
@@ -148,6 +148,32 @@ async def create_table(
     )
     table = result.scalar_one()
     await _broadcast_table(db, table, "poker_table_created")
+    # Drop a system message into the chat so members get a clickable invite card
+    msg = Message(
+        chat_id=data.chat_id,
+        sender_id=current_user.id,
+        content=f"/poker_table {table.id}",
+    )
+    db.add(msg)
+    await db.commit()
+    await db.refresh(msg)
+    await manager.broadcast_to_chat(data.chat_id, {
+        "type": "message",
+        "id": msg.id,
+        "chat_id": data.chat_id,
+        "sender_id": current_user.id,
+        "sender_username": current_user.username,
+        "sender_avatar": current_user.avatar_url,
+        "content": msg.content,
+        "file_url": None,
+        "file_name": None,
+        "is_edited": False,
+        "created_at": msg.created_at.isoformat(),
+        "reply_to_id": None,
+        "reply_to_username": None,
+        "reply_to_content": None,
+        "reactions": [],
+    })
     return await _table_to_out(db, table)
 
 

@@ -743,7 +743,13 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                       </div>
                     ) : (
                       <>
-                        {msg.content && <p style={{ ...s.msgText, ...(isNeo && isMine ? { color: "#0a0a0a" } : {}), ...(!isNeo && isMine ? { color: "#fff" } : {}) }}><FormattedText text={msg.content} /></p>}
+                        {msg.content && (() => {
+                          const pokerMatch = msg.content.match(/^\/poker_table (\d+)$/);
+                          if (pokerMatch) {
+                            return <PokerInviteCard tableId={Number(pokerMatch[1])} chatId={chat.id} isNeo={isNeo} senderName={msg.sender_username} />;
+                          }
+                          return <p style={{ ...s.msgText, ...(isNeo && isMine ? { color: "#0a0a0a" } : {}), ...(!isNeo && isMine ? { color: "#fff" } : {}) }}><FormattedText text={msg.content} /></p>;
+                        })()}
                         {/* Reactions display */}
                         {reactions.get(msg.id)?.length ? (
                           <div style={s.reactionsRow}>
@@ -1029,6 +1035,55 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
           disabled={!text.trim()}
         >{isNeo ? "SEND" : "➤"}</button>
       </form>
+    </div>
+  );
+}
+
+function PokerInviteCard({ tableId, chatId, isNeo, senderName }: { tableId: number; chatId: number; isNeo: boolean; senderName: string }) {
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
+  return (
+    <div style={{
+      display: "flex",
+      alignItems: "center",
+      gap: 12,
+      padding: "10px 12px",
+      background: isNeo ? "transparent" : "rgba(88,101,242,0.08)",
+      border: `1px solid ${isNeo ? "var(--accent)" : "rgba(88,101,242,0.4)"}`,
+      borderRadius: isNeo ? 0 : 8,
+      margin: "4px 0",
+      maxWidth: 360,
+    }}>
+      <div style={{ fontSize: 28 }}>🎴</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ ...mono, color: "var(--text-header)", fontWeight: 700, fontSize: 14 }}>
+          {isNeo ? `// ПОКЕРНЫЙ_СТОЛ #${tableId}` : `Покерный стол #${tableId}`}
+        </div>
+        <div style={{ ...mono, color: "var(--text-muted)", fontSize: 12, marginTop: 2 }}>
+          {isNeo ? `${senderName} зовёт играть` : `${senderName} зовёт играть в покер`}
+        </div>
+      </div>
+      <button
+        onClick={() => {
+          // Switch to poker mode in this chat and let Poker component focus the table
+          localStorage.setItem("gandola-mode", "poker");
+          window.dispatchEvent(new CustomEvent("set-app-mode", { detail: { mode: "poker" } }));
+          window.dispatchEvent(new CustomEvent("open-poker-table", { detail: { chatId, tableId } }));
+        }}
+        style={{
+          background: "var(--accent)",
+          color: "var(--accent-text)",
+          border: "none",
+          borderRadius: isNeo ? 0 : 6,
+          padding: "8px 14px",
+          fontSize: 13,
+          fontWeight: 700,
+          cursor: "pointer",
+          letterSpacing: isNeo ? "0.05em" : undefined,
+          ...mono,
+        }}
+      >
+        {isNeo ? "[СЕСТЬ]" : "Сесть"}
+      </button>
     </div>
   );
 }

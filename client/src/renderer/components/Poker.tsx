@@ -29,6 +29,29 @@ export default function Poker({ chat, currentUser }: Props) {
     });
   }, [chat.id]);
 
+  // Auto-open + auto-sit when an invite card requests a specific table for this chat
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ chatId: number; tableId: number }>).detail;
+      if (!detail || detail.chatId !== chat.id) return;
+      // Need to wait one tick for the table list to load if it hasn't yet
+      const tryOpen = (attempt = 0) => {
+        const t = tables.find((x) => x.id === detail.tableId);
+        if (t) {
+          setActiveTable(t);
+          if (!t.seats.find((s) => s.user_id === currentUser.id) && t.status === "lobby" && t.seats.length < t.max_seats) {
+            joinTable(detail.tableId);
+          }
+        } else if (attempt < 8) {
+          setTimeout(() => tryOpen(attempt + 1), 250);
+        }
+      };
+      tryOpen();
+    };
+    window.addEventListener("open-poker-table", handler as EventListener);
+    return () => window.removeEventListener("open-poker-table", handler as EventListener);
+  }, [chat.id, tables, currentUser.id]);
+
   // WS subscriptions
   useEffect(() => {
     const onCreated = (data: any) => {
@@ -68,23 +91,70 @@ export default function Poker({ chat, currentUser }: Props) {
   }
 
   async function joinTable(tableId: number) {
-    setBusy(true); setError(null);
+    setError(null);
+    // Optimistic: drop a "ghost" seat for the current user immediately so the UI
+    // reacts on the same frame as the click. Server response (or WS broadcast) will
+    // overwrite this with the authoritative state moments later.
+    const ghostSeat: PokerSeatOut = {
+      id: -Date.now(),
+      user_id: currentUser.id,
+      username: currentUser.username,
+      avatar_url: currentUser.avatar_url,
+      seat_index: -1,
+      stack: 0,
+      is_active: true,
+    };
+    setTables((prev) => prev.map((t) => {
+      if (t.id !== tableId || t.seats.find((s) => s.user_id === currentUser.id)) return t;
+      return { ...t, seats: [...t.seats, ghostSeat] };
+    }));
+    setActiveTable((cur) => {
+      if (!cur || cur.id !== tableId) {
+        const t = tables.find((x) => x.id === tableId);
+        if (!t) return cur;
+        return t.seats.find((s) => s.user_id === currentUser.id)
+          ? t
+          : { ...t, seats: [...t.seats, ghostSeat] };
+      }
+      if (cur.seats.find((s) => s.user_id === currentUser.id)) return cur;
+      return { ...cur, seats: [...cur.seats, ghostSeat] };
+    });
     try {
       const res = await pokerApi.join(tableId);
       setActiveTable(res.data);
     } catch (e: any) {
+      // Revert optimistic seat
+      setTables((prev) => prev.map((t) => t.id !== tableId
+        ? t
+        : { ...t, seats: t.seats.filter((s) => s.id !== ghostSeat.id) }));
+      setActiveTable((cur) => cur && cur.id === tableId
+        ? { ...cur, seats: cur.seats.filter((s) => s.id !== ghostSeat.id) }
+        : cur);
       setError(e.response?.data?.detail || "Не удалось сесть");
-    } finally { setBusy(false); }
+    }
   }
 
   async function leaveTable(tableId: number) {
-    setBusy(true); setError(null);
+    setError(null);
+    // Optimistic: remove our seat immediately
+    const myUid = currentUser.id;
+    setTables((prev) => prev.map((t) => t.id !== tableId
+      ? t
+      : { ...t, seats: t.seats.filter((s) => s.user_id !== myUid) }));
+    setActiveTable((cur) => cur && cur.id === tableId
+      ? { ...cur, seats: cur.seats.filter((s) => s.user_id !== myUid) }
+      : cur);
     try {
       const res = await pokerApi.leave(tableId);
       setActiveTable(res.data);
     } catch (e: any) {
+      // Reload from server to get authoritative state
+      pokerApi.list(chat.id).then((r) => {
+        setTables(r.data);
+        setActiveTable((cur) => cur ? r.data.find((t) => t.id === cur.id) || null : cur);
+      }).catch(() => {});
       setError(e.response?.data?.detail || "Не удалось встать");
-    } finally { setBusy(false); }
+    }
   }
 
   // === Table list view (no active table selected) ===
@@ -158,7 +228,6 @@ export default function Poker({ chat, currentUser }: Props) {
                       {!mySeat && t.status === "lobby" && t.seats.length < t.max_seats && (
                         <button
                           onClick={() => joinTable(t.id)}
-                          disabled={busy}
                           style={{ ...s.primaryBtn, ...mono, ...(isNeo ? { borderRadius: 0 } : {}) }}
                         >
                           {isNeo ? "[СЕСТЬ]" : "Сесть за стол"}
@@ -195,7 +264,6 @@ export default function Poker({ chat, currentUser }: Props) {
           {!mySeat && t.status === "lobby" && t.seats.length < t.max_seats && (
             <button
               onClick={() => joinTable(t.id)}
-              disabled={busy}
               style={{ ...s.primaryBtn, ...mono, ...(isNeo ? { borderRadius: 0 } : {}) }}
             >
               {isNeo ? "[СЕСТЬ]" : "Сесть"}
@@ -204,7 +272,6 @@ export default function Poker({ chat, currentUser }: Props) {
           {mySeat && (
             <button
               onClick={() => leaveTable(t.id)}
-              disabled={busy}
               style={{
                 background: "transparent", color: "#ed4245",
                 border: "1px solid #ed4245", padding: "6px 12px",

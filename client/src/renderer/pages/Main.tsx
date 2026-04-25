@@ -103,6 +103,28 @@ export default function Main({ token, user, onLogout }: Props) {
     return () => window.removeEventListener("switch-chat", handler as EventListener);
   }, [chats]);
 
+  // Allow other components (e.g. PokerInviteCard) to switch app mode
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const mode = (e as CustomEvent<{ mode: "chat" | "poker" }>).detail?.mode;
+      if (mode === "chat" || mode === "poker") setAppMode(mode);
+    };
+    window.addEventListener("set-app-mode", handler as EventListener);
+    return () => window.removeEventListener("set-app-mode", handler as EventListener);
+  }, []);
+
+  // When invite card asks to open a specific poker table, switch to that chat first
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const chatId = (e as CustomEvent<{ chatId: number; tableId: number }>).detail?.chatId;
+      if (!chatId) return;
+      const target = chats.find((c) => c.id === chatId);
+      if (target) setActiveChat(target);
+    };
+    window.addEventListener("open-poker-table", handler as EventListener);
+    return () => window.removeEventListener("open-poker-table", handler as EventListener);
+  }, [chats]);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
