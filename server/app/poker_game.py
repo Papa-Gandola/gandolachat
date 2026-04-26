@@ -477,11 +477,21 @@ def public_view(g: GameState, viewer_user_id: int) -> dict:
                 "has_folded": p.has_folded,
                 "is_all_in": p.is_all_in,
                 "is_my_turn": hand is not None and hand.to_act_seat == p.seat_index,
-                # Hole cards: only the viewer sees their own; show face-down placeholders for others
+                # Hole cards: own cards always visible. Reveal everyone else's only at
+                # showdown — when the hand ended via real card comparison (g.last_summary
+                # has reason="showdown") AND that player didn't fold.
                 "hole": (
                     [str(c) for c in p.hole]
-                    if (p.user_id == viewer_user_id or (hand and hand.street == "showdown" and not p.has_folded))
-                    else (["?", "?"] if p.hole else [])
+                    if p.user_id == viewer_user_id
+                    else (
+                        [str(c) for c in p.hole]
+                        if (hand and hand.street == "done"
+                            and g.last_summary is not None
+                            and g.last_summary.get("reason") == "showdown"
+                            and not p.has_folded
+                            and p.hole)
+                        else (["?", "?"] if p.hole else [])
+                    )
                 ),
             }
             for p in sorted(g.players.values(), key=lambda x: x.seat_index)
