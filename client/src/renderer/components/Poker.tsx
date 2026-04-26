@@ -30,6 +30,14 @@ export default function Poker({ chat, currentUser }: Props) {
     });
   }, [chat.id]);
 
+  // When we open a table that's already playing, ask the server to push us the
+  // current game state (we may have lost it when remounting after a mode switch).
+  useEffect(() => {
+    if (activeTable && activeTable.status === "playing") {
+      wsService.send({ type: "poker_request_state", table_id: activeTable.id });
+    }
+  }, [activeTable?.id, activeTable?.status]);
+
   // Auto-open + auto-sit when an invite card requests a specific table for this chat
   useEffect(() => {
     const handler = (e: Event) => {
@@ -41,7 +49,7 @@ export default function Poker({ chat, currentUser }: Props) {
         if (t) {
           setActiveTable(t);
           if (!t.seats.find((s) => s.user_id === currentUser.id) && t.status === "lobby" && t.seats.length < t.max_seats) {
-            joinTable(detail.tableId);
+            joinTable(detail.tableId, true);
           }
         } else if (attempt < 8) {
           setTimeout(() => tryOpen(attempt + 1), 250);
@@ -108,11 +116,9 @@ export default function Poker({ chat, currentUser }: Props) {
     } finally { setBusy(false); }
   }
 
-  async function joinTable(tableId: number) {
+  async function joinTable(tableId: number, openAfter = false) {
     setError(null);
     const ghostId = -Date.now();
-    // Pick the first locally free seat_index — server may pick differently but the
-    // optimistic placeholder needs a valid slot to render in PokerTableLayout.
     function buildGhost(forTable: PokerTableOut): PokerSeatOut {
       const taken = new Set(forTable.seats.map((s) => s.seat_index));
       let freeIdx = 0;
@@ -127,25 +133,30 @@ export default function Poker({ chat, currentUser }: Props) {
         is_active: true,
       };
     }
+    // Update list optimistically
     setTables((prev) => prev.map((t) => {
       if (t.id !== tableId || t.seats.find((s) => s.user_id === currentUser.id)) return t;
       return { ...t, seats: [...t.seats, buildGhost(t)] };
     }));
+    // Update single-view optimistically only if we're already viewing it
+    // (or caller explicitly asked to open after seating)
     setActiveTable((cur) => {
-      if (!cur || cur.id !== tableId) {
+      if (cur && cur.id === tableId) {
+        if (cur.seats.find((s) => s.user_id === currentUser.id)) return cur;
+        return { ...cur, seats: [...cur.seats, buildGhost(cur)] };
+      }
+      if (openAfter) {
         const t = tables.find((x) => x.id === tableId);
         if (!t) return cur;
         if (t.seats.find((s) => s.user_id === currentUser.id)) return t;
         return { ...t, seats: [...t.seats, buildGhost(t)] };
       }
-      if (cur.seats.find((s) => s.user_id === currentUser.id)) return cur;
-      return { ...cur, seats: [...cur.seats, buildGhost(cur)] };
+      return cur;
     });
     try {
       const res = await pokerApi.join(tableId);
-      setActiveTable(res.data);
+      setActiveTable((cur) => (cur && cur.id === tableId) || openAfter ? res.data : cur);
     } catch (e: any) {
-      // Revert optimistic seat by ghostId
       setTables((prev) => prev.map((t) => t.id !== tableId
         ? t
         : { ...t, seats: t.seats.filter((s) => s.id !== ghostId) }));

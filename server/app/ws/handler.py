@@ -175,6 +175,17 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
             elif event == "poker_action":
                 await handle_poker_action(data, user_id, db)
 
+            elif event == "poker_request_state":
+                from app.poker_game import game_store, public_view
+                table_id = data.get("table_id")
+                g = game_store.get(table_id) if table_id else None
+                if g and user_id in g.players:
+                    await manager.send_to_user(user_id, {
+                        "type": "poker_game_state",
+                        "table_id": table_id,
+                        "state": public_view(g, user_id),
+                    })
+
             elif event == "call_signal":
                 target_id = data.get("target_user_id")
                 chat_id = data.get("chat_id")

@@ -344,12 +344,13 @@ export default function Main({ token, user, onLogout }: Props) {
           </div>
         ) : activeChat && appMode === "poker" ? (
           <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
-            <Poker chat={activeChat} currentUser={currentUser} />
+            <Poker key={`poker-${activeChat.id}`} chat={activeChat} currentUser={currentUser} />
           </div>
         ) : activeChat ? (
           <>
             <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
               <ChatArea
+                key={`chat-${activeChat.id}-${appMode}`}
                 chat={activeChat}
                 currentUser={currentUser}
                 onStartCall={() => startCall(activeChat)}
