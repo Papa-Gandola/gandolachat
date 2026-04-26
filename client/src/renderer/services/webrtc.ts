@@ -305,6 +305,48 @@ class WebRTCService {
     });
   }
 
+  // Inspect every active peer connection and report whether the selected ICE
+  // candidate pair uses a TURN relay. Returns the worst of the bunch so the UI
+  // can warn when at least one peer is going through a relay.
+  async getConnectionQuality(): Promise<{ usingRelay: boolean; details: string[] }> {
+    const details: string[] = [];
+    let usingRelay = false;
+    const allPeers = [
+      ...Array.from(this.peers.entries()).map(([uid, p]) => ({ uid, p, kind: "cam" })),
+      ...Array.from(this.screenSendingPeers.entries()).map(([uid, p]) => ({ uid, p, kind: "scr-out" })),
+      ...Array.from(this.screenReceivingPeers.entries()).map(([uid, p]) => ({ uid, p, kind: "scr-in" })),
+    ];
+    for (const { uid, p, kind } of allPeers) {
+      const pc = (p as any)._pc as RTCPeerConnection | undefined;
+      if (!pc) continue;
+      try {
+        const stats = await pc.getStats();
+        // Find the in-use candidate pair, then look up its local + remote candidate types
+        let pairType: string | null = null;
+        let localType = "?";
+        let remoteType = "?";
+        const localById: Record<string, any> = {};
+        const remoteById: Record<string, any> = {};
+        let pair: any = null;
+        stats.forEach((report: any) => {
+          if (report.type === "local-candidate") localById[report.id] = report;
+          if (report.type === "remote-candidate") remoteById[report.id] = report;
+          if (report.type === "candidate-pair" && (report.selected || report.nominated) && report.state === "succeeded") {
+            pair = report;
+          }
+        });
+        if (pair) {
+          localType = localById[pair.localCandidateId]?.candidateType ?? "?";
+          remoteType = remoteById[pair.remoteCandidateId]?.candidateType ?? "?";
+          pairType = `${localType}/${remoteType}`;
+          if (localType === "relay" || remoteType === "relay") usingRelay = true;
+        }
+        details.push(`${kind} u${uid}: ${pairType ?? "no-pair"}`);
+      } catch {}
+    }
+    return { usingRelay, details };
+  }
+
   // Replace the outgoing audio track on every webcam peer (e.g. user changed mic).
   replaceAudioTrack(newTrack: MediaStreamTrack) {
     this.peers.forEach((peer) => {

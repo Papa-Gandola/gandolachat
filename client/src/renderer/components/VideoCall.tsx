@@ -66,6 +66,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   const [outputDevices, setOutputDevices] = useState<MediaDeviceInfo[]>([]);
   const [micGain, setMicGain] = useState(100);
   const [outputDeviceId, setOutputDeviceId] = useState<string>("");
+  const [usingRelay, setUsingRelay] = useState(false);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const started = useRef(false);
 
@@ -161,6 +162,22 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
       setOutputDevices(devices.filter((d) => d.kind === "audiooutput"));
     });
   }, []);
+
+  // Poll WebRTC stats every 8 seconds to know whether any peer pair is going
+  // through a TURN relay. Used to show a small "fallback servers in use" hint.
+  useEffect(() => {
+    if (remoteVideos.length === 0) { setUsingRelay(false); return; }
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const { usingRelay: rel } = await webrtcService.getConnectionQuality();
+        if (!cancelled) setUsingRelay(rel);
+      } catch {}
+    };
+    check();
+    const id = setInterval(check, 8000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [remoteVideos.length, remoteScreens.length]);
 
   // Whenever a remote stream arrives, the new <video>/<audio> elements default to
   // the system output. If the user picked a specific output device, push it onto
@@ -476,6 +493,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
             ) : (
               <>📞 {callName} — {remoteVideos.length + 1}</>
             )}
+            {usingRelay && <span title="Запасной сервер — соединение может быть хуже" style={{ marginLeft: 6, color: isNeo ? "var(--warning)" : "#faa61a" }}>⚠</span>}
           </span>
           <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
             <button
@@ -538,6 +556,30 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
             <span style={s.title}>Видеозвонок • {callDuration}</span>
             <span style={s.subtitle}>{callName}</span>
           </>
+        )}
+        {usingRelay && (
+          <div
+            title="Прямое соединение P2P не удалось установить — звонок идёт через TURN-сервер. Возможна задержка и потеря качества."
+            style={{
+              position: "absolute" as const,
+              left: "50%",
+              top: 38,
+              transform: "translateX(-50%)",
+              padding: "3px 10px",
+              fontSize: 11,
+              borderRadius: isNeo ? 0 : 12,
+              background: isNeo ? "transparent" : "rgba(250, 166, 26, 0.15)",
+              color: isNeo ? "var(--warning)" : "#faa61a",
+              border: `1px solid ${isNeo ? "var(--warning)" : "rgba(250,166,26,0.5)"}`,
+              fontFamily: isNeo ? "var(--font-mono)" : undefined,
+              letterSpacing: isNeo ? "0.05em" : undefined,
+              cursor: "help",
+              whiteSpace: "nowrap" as const,
+              userSelect: "none" as const,
+            }}
+          >
+            {isNeo ? "// ⚠ запасной_сервер · соединение_может_быть_хуже" : "⚠ Запасной сервер — соединение может быть хуже"}
+          </div>
         )}
         <button
           style={{ ...s.minimizeBtn, ...(isNeo ? { borderRadius: 0, border: "1px solid var(--border)", background: "transparent", color: "var(--accent)" } : {}) }}
