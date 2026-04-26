@@ -290,7 +290,8 @@ class WebRTCService {
     }
   }
 
-  // Deprecated — kept for backwards compat if callers still reference it.
+  // Replace the outgoing video track on every webcam peer (e.g. user changed camera).
+  // Screen-share peers are independent and not affected.
   replaceVideoTrack(newTrack: MediaStreamTrack) {
     this.peers.forEach((peer) => {
       const pc = (peer as any)._pc;
@@ -298,7 +299,21 @@ class WebRTCService {
       const sender = pc.getSenders?.()?.find((s: any) => s.track?.kind === "video");
       if (sender) {
         sender.replaceTrack(newTrack).catch((err: any) => {
-          console.error("[WebRTC] replaceTrack failed", err);
+          console.error("[WebRTC] replaceTrack(video) failed", err);
+        });
+      }
+    });
+  }
+
+  // Replace the outgoing audio track on every webcam peer (e.g. user changed mic).
+  replaceAudioTrack(newTrack: MediaStreamTrack) {
+    this.peers.forEach((peer) => {
+      const pc = (peer as any)._pc;
+      if (!pc) return;
+      const sender = pc.getSenders?.()?.find((s: any) => s.track?.kind === "audio");
+      if (sender) {
+        sender.replaceTrack(newTrack).catch((err: any) => {
+          console.error("[WebRTC] replaceTrack(audio) failed", err);
         });
       }
     });

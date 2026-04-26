@@ -65,6 +65,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
   const [outputDevices, setOutputDevices] = useState<MediaDeviceInfo[]>([]);
   const [micGain, setMicGain] = useState(100);
+  const [outputDeviceId, setOutputDeviceId] = useState<string>("");
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const started = useRef(false);
 
@@ -160,6 +161,24 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
       setOutputDevices(devices.filter((d) => d.kind === "audiooutput"));
     });
   }, []);
+
+  // Whenever a remote stream arrives, the new <video>/<audio> elements default to
+  // the system output. If the user picked a specific output device, push it onto
+  // every media element on the page so newcomers also play through the right speaker.
+  useEffect(() => {
+    if (!outputDeviceId) return;
+    const apply = () => {
+      document.querySelectorAll("video, audio").forEach((el: any) => {
+        if (el.setSinkId && el.sinkId !== outputDeviceId) {
+          el.setSinkId(outputDeviceId).catch(() => {});
+        }
+      });
+    };
+    apply();
+    // Re-apply once more after a tick, in case a stream attached just after this render
+    const t = setTimeout(apply, 200);
+    return () => clearTimeout(t);
+  }, [outputDeviceId, remoteVideos.length, remoteScreens.length]);
 
   useEffect(() => {
     if (started.current) return;
@@ -686,19 +705,21 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
             <label style={{ ...s.settingLabel, ...mono, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.05em" } : {}) }}>{isNeo ? "// МИКРОФОН" : "Микрофон"}</label>
             <select style={{ ...s.settingSelect, ...mono, ...(isNeo ? { borderRadius: 0 } : {}) }} onChange={async (e) => {
               try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: e.target.value }, video: false });
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: e.target.value } }, video: false });
                 const newTrack = stream.getAudioTracks()[0];
                 const ls = webrtcService.getLocalStream();
                 if (ls) {
                   const oldTrack = ls.getAudioTracks()[0];
-                  ls.removeTrack(oldTrack);
-                  oldTrack.stop();
+                  if (oldTrack) { ls.removeTrack(oldTrack); oldTrack.stop(); }
                   ls.addTrack(newTrack);
                 }
+                // Push the new track into every active peer connection so listeners
+                // actually hear from the new mic, not the old one.
+                webrtcService.replaceAudioTrack(newTrack);
                 // Reset gain context to use new audio source
                 webrtcService.resetGainContext();
                 if (micGain !== 100) webrtcService.setMicGain(micGain);
-              } catch {}
+              } catch (err) { console.error("[mic] change failed", err); }
             }}>
               {audioDevices.map((d) => <option key={d.deviceId} value={d.deviceId}>{d.label || "Микрофон"}</option>)}
             </select>
@@ -707,16 +728,18 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
             <label style={{ ...s.settingLabel, ...mono, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.05em" } : {}) }}>{isNeo ? "// КАМЕРА" : "Камера"}</label>
             <select style={{ ...s.settingSelect, ...mono, ...(isNeo ? { borderRadius: 0 } : {}) }} onChange={async (e) => {
               try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: e.target.value }, audio: false });
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: e.target.value } }, audio: false });
                 const newTrack = stream.getVideoTracks()[0];
                 const ls = webrtcService.getLocalStream();
-                if (ls && localVideoRef.current) {
+                if (ls) {
                   const oldTrack = ls.getVideoTracks()[0];
                   if (oldTrack) { ls.removeTrack(oldTrack); oldTrack.stop(); }
                   ls.addTrack(newTrack);
-                  localVideoRef.current.srcObject = ls;
+                  if (localVideoRef.current) localVideoRef.current.srcObject = ls;
                 }
-              } catch {}
+                // Push to every webcam peer (screen-share peers are independent)
+                webrtcService.replaceVideoTrack(newTrack);
+              } catch (err) { console.error("[cam] change failed", err); }
             }}>
               {videoDevices.map((d) => <option key={d.deviceId} value={d.deviceId}>{d.label || "Камера"}</option>)}
             </select>
@@ -724,11 +747,19 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
           {outputDevices.length > 0 && (
             <div style={s.settingRow}>
               <label style={{ ...s.settingLabel, ...mono, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.05em" } : {}) }}>{isNeo ? "// ДИНАМИК" : "Динамик"}</label>
-              <select style={{ ...s.settingSelect, ...mono, ...(isNeo ? { borderRadius: 0 } : {}) }} onChange={(e) => {
-                document.querySelectorAll("video, audio").forEach((el: any) => {
-                  if (el.setSinkId) el.setSinkId(e.target.value);
-                });
-              }}>
+              <select
+                value={outputDeviceId}
+                style={{ ...s.settingSelect, ...mono, ...(isNeo ? { borderRadius: 0 } : {}) }}
+                onChange={(e) => {
+                  setOutputDeviceId(e.target.value);
+                  // Apply to every existing media element. New ones added later will
+                  // pick it up via the effect below.
+                  document.querySelectorAll("video, audio").forEach((el: any) => {
+                    if (el.setSinkId) el.setSinkId(e.target.value).catch(() => {});
+                  });
+                }}
+              >
+                <option value="">(по умолчанию)</option>
                 {outputDevices.map((d) => <option key={d.deviceId} value={d.deviceId}>{d.label || "Динамик"}</option>)}
               </select>
             </div>
