@@ -189,12 +189,13 @@ ipcMain.on("window:focus", () => {
 // Expose base app icon to the renderer so it can composite a red-dot tray
 // version when there are unread messages.
 ipcMain.handle("tray:getBaseIcon", () => {
-  // Return the base PNG for the tray renderer to composite a red-dot version over.
-  // Prefer a PNG if present (canvas Image handles it cleanly); fall back to the ICO bytes.
+  // Return the base image for the tray renderer to composite a red-dot version over.
+  // gandola.ico/.png is the current art; the older icon.png that used to live here
+  // was the previous logo and shouldn't be picked up.
   const tryPaths = [
     path.join(__dirname, "../../assets/gandola.png"),
-    path.join(__dirname, "../../assets/icon.png"),
     path.join(__dirname, "../../assets/gandola.ico"),
+    path.join(__dirname, "../../assets/icon.ico"),
   ];
   for (const p of tryPaths) {
     try {
