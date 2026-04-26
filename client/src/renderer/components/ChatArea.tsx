@@ -90,9 +90,20 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     const handler = (data: any) => {
       if (data.chat_id !== chat.id) return;
       setMessages((prev) => [...prev, data as MessageOut]);
-      // If it's our own echoed message, drop the matching pending placeholder
+      // If it's our own echoed message, drop the matching pending placeholder.
+      // Match strictly by _temp_id so two identical messages sent in quick succession
+      // don't share the same pending entry.
       if (data.sender_id === currentUser.id) {
+        const tempId = data._temp_id;
         setPendingMsgs((prev) => {
+          if (tempId != null) {
+            const idx = prev.findIndex((p) => p.id === tempId);
+            if (idx < 0) return prev;
+            const next = [...prev];
+            next.splice(idx, 1);
+            return next;
+          }
+          // Fallback for any old client / server combination: content match (single one only)
           const idx = prev.findIndex((p) => p.content === data.content);
           if (idx < 0) return prev;
           const next = [...prev];
@@ -136,6 +147,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
             chat_id: chat.id,
             content: p.content,
             reply_to_id: p.reply_to_id || null,
+            _temp_id: p.id,
           });
         });
         return prev;
@@ -421,6 +433,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
       chat_id: chat.id,
       content,
       reply_to_id: replyTo?.id || null,
+      _temp_id: tempMsg.id,
     });
     setText("");
     setReplyTo(null);

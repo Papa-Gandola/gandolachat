@@ -48,6 +48,15 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                 original_content = data.get("content", "")
                 original_author = data.get("original_author", "")
                 if target_chat_id and original_content:
+                    # Verify the sender is actually a member of the target chat —
+                    # without this any logged-in user could push messages anywhere.
+                    membership = await db.execute(
+                        select(Chat).join(Chat.members).where(
+                            Chat.id == target_chat_id, User.id == user_id
+                        )
+                    )
+                    if membership.scalar_one_or_none() is None:
+                        continue
                     sender_result = await db.execute(select(User).where(User.id == user_id))
                     sender = sender_result.scalar_one()
                     fwd_content = f"[Переслано от {original_author}]\n{original_content}"
@@ -289,6 +298,7 @@ async def handle_message(data: dict, sender_id: int, db: AsyncSession):
     chat_id = data.get("chat_id")
     content = data.get("content", "").strip()
     reply_to_id = data.get("reply_to_id")
+    temp_id = data.get("_temp_id")  # client-supplied correlation id, echoed back
 
     if not chat_id or not content:
         return
@@ -347,6 +357,7 @@ async def handle_message(data: dict, sender_id: int, db: AsyncSession):
         "reply_to_id": reply_to_id,
         "reply_to_username": reply_to_username,
         "reply_to_content": reply_to_content,
+        "_temp_id": temp_id,
     }
     await manager.broadcast_to_chat(chat_id, payload)
 
@@ -466,16 +477,20 @@ async def handle_poker_action(data: dict, user_id: int, db: AsyncSession):
                     "state": public_view(g, uid),
                 })
         else:
-            # Auto-start next hand after 5 seconds
+            # Auto-start next hand after 5 seconds. Need to re-check that the table
+            # still exists and our game instance is still in the store — the creator
+            # might press "Close table" during the gap.
             import asyncio
             async def _next():
                 await asyncio.sleep(5)
-                if not g.finished:
-                    start_hand(g)
-                    for uid in g.players.keys():
-                        await manager.send_to_user(uid, {
-                            "type": "poker_game_state",
-                            "table_id": table_id,
-                            "state": public_view(g, uid),
-                        })
+                live = game_store.get(table_id)
+                if live is not g or g.finished:
+                    return
+                start_hand(g)
+                for uid in g.players.keys():
+                    await manager.send_to_user(uid, {
+                        "type": "poker_game_state",
+                        "table_id": table_id,
+                        "state": public_view(g, uid),
+                    })
             asyncio.create_task(_next())

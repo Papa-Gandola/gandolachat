@@ -80,12 +80,10 @@ export default function Poker({ chat, currentUser }: Props) {
       setActiveTable((cur) => (cur && cur.id === data.table_id ? null : cur));
     };
     const onGameState = (data: any) => {
-      // Multiple tables possible per chat — only update if it's the active one.
+      // Only accept state for the table we're actually viewing — never let an
+      // unrelated table's snapshot overwrite the active one.
       if (activeTable && data.table_id === activeTable.id) {
         setGameState(data.state);
-      } else {
-        // Even if we're not viewing this table, keep latest state for restore on open
-        setGameState((prev) => (prev && prev.table_id === data.table_id ? data.state : prev));
       }
     };
     const onPokerError = (data: any) => {
@@ -179,7 +177,11 @@ export default function Poker({ chat, currentUser }: Props) {
 
   function sendAction(action: "fold" | "check" | "call" | "raise", amount = 0) {
     if (!activeTable) return;
-    wsService.send({ type: "poker_action", table_id: activeTable.id, action, amount });
+    const ok = wsService.send({ type: "poker_action", table_id: activeTable.id, action, amount });
+    if (!ok) {
+      setError("Соединение прервано — попробуй ещё раз");
+      setTimeout(() => setError(null), 4000);
+    }
   }
 
   async function closeTable(tableId: number) {

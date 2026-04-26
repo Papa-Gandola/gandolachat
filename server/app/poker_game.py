@@ -325,18 +325,22 @@ def _advance(g: GameState):
     # Otherwise pick next clockwise from current to_act
     cur_seat = hand.to_act_seat
     seats_in_play = sorted(set(p.seat_index for p in can_act))
-    if cur_seat not in seats_in_play:
-        # Current player went all-in or folded; pick next greater
-        cur_seat = max([s for s in seats_in_play if s <= cur_seat], default=seats_in_play[-1])
-    idx = seats_in_play.index(cur_seat) if cur_seat in seats_in_play else -1
-    # Walk forward
+    # Find a starting index from which to walk forward. If the current actor
+    # already left the action set (folded / went all-in), start from the seat just
+    # after them in the original seating, then wrap.
+    if cur_seat in seats_in_play:
+        start_idx = seats_in_play.index(cur_seat)
+    else:
+        # First seat strictly greater than cur_seat — if none, wrap to 0
+        higher = [i for i, s in enumerate(seats_in_play) if s > (cur_seat or -1)]
+        # We start "before" that seat, so the +1 below lands on it
+        start_idx = (higher[0] - 1) if higher else (len(seats_in_play) - 1)
     for offset in range(1, len(seats_in_play) + 1):
-        next_seat = seats_in_play[(idx + offset) % len(seats_in_play)]
+        next_seat = seats_in_play[(start_idx + offset) % len(seats_in_play)]
         next_player = g.seat_player(next_seat)
-        if next_player and not next_player.has_acted:
-            hand.to_act_seat = next_seat
-            return
-        if next_player and next_player.bet < hand.current_bet:
+        if not next_player:
+            continue
+        if not next_player.has_acted or next_player.bet < hand.current_bet:
             hand.to_act_seat = next_seat
             return
     # No one needs to act
@@ -408,34 +412,93 @@ def _award_uncalled_pot(g: GameState, winner: PlayerState) -> dict:
 
 
 def _showdown(g: GameState) -> dict:
+    """Pay out the pot, splitting into side pots so an all-in short stack only
+    wins what it could possibly contest, never more."""
     hand = g.hand
     assert hand
+    # Everyone who put money in this hand (folded or not) — needed for side-pot accounting,
+    # because a folded player's chips still feed pots that survivors compete for.
+    all_committed = [p for p in g.players.values() if p.total_committed > 0]
+    if not all_committed:
+        # No money in pot (shouldn't really happen) — no-op
+        hand.street = "done"
+        return {"type": "hand_end", "winner_user_ids": [], "pot": 0, "reason": "showdown",
+                "community": [str(c) for c in hand.community], "showdown": []}
+
     contenders = g.players_in_hand()
-    # Score each
-    scored = []
+    # Pre-score each non-folded player; folded players are eligible for nothing.
+    scored: dict[int, tuple[int, ...]] = {}
     for p in contenders:
-        score = best_of_seven(p.hole + hand.community)
-        scored.append((score, p))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    best_score = scored[0][0]
-    winners = [p for sc, p in scored if sc == best_score]
-    share = hand.pot // len(winners)
-    remainder = hand.pot - share * len(winners)
-    for w in winners:
-        w.stack += share
-    if remainder > 0 and winners:
-        # Give odd chip to first winner clockwise from button
-        winners[0].stack += remainder
+        scored[p.user_id] = best_of_seven(p.hole + hand.community)
+
+    # Build side pots by ascending commitment levels
+    levels = sorted({p.total_committed for p in all_committed})
+    pots: list[tuple[int, list[int]]] = []  # (pot_chips, eligible_user_ids)
+    prev_level = 0
+    for level in levels:
+        diff = level - prev_level
+        # Everyone who put in at least this level contributes `diff` to this layer
+        contributors = [p for p in all_committed if p.total_committed >= level]
+        pot_size = diff * len(contributors)
+        if pot_size <= 0:
+            prev_level = level
+            continue
+        # Eligibility: only non-folded players who reached this level can win it
+        eligible = [p.user_id for p in contributors if not p.has_folded]
+        pots.append((pot_size, eligible))
+        prev_level = level
+
+    # Now distribute each pot to the best hand among its eligible players
+    winners_summary: list[dict] = []
+    awarded_total = 0
+    overall_winner_uids: set[int] = set()
+    overall_best_score: tuple[int, ...] | None = None
+
+    for pot_size, eligible_uids in pots:
+        if not eligible_uids:
+            # Everyone in this layer folded — chips would normally stay (impossible here
+            # since we ensured at least one survivor reached this level via contender list)
+            continue
+        eligible_scored = [(scored[uid], uid) for uid in eligible_uids if uid in scored]
+        if not eligible_scored:
+            continue
+        eligible_scored.sort(key=lambda x: x[0], reverse=True)
+        best = eligible_scored[0][0]
+        wins = [uid for sc, uid in eligible_scored if sc == best]
+        share = pot_size // len(wins)
+        remainder = pot_size - share * len(wins)
+        for uid in wins:
+            g.players[uid].stack += share
+        if remainder > 0:
+            # Odd chip → first winner clockwise from button
+            ordered = sorted(wins, key=lambda u: g.players[u].seat_index)
+            for u in ordered:
+                if u >= 0:
+                    g.players[u].stack += remainder
+                    break
+        winners_summary.append({
+            "pot": pot_size,
+            "winner_user_ids": wins,
+            "winning_hand": describe(best),
+        })
+        awarded_total += pot_size
+        if overall_best_score is None or best > overall_best_score:
+            overall_best_score = best
+            overall_winner_uids = set(wins)
+        elif best == overall_best_score:
+            overall_winner_uids.update(wins)
+
     summary = {
         "type": "hand_end",
-        "winner_user_ids": [w.user_id for w in winners],
-        "winning_hand": describe(best_score),
-        "pot": hand.pot,
+        "winner_user_ids": list(overall_winner_uids),
+        "winning_hand": describe(overall_best_score) if overall_best_score else None,
+        "pot": awarded_total,
+        "side_pots": winners_summary,
         "reason": "showdown",
         "community": [str(c) for c in hand.community],
         "showdown": [
-            {"user_id": p.user_id, "hole": [str(c) for c in p.hole], "hand": describe(score)}
-            for score, p in scored
+            {"user_id": p.user_id, "hole": [str(c) for c in p.hole], "hand": describe(scored[p.user_id])}
+            for p in contenders
         ],
     }
     g.last_summary = summary
