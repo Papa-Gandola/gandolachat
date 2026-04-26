@@ -39,6 +39,23 @@ class WebRTCService {
     this._initialized = true;
     wsService.on("call_signal", this._handleSignal);
     wsService.on("call_end", this._handleCallEnd);
+    // When the OS reports network back (VPN flip, WiFi switch), force-restart ICE
+    // on every active peer instead of waiting for the per-peer disconnect debounce.
+    window.addEventListener("online", () => {
+      const restartAll = (map: Map<number, SimplePeer.Instance>, kind: string) => {
+        map.forEach((peer, uid) => {
+          const pc = (peer as any)._pc as RTCPeerConnection | undefined;
+          if (!pc) return;
+          try {
+            console.log(`[WebRTC] window.online → restartIce ${kind} peer ${uid}`);
+            pc.restartIce();
+          } catch {}
+        });
+      };
+      restartAll(this.peers, "cam");
+      restartAll(this.screenSendingPeers, "scr-out");
+      // Receiving peers are responders — they'll get the new offer; no need to call restartIce
+    });
   }
 
   async startCall(chatId: number, memberIds: number[], video: boolean) {
@@ -168,6 +185,37 @@ class WebRTCService {
     peer.on("connect", () => {
       console.log(`[WebRTC] ${purpose} CONNECTED to peer`, targetUserId);
     });
+
+    // Auto-recovery: when the underlying ICE connection drops (e.g. user toggles
+    // VPN, switches WiFi → mobile, etc) restart ICE instead of letting the peer die.
+    // Only the initiator side actually triggers restartIce — the responder will pick up
+    // the new candidates via the normal signaling.
+    const pc2 = (peer as any)._pc as RTCPeerConnection | undefined;
+    if (pc2) {
+      let restartScheduled = false;
+      const tryRestart = (reason: string) => {
+        if (restartScheduled) return;
+        restartScheduled = true;
+        setTimeout(() => {
+          restartScheduled = false;
+          // Only restart if still in trouble after the debounce
+          const st = pc2.iceConnectionState;
+          if (st !== "disconnected" && st !== "failed") return;
+          if (!initiator) return; // responder waits for the initiator's new offer
+          try {
+            console.log(`[WebRTC] ICE restart for ${purpose} peer ${targetUserId} (${reason}, state=${st})`);
+            pc2.restartIce();
+          } catch (err) {
+            console.error("[WebRTC] restartIce failed", err);
+          }
+        }, 2000);
+      };
+      pc2.addEventListener("iceconnectionstatechange", () => {
+        const st = pc2.iceConnectionState;
+        console.log(`[WebRTC] ${purpose} ICE ${targetUserId}: ${st}`);
+        if (st === "disconnected" || st === "failed") tryRestart(`ice=${st}`);
+      });
+    }
 
     peer.on("close", () => {
       map.delete(targetUserId);
