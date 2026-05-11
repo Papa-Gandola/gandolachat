@@ -10,9 +10,15 @@ export default function App() {
 
   useEffect(() => {
     const saved = localStorage.getItem("token") || sessionStorage.getItem("token");
+    const storage = localStorage.getItem("token") ? localStorage : sessionStorage;
     if (!saved) { setChecking(false); return; }
     userApi.me()
-      .then((res) => { setToken(saved); setUser(res.data); })
+      .then((res) => {
+        const fresh = res.data.access_token;
+        storage.setItem("token", fresh);
+        setToken(fresh);
+        setUser(res.data.user);
+      })
       .catch(() => { localStorage.removeItem("token"); sessionStorage.removeItem("token"); })
       .finally(() => setChecking(false));
   }, []);

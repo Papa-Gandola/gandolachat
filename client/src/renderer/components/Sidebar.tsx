@@ -73,7 +73,7 @@ export default function Sidebar({
       const m = new Map<number, number>();
       Object.entries(res.data).forEach(([k, v]) => {
         const id = Number(k);
-        if (id === activeChatId) return;
+        if (id === activeChatId && document.hasFocus()) return;
         m.set(id, v);
       });
       setUnread(m);
@@ -82,7 +82,7 @@ export default function Sidebar({
     const onOnline = (data: any) => setOnlineUsers((prev) => new Set([...prev, data.user_id]));
     const onOffline = (data: any) => setOnlineUsers((prev) => { const n = new Set(prev); n.delete(data.user_id); return n; });
     const onMsg = (data: any) => {
-      if (data.chat_id !== activeChatId && data.sender_id !== currentUser.id) {
+      if (data.sender_id !== currentUser.id && (data.chat_id !== activeChatId || !document.hasFocus())) {
         setUnread((prev) => new Map(prev).set(data.chat_id, (prev.get(data.chat_id) || 0) + 1));
       }
     };
@@ -106,7 +106,7 @@ export default function Sidebar({
   }, [activeChatId, currentUser.id]);
 
   useEffect(() => {
-    if (activeChatId != null) {
+    if (activeChatId != null && document.hasFocus()) {
       setUnread((prev) => {
         if (!prev.has(activeChatId)) return prev;
         const n = new Map(prev);
@@ -114,6 +114,20 @@ export default function Sidebar({
         return n;
       });
     }
+  }, [activeChatId]);
+
+  useEffect(() => {
+    const onFocus = () => {
+      if (activeChatId == null) return;
+      setUnread((prev) => {
+        if (!prev.has(activeChatId)) return prev;
+        const n = new Map(prev);
+        n.delete(activeChatId);
+        return n;
+      });
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, [activeChatId]);
 
   // Push total unread count to Electron taskbar badge (Telegram-style).

@@ -84,6 +84,16 @@ body.theme-neo {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+  user-select: none;
+}
+
+/* Re-enable selection only where it makes sense */
+input, textarea, [contenteditable] {
+  user-select: text;
+}
+
+.msg-content, .msg-content * {
+  user-select: text;
 }
 
 html, body, #root {
@@ -356,3 +366,11 @@ body.theme-neo .date-divider .label {
 .gap-16 { gap: 16px; }
 .flex-1 { flex: 1; }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Placeholder for contenteditable chat input */
+.chat-input:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-muted);
+  pointer-events: none;
+  user-select: none;
+}

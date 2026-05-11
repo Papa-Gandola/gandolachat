@@ -8,10 +8,12 @@ services:
       POSTGRES_USER: gandola
       POSTGRES_PASSWORD: gandola
       POSTGRES_DB: gandolachat
+    ports:
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U gandola"]
+      test: ["CMD-SHELL", "pg_isready -U gandola -d gandolachat"]
       interval: 5s
       timeout: 5s
       retries: 10

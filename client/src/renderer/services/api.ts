@@ -58,8 +58,14 @@ export const authApi = {
   rejectUser: (userId: number) => api.post(`/api/auth/reject-user/${userId}`),
 };
 
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  user: UserOut;
+}
+
 export const userApi = {
-  me: () => api.get<UserOut>("/api/users/me"),
+  me: () => api.get<TokenResponse>("/api/users/me"),
   search: (q: string) => api.get<UserOut[]>(`/api/users/search?q=${encodeURIComponent(q)}`),
   updateProfile: (data: { username?: string; status?: string; about?: string }) =>
     api.patch<UserOut>("/api/users/me", data),

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChatOut, MessageOut, UserOut, chatApi } from "../services/api";
 import { wsService } from "../services/ws";
 import { playMessageSound } from "../services/sounds";
@@ -59,7 +59,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   const [unreadSinceScroll, setUnreadSinceScroll] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const textInputRef = useRef<HTMLTextAreaElement>(null);
+  const textInputRef = useRef<HTMLDivElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const atBottomRef = useRef(true);
 
@@ -266,6 +266,8 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   const [hasMore, setHasMore] = useState(true);
   const messagesRef = useRef<HTMLDivElement>(null);
   const seenIdRef = useRef<number>(0);
+  const prevScrollHeightRef = useRef<number>(0);
+  const didLoadOlderRef = useRef(false);
 
   // Mark messages as read only when they actually become visible in the viewport.
   useEffect(() => {
@@ -333,9 +335,20 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     }
   }
 
+  useLayoutEffect(() => {
+    if (!didLoadOlderRef.current) return;
+    didLoadOlderRef.current = false;
+    const el = messagesRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollTop + (el.scrollHeight - prevScrollHeightRef.current);
+  }, [messages]);
+
   async function loadOlderMessages() {
     if (!hasMore || loading || messages.length === 0) return;
     const oldest = messages[0];
+    const el = messagesRef.current;
+    if (el) prevScrollHeightRef.current = el.scrollHeight;
+    didLoadOlderRef.current = true;
     setLoading(true);
     try {
       const res = await chatApi.getMessages(chat.id, 50, oldest.id);
@@ -367,21 +380,128 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     setUnreadSinceScroll(0);
   }
 
-  function wrapSelection(marker: string) {
-    const ta = textInputRef.current;
-    if (!ta) return;
-    const start = ta.selectionStart;
-    const end = ta.selectionEnd;
-    const before = text.slice(0, start);
-    const sel = text.slice(start, end);
-    const after = text.slice(end);
-    const newText = `${before}${marker}${sel}${marker}${after}`;
-    setText(newText);
-    setTimeout(() => {
-      ta.focus();
-      const newPos = end + marker.length * 2;
-      ta.setSelectionRange(newPos, newPos);
-    }, 0);
+  function htmlToMarkdown(el: HTMLElement): string {
+    type Sty = { bold: boolean; italic: boolean; underline: boolean; strike: boolean; spoiler: boolean };
+    const none: Sty = { bold: false, italic: false, underline: false, strike: false, spoiler: false };
+    const leaves: { text: string; sty: Sty }[] = [];
+
+    function collect(node: Node, sty: Sty) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const t = node.textContent || "";
+        if (t) leaves.push({ text: t, sty: { ...sty } });
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      const elem = node as HTMLElement;
+      const tag = elem.tagName.toLowerCase();
+      // Trailing <br> (no nextSibling) is a Chromium layout artifact — skip it
+      if (tag === "br") { if (node.nextSibling) leaves.push({ text: "\n", sty: { ...none } }); return; }
+      if ((tag === "div" || tag === "p") && leaves.length > 0) leaves.push({ text: "\n", sty: { ...none } });
+      const ns: Sty = { ...sty };
+      if (tag === "b" || tag === "strong") ns.bold = true;
+      if (tag === "i" || tag === "em") ns.italic = true;
+      if (tag === "u") ns.underline = true;
+      if (tag === "s" || tag === "strike" || tag === "del") ns.strike = true;
+      if (elem.dataset.format === "spoiler") ns.spoiler = true;
+      elem.childNodes.forEach(c => collect(c, ns));
+    }
+    collect(el, { ...none });
+
+    const groups: { text: string; sty: Sty }[] = [];
+    for (const leaf of leaves) {
+      const last = groups[groups.length - 1];
+      if (last && last.sty.bold === leaf.sty.bold && last.sty.italic === leaf.sty.italic &&
+          last.sty.underline === leaf.sty.underline && last.sty.strike === leaf.sty.strike &&
+          last.sty.spoiler === leaf.sty.spoiler) {
+        last.text += leaf.text;
+      } else {
+        groups.push({ text: leaf.text, sty: { ...leaf.sty } });
+      }
+    }
+
+    function wrap(text: string, s: Sty): string {
+      if (!s.bold && !s.italic && !s.underline && !s.strike && !s.spoiler) return text;
+      let r = text;
+      if (s.spoiler) r = `||${r}||`;
+      if (s.strike) r = `~~${r}~~`;
+      if (s.underline) r = `__${r}__`;
+      if (s.bold && s.italic) r = `***${r}***`;
+      else if (s.bold) r = `**${r}**`;
+      else if (s.italic) r = `*${r}*`;
+      return r;
+    }
+
+    let result = "";
+    for (const g of groups) {
+      const str = wrap(g.text, g.sty);
+      // Insert ZWS between adjacent `*`/`_` markers to prevent parser ambiguity
+      if (result.length > 0 && str.length > 0) {
+        const lc = result[result.length - 1];
+        const fc = str[0];
+        if ((lc === "*" || lc === "_") && (fc === "*" || fc === "_")) result += "​";
+      }
+      result += str;
+    }
+    return result;
+  }
+
+  function applyFormat(command: string) {
+    const el = textInputRef.current;
+    if (!el) return;
+    el.focus();
+    const _sel = window.getSelection();
+    if (!_sel || _sel.rangeCount === 0 || _sel.getRangeAt(0).collapsed) return;
+    if (command === "spoiler") {
+      const range = _sel.getRangeAt(0);
+      // Check if selection starts inside an existing spoiler span
+      let startNode: globalThis.Node | null = range.startContainer;
+      if (startNode.nodeType === globalThis.Node.TEXT_NODE) startNode = startNode.parentElement;
+      const startSpoiler = (startNode as HTMLElement).closest?.("[data-format='spoiler']");
+      if (startSpoiler) {
+        // Unwrap the spoiler containing the selection start
+        const parent = startSpoiler.parentNode!;
+        while (startSpoiler.firstChild) parent.insertBefore(startSpoiler.firstChild, startSpoiler);
+        parent.removeChild(startSpoiler);
+      } else {
+        // Unwrap any spoilers the selection intersects, or wrap if none
+        const intersecting = Array.from(el.querySelectorAll("[data-format='spoiler']"))
+          .filter(sp => range.intersectsNode(sp));
+        if (intersecting.length > 0) {
+          for (const sp of intersecting) {
+            const p = sp.parentNode!;
+            while (sp.firstChild) p.insertBefore(sp.firstChild, sp);
+            p.removeChild(sp);
+          }
+        } else {
+          const span = document.createElement("span");
+          span.dataset.format = "spoiler";
+          span.style.cssText = "background:var(--bg-tertiary);color:var(--text-muted);border-radius:3px;padding:0 2px;cursor:default";
+          try {
+            range.surroundContents(span);
+          } catch {
+            const fragment = range.extractContents();
+            span.appendChild(fragment);
+            range.insertNode(span);
+          }
+          // Place cursor after the span so subsequent typing is outside the spoiler
+          const after = document.createRange();
+          after.setStartAfter(span);
+          after.collapse(true);
+          _sel.removeAllRanges();
+          _sel.addRange(after);
+        }
+      }
+    } else {
+      document.execCommand(command);
+    }
+    setText(el.innerText.trim());
+  }
+
+  function resetInlineFormat() {
+    if (document.queryCommandState("bold")) document.execCommand("bold");
+    if (document.queryCommandState("italic")) document.execCommand("italic");
+    if (document.queryCommandState("underline")) document.execCommand("underline");
+    if (document.queryCommandState("strikeThrough")) document.execCommand("strikeThrough");
   }
 
   async function scrollToMessage(msgId: number) {
@@ -408,8 +528,9 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
 
   function sendMessage(e: React.FormEvent) {
     e.preventDefault();
-    if (!text.trim()) return;
-    const content = text.trim();
+    const el = textInputRef.current;
+    const content = el ? htmlToMarkdown(el).trim() : "";
+    if (!content) return;
     // Optimistic: always enqueue pending placeholder so user sees something immediately,
     // even when WS is offline. It gets removed when the server echoes the real message.
     const tempMsg: MessageOut = {
@@ -435,13 +556,12 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
       reply_to_id: replyTo?.id || null,
       _temp_id: tempMsg.id,
     });
+    if (el) { el.innerHTML = ""; el.style.height = "auto"; }
     setText("");
     setReplyTo(null);
     // Trigger SEND glow flash
     setSendFlash(true);
     setTimeout(() => setSendFlash(false), 300);
-    // Reset textarea height after sending (it shrunk, so we reset autoresize state)
-    if (textInputRef.current) textInputRef.current.style.height = "auto";
     setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
   }
 
@@ -761,7 +881,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                           if (pokerMatch) {
                             return <PokerInviteCard tableId={Number(pokerMatch[1])} chatId={chat.id} isNeo={isNeo} senderName={msg.sender_username} />;
                           }
-                          return <p style={{ ...s.msgText, ...(isNeo && isMine ? { color: "#0a0a0a" } : {}), ...(!isNeo && isMine ? { color: "#fff" } : {}) }}><FormattedText text={msg.content} /></p>;
+                          return <p className="msg-content" style={{ ...s.msgText, ...(isNeo && isMine ? { color: "#0a0a0a" } : {}), ...(!isNeo && isMine ? { color: "#fff" } : {}) }}><FormattedText text={msg.content} /></p>;
                         })()}
                         {/* Reactions display */}
                         {reactions.get(msg.id)?.length ? (
@@ -926,11 +1046,11 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
 
       {/* Format toolbar — collapsible drawer */}
       <div style={{ ...s.formatBar, overflow: "hidden", padding: showFormatBar ? "4px 16px" : "0 16px", maxHeight: showFormatBar ? 40 : 0, transition: "max-height 0.2s ease, padding 0.2s ease", borderTop: showFormatBar ? "1px solid var(--border)" : "none" }}>
-        <button type="button" style={{ ...s.formatBtn, ...(isNeo ? mono : {}) }} onClick={() => wrapSelection("**")} title="Жирный"><b>B</b></button>
-        <button type="button" style={{ ...s.formatBtn, ...(isNeo ? mono : {}) }} onClick={() => wrapSelection("*")} title="Курсив"><i>I</i></button>
-        <button type="button" style={{ ...s.formatBtn, ...(isNeo ? mono : {}) }} onClick={() => wrapSelection("__")} title="Подчёркнутый"><u>U</u></button>
-        <button type="button" style={{ ...s.formatBtn, ...(isNeo ? mono : {}) }} onClick={() => wrapSelection("~~")} title="Зачёркнутый"><s>S</s></button>
-        <button type="button" style={{ ...s.formatBtn, ...(isNeo ? mono : {}) }} onClick={() => wrapSelection("||")} title="Спойлер">▮</button>
+        <button type="button" style={{ ...s.formatBtn, ...(isNeo ? mono : {}) }} onClick={() => applyFormat("bold")} title="Жирный (Ctrl+B)"><b>B</b></button>
+        <button type="button" style={{ ...s.formatBtn, ...(isNeo ? mono : {}) }} onClick={() => applyFormat("italic")} title="Курсив (Ctrl+I)"><i>I</i></button>
+        <button type="button" style={{ ...s.formatBtn, ...(isNeo ? mono : {}) }} onClick={() => applyFormat("underline")} title="Подчёркнутый (Ctrl+U)"><u>U</u></button>
+        <button type="button" style={{ ...s.formatBtn, ...(isNeo ? mono : {}) }} onClick={() => applyFormat("strikeThrough")} title="Зачёркнутый (Ctrl+Shift+X)"><s>S</s></button>
+        <button type="button" style={{ ...s.formatBtn, ...(isNeo ? mono : {}) }} onClick={() => applyFormat("spoiler")} title="Спойлер (Ctrl+Shift+P)">▮</button>
         <button
           type="button"
           title="Скрыть панель форматирования"
@@ -995,7 +1115,11 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
       {/* Emoji picker */}
       {showEmoji && (
         <EmojiPicker
-          onSelect={(emoji) => { setText((prev) => prev + emoji); setShowEmoji(false); }}
+          onSelect={(emoji) => {
+            const el = textInputRef.current;
+            if (el) { el.focus(); document.execCommand("insertText", false, emoji); setText(el.innerText.trim()); }
+            setShowEmoji(false);
+          }}
           onClose={() => setShowEmoji(false)}
         />
       )}
@@ -1012,30 +1136,51 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
           title="Эмодзи"
         >{hoverEmoji}</button>
         {isNeo && <span style={{ color: "var(--accent)", ...mono, fontSize: 14, marginRight: 2 }}>&gt;</span>}
-        <textarea
+        <div
           ref={textInputRef}
-          style={{ ...s.textInput, ...(isNeo ? mono : {}), overflowY: "auto" as const }}
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-            handleTyping();
-            // Auto-resize: grow upward with content, cap at 160px (~6 lines)
-            const ta = e.target;
-            ta.style.height = "auto";
-            ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
-          }}
-          placeholder={isNeo
+          contentEditable
+          suppressContentEditableWarning
+          data-placeholder={isNeo
             ? `написать_${(chat.is_group ? chat.name : getChatTitle())?.toLowerCase().replace(/\s+/g, "_")}...`
             : `Написать ${chat.is_group ? "в группе" : getChatTitle()}...`}
-          rows={1}
+          className="chat-input"
+          style={{ ...s.textInput, ...(isNeo ? mono : {}), overflowY: "auto" as const, outline: "none", whiteSpace: "pre-wrap" as const, wordBreak: "break-word" as const, cursor: "text" }}
+          onInput={(e) => {
+            const div = e.currentTarget;
+            setText(div.innerText.trim());
+            handleTyping();
+            div.style.height = "auto";
+            div.style.height = Math.min(div.scrollHeight, 160) + "px";
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.ctrlKey && !e.shiftKey) {
               e.preventDefault();
               sendMessage(e as any);
-            } else if (e.key === "Enter" && e.ctrlKey) {
+            } else if (e.key === "Enter" && (e.ctrlKey || e.shiftKey)) {
               e.preventDefault();
-              setText((t) => t + "\n");
+              resetInlineFormat();
+              document.execCommand("insertText", false, "\n");
+            } else if (e.key === " ") {
+              e.preventDefault();
+              resetInlineFormat();
+              document.execCommand("insertText", false, " ");
+              setText(textInputRef.current?.innerText.trim() || "");
+            } else if (e.ctrlKey && !e.shiftKey && e.code === "KeyB") {
+              e.preventDefault(); if (!e.repeat) applyFormat("bold");
+            } else if (e.ctrlKey && !e.shiftKey && e.code === "KeyI") {
+              e.preventDefault(); if (!e.repeat) applyFormat("italic");
+            } else if (e.ctrlKey && !e.shiftKey && e.code === "KeyU") {
+              e.preventDefault(); if (!e.repeat) applyFormat("underline");
+            } else if (e.ctrlKey && e.shiftKey && e.code === "KeyX") {
+              e.preventDefault(); if (!e.repeat) applyFormat("strikeThrough");
+            } else if (e.ctrlKey && e.shiftKey && e.code === "KeyP") {
+              e.preventDefault(); if (!e.repeat) applyFormat("spoiler");
             }
+          }}
+          onPaste={(e) => {
+            e.preventDefault();
+            const plain = e.clipboardData.getData("text/plain");
+            document.execCommand("insertText", false, plain);
           }}
         />
         <button
