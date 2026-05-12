@@ -3,7 +3,7 @@ import { useTheme } from "../services/theme";
 
 // Parse markdown-like syntax into React nodes
 // Supports: **bold**, *italic*, ~~strike~~, __underline__, ||spoiler||
-type Node = { type: "text" | "bold" | "italic" | "strike" | "underline" | "spoiler"; content: string | Node[] };
+type Node = { type: "text" | "bold" | "bolditalic" | "italic" | "strike" | "underline" | "spoiler"; content: string | Node[] };
 
 function parse(text: string): Node[] {
   const nodes: Node[] = [];
@@ -34,6 +34,7 @@ function parse(text: string): Node[] {
     };
 
     if (
+      tryMarker("***", "bolditalic") ||
       tryMarker("**", "bold") ||
       tryMarker("__", "underline") ||
       tryMarker("~~", "strike") ||
@@ -90,6 +91,7 @@ function renderNodes(nodes: Node[], key = 0): React.ReactNode[] {
     const k = `${key}-${idx}`;
     if (node.type === "text") return <React.Fragment key={k}>{renderText(node.content as string, k)}</React.Fragment>;
     const inner = renderNodes(node.content as Node[], idx);
+    if (node.type === "bolditalic") return <strong key={k}><em>{inner}</em></strong>;
     if (node.type === "bold") return <strong key={k}>{inner}</strong>;
     if (node.type === "italic") return <em key={k}>{inner}</em>;
     if (node.type === "strike") return <s key={k}>{inner}</s>;

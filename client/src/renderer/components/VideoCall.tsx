@@ -368,13 +368,26 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
     if (!freeMode) return;
     e.stopPropagation();
     e.preventDefault();
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const pos = tilePositions.get(id) || { x: 20, y: 20, w: 280, h: 210 };
     const tileEl = (e.currentTarget as HTMLElement).closest("[data-tile-id]") as HTMLElement | null;
     if (!tileEl) return;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    // Read actual rendered position from DOM so the first drag doesn't teleport
+    // (tilePositions may not have an entry yet if the tile was never moved)
+    const pos = tilePositions.get(id) ?? {
+      x: parseFloat(tileEl.style.left) || 20,
+      y: parseFloat(tileEl.style.top) || 20,
+      w: parseFloat(tileEl.style.width) || 280,
+      h: parseFloat(tileEl.style.height) || 210,
+    };
+    const videoEl = tileEl.querySelector("video") as HTMLVideoElement | null;
+    const aspect = (videoEl && videoEl.videoWidth && videoEl.videoHeight)
+      ? videoEl.videoWidth / videoEl.videoHeight
+      : pos.w / pos.h;
     let lastFrame: number | null = null;
     let pendingPos = { ...pos };
+
+    document.body.style.userSelect = "none";
 
     const onMove = (ev: MouseEvent) => {
       const dx = ev.clientX - startX;
@@ -382,7 +395,8 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
       if (mode === "move") {
         pendingPos = { ...pos, x: pos.x + dx, y: pos.y + dy };
       } else {
-        pendingPos = { ...pos, w: Math.max(160, pos.w + dx), h: Math.max(120, pos.h + dy) };
+        const newW = Math.max(160, pos.w + dx);
+        pendingPos = { ...pos, w: newW, h: Math.max(90, Math.round(newW / aspect)) };
       }
       if (lastFrame === null) {
         lastFrame = requestAnimationFrame(() => {
@@ -398,7 +412,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
     };
     const onUp = () => {
       if (lastFrame !== null) cancelAnimationFrame(lastFrame);
-      // Commit final position to state
+      document.body.style.userSelect = "";
       setTilePositions((prev) => new Map(prev).set(id, pendingPos));
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
@@ -417,6 +431,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
     const startPos = { ...miniPos };
     let last = { ...startPos };
     let raf: number | null = null;
+    document.body.style.userSelect = "none";
     const onMove = (ev: MouseEvent) => {
       const dx = ev.clientX - startX;
       const dy = ev.clientY - startY;
@@ -443,6 +458,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
     };
     const onUp = () => {
       if (raf !== null) cancelAnimationFrame(raf);
+      document.body.style.userSelect = "";
       setMiniPos(last);
       try { localStorage.setItem("callMiniPos", JSON.stringify(last)); } catch {}
       window.removeEventListener("mousemove", onMove);
@@ -636,6 +652,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
                 ...(freeMode && pos ? { position: "absolute" as const, left: pos.x, top: pos.y, width: pos.w, height: pos.h } : {}),
                 cursor: freeMode ? "move" : "pointer", border: "2px solid #5865f2",
                 willChange: freeMode ? "left, top, width, height" : "auto",
+                transition: freeMode ? "none" : "box-shadow 0.15s",
               }}
               onMouseDown={(e) => freeMode && startDrag("screen", e, "move")}
               onClick={() => !freeMode && setEnlarged(enlarged === "screen" ? null : "screen")}
@@ -684,6 +701,8 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
                 cursor: freeMode ? "move" : "pointer",
                 border: isNeo ? "1px solid var(--accent)" : "2px solid #5865f2",
                 ...(isNeo ? { borderRadius: 0 } : {}),
+                willChange: freeMode ? "left, top, width, height" : "auto",
+                transition: freeMode ? "none" : "box-shadow 0.15s",
               }}
               onMouseDown={(e) => freeMode && startDrag(screenKey, e, "move")}
               onClick={() => !freeMode && setEnlarged(enlarged === screenKey ? null : screenKey)}
@@ -1132,6 +1151,7 @@ const s: Record<string, React.CSSProperties> = {
     background: "rgba(0,0,0,0.95)",
     display: "flex", flexDirection: "column",
     alignItems: "center",
+    userSelect: "none" as const,
   },
   header: { padding: "16px 0 8px", textAlign: "center", position: "relative" as const, width: "100%" },
   title: { color: "#fff", fontWeight: 700, fontSize: 18, display: "block" },

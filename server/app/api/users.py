@@ -7,16 +7,21 @@ import uuid
 from app.database import get_db
 from app.models import User
 from app.schemas import UserOut
-from app.auth import get_current_user
+from app.auth import get_current_user, create_access_token
+from app.schemas import Token
 from app.config import settings
 from app.ws.manager import manager
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
 
-@router.get("/me", response_model=UserOut)
+@router.get("/me", response_model=Token)
 async def get_me(current_user: User = Depends(get_current_user)):
-    return current_user
+    return Token(
+        access_token=create_access_token(current_user.id),
+        token_type="bearer",
+        user=UserOut.model_validate(current_user),
+    )
 
 
 @router.get("/search", response_model=list[UserOut])

@@ -32,7 +32,7 @@ export default function ProfilePage({ user: initialUser, currentUser, onClose, o
     if (user.id !== currentUser.id) {
       userApi.getUser(user.id).then((res) => setUser(res.data)).catch(() => {});
     } else {
-      userApi.me().then((res) => setUser(res.data)).catch(() => {});
+      userApi.me().then((res) => setUser(res.data.user)).catch(() => {});
     }
   }, [initialUser.id]);
 
@@ -357,7 +357,7 @@ const s: Record<string, React.CSSProperties> = {
   avatarEdit: { position: "absolute" as const, bottom: 0, left: 0, right: 0, background: "rgba(0,0,0,0.6)", color: "#fff", textAlign: "center" as const, padding: "4px 0", fontSize: 11, borderBottomLeftRadius: 60, borderBottomRightRadius: 60 },
   field: { marginBottom: 20 },
   label: { display: "block", color: "var(--text-muted)", fontSize: 11, fontWeight: 700, letterSpacing: "0.05em", marginBottom: 6 },
-  value: { color: "var(--text-primary)", fontSize: 15, display: "block" as const },
+  value: { color: "var(--text-primary)", fontSize: 15, display: "block" as const, userSelect: "text" as const },
   valueRow: { display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--bg-secondary)", borderRadius: 6, padding: "10px 14px" },
   editRow: { display: "flex", gap: 6, alignItems: "center" },
   input: { flex: 1, background: "var(--bg-tertiary)", border: "1px solid var(--accent)", borderRadius: 4, padding: "8px 12px", fontSize: 14, color: "var(--text-primary)" },
