@@ -55,7 +55,11 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                             Chat.id == target_chat_id, User.id == user_id
                         )
                     )
-                    if membership.scalar_one_or_none() is None:
+                    target_chat = membership.scalar_one_or_none()
+                    if target_chat is None:
+                        continue
+                    # Channel mode: only creator can post
+                    if target_chat.is_group and not target_chat.allow_all_write and target_chat.created_by != user_id:
                         continue
                     sender_result = await db.execute(select(User).where(User.id == user_id))
                     sender = sender_result.scalar_one()
@@ -211,7 +215,49 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                         active = manager.active_calls.get(chat_id, set())
                         if len(active) >= 2 and user_id not in active:
                             continue  # DM call full, reject
+                    is_new_to_call = user_id not in manager.active_calls[chat_id]
                     manager.active_calls[chat_id].add(user_id)
+                    # Track call meta for history
+                    just_created_meta = chat_id not in manager.call_meta
+                    if just_created_meta:
+                        import time as _t
+                        manager.call_meta[chat_id] = {
+                            "started_at": _t.time(),
+                            "initiator": user_id,
+                            "all_participants": {user_id},
+                            "answered": False,
+                        }
+                    meta = manager.call_meta[chat_id]
+                    meta["all_participants"].add(user_id)
+                    if is_new_to_call and user_id != meta["initiator"]:
+                        meta["answered"] = True
+                    # If this was the very first signal of the call, schedule a 60-sec
+                    # "missed" timeout — finalises the call as missed if nobody picks up.
+                    if just_created_meta:
+                        import asyncio
+                        async def _missed_timeout(_chat_id: int, _db: AsyncSession):
+                            await asyncio.sleep(60)
+                            m = manager.call_meta.get(_chat_id)
+                            if not m:
+                                return  # call already ended for another reason
+                            if m.get("answered"):
+                                return  # someone picked up before the timeout
+                            # Force-end the call as missed
+                            for uid in list(manager.active_calls.get(_chat_id, set())):
+                                await manager.send_to_user(uid, {
+                                    "type": "call_end",
+                                    "from_user_id": m["initiator"],
+                                    "chat_id": _chat_id,
+                                    "timeout": True,
+                                })
+                            manager.active_calls.pop(_chat_id, None)
+                            await _persist_call_record(_chat_id, _db, ended_by=m["initiator"], declined=False)
+                        # Use a fresh session — the handler's `db` may close before 60s
+                        from app.database import AsyncSessionLocal as _ASL
+                        async def _wrap():
+                            async with _ASL() as session:
+                                await _missed_timeout(chat_id, session)
+                        asyncio.create_task(_wrap())
                     # Always broadcast updated participants
                     if chat_obj and chat_obj.is_group:
                         await manager.broadcast_to_chat(chat_id, {
@@ -230,9 +276,12 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
 
             elif event == "call_end":
                 chat_id = data.get("chat_id")
+                declined = bool(data.get("declined"))
                 manager.active_calls.get(chat_id, set()).discard(user_id)
                 if not manager.active_calls.get(chat_id):
                     manager.active_calls.pop(chat_id, None)
+                    # Last person left → finalise the call and persist a history record
+                    await _persist_call_record(chat_id, db, ended_by=user_id, declined=declined)
                 await manager.broadcast_to_chat(chat_id, {
                     "type": "call_end",
                     "from_user_id": user_id,
@@ -252,8 +301,10 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
         active_call_chats = [cid for cid, users in manager.active_calls.items() if user_id in users]
         for cid in active_call_chats:
             manager.active_calls[cid].discard(user_id)
-            if not manager.active_calls[cid]:
+            became_empty = not manager.active_calls.get(cid)
+            if became_empty:
                 manager.active_calls.pop(cid, None)
+                await _persist_call_record(cid, db, ended_by=user_id, declined=False)
             await manager.broadcast_to_chat(cid, {
                 "type": "call_end",
                 "from_user_id": user_id,
@@ -308,6 +359,10 @@ async def handle_message(data: dict, sender_id: int, db: AsyncSession):
     )
     chat = result.scalar_one_or_none()
     if not chat:
+        return
+
+    # Channel mode: only the creator can post in a group whose allow_all_write is off.
+    if chat.is_group and not chat.allow_all_write and chat.created_by != sender_id:
         return
 
     sender_result = await db.execute(select(User).where(User.id == sender_id))
@@ -543,3 +598,53 @@ async def _finish_hand_and_maybe_next(table_id: int, g, db=None):
     finally:
         if own_session:
             await db.close()
+
+
+async def _persist_call_record(chat_id: int, db: AsyncSession, ended_by: int, declined: bool):
+    """Drop a system message into the chat describing how the call ended.
+    Content format: /call_record kind|duration_seconds|participant_count|initiator_id
+    kind ∈ {completed, missed, declined, cancelled}.
+    Reads + pops manager.call_meta[chat_id] so each call produces exactly one record."""
+    import time as _t
+    meta = manager.call_meta.pop(chat_id, None)
+    if not meta:
+        return
+    started_at = meta["started_at"]
+    initiator = meta["initiator"]
+    answered = meta["answered"]
+    participants = meta["all_participants"]
+    duration = max(0, int(_t.time() - started_at))
+
+    if not answered:
+        # Nobody besides the caller joined → either they hung up (cancelled) or
+        # the receiver pressed Reject (declined). DMs use declined flag from client.
+        kind = "declined" if declined else ("cancelled" if ended_by == initiator else "missed")
+    else:
+        kind = "completed"
+
+    content = f"/call_record {kind}|{duration}|{len(participants)}|{initiator}"
+    sender_result = await db.execute(select(User).where(User.id == initiator))
+    sender = sender_result.scalar_one_or_none()
+    if not sender:
+        return
+    msg = Message(chat_id=chat_id, sender_id=initiator, content=content)
+    db.add(msg)
+    await db.commit()
+    await db.refresh(msg)
+    await manager.broadcast_to_chat(chat_id, {
+        "type": "message",
+        "id": msg.id,
+        "chat_id": chat_id,
+        "sender_id": initiator,
+        "sender_username": sender.username,
+        "sender_avatar": sender.avatar_url,
+        "content": content,
+        "file_url": None,
+        "file_name": None,
+        "is_edited": False,
+        "created_at": msg.created_at.isoformat(),
+        "reply_to_id": None,
+        "reply_to_username": None,
+        "reply_to_content": None,
+        "_temp_id": None,
+    })

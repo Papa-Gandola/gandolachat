@@ -90,6 +90,19 @@ async def startup():
             .where(Message.expires_at.is_not(None))
             .values(expires_at=None)
         )
+        # Add channel-mode + group-avatar columns to existing chats table.
+        # Both default to safe values so old data is unchanged: allow_all_write=true
+        # keeps existing groups open, avatar_url null lets the # placeholder render.
+        for stmt in (
+            "ALTER TABLE chats ADD COLUMN IF NOT EXISTS allow_all_write boolean NOT NULL DEFAULT true",
+            "ALTER TABLE chats ADD COLUMN IF NOT EXISTS avatar_url varchar(500)",
+            "ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_group_id varchar(40)",
+            "CREATE INDEX IF NOT EXISTS ix_messages_media_group_id ON messages(media_group_id)",
+        ):
+            try:
+                await db.execute(text(stmt))
+            except Exception as e:
+                print(f"[migrate] {stmt}: {e}")
         await db.commit()
     _scheduler = AsyncIOScheduler()
     _scheduler.add_job(cleanup_expired_messages, "interval", hours=1)

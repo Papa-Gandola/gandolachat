@@ -11,6 +11,12 @@ class ConnectionManager:
         self.chat_users: dict[int, set[int]] = defaultdict(set)
         # chat_id -> set of user_ids currently in a call
         self.active_calls: dict[int, set[int]] = defaultdict(set)
+        # chat_id -> metadata about the active call so we can produce a history record
+        #   "started_at": epoch seconds when first participant joined,
+        #   "initiator": user_id of caller,
+        #   "all_participants": set of every user_id that was in the call at any point,
+        #   "answered": whether anyone besides the initiator actually joined.
+        self.call_meta: dict[int, dict] = {}
 
     async def connect(self, websocket: WebSocket, user_id: int, chat_ids: list[int]):
         await websocket.accept()

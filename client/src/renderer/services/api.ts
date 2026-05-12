@@ -35,6 +35,7 @@ export interface MessageOut {
   reply_to_username?: string | null;
   reply_to_content?: string | null;
   created_at: string;
+  media_group_id?: string | null;
 }
 
 export interface ChatOut {
@@ -44,6 +45,8 @@ export interface ChatOut {
   created_by?: number;
   members: UserOut[];
   last_message: MessageOut | null;
+  allow_all_write?: boolean;
+  avatar_url?: string | null;
 }
 
 export const authApi = {
@@ -81,8 +84,8 @@ export const chatApi = {
   list: () => api.get<ChatOut[]>("/api/chats"),
   createDm: (userId: number) =>
     api.post<ChatOut>(`/api/chats/dm?target_user_id=${userId}`),
-  createGroup: (name: string, memberIds: number[]) =>
-    api.post<ChatOut>("/api/chats/group", { name, member_ids: memberIds }),
+  createGroup: (name: string, memberIds: number[], allowAllWrite = true) =>
+    api.post<ChatOut>("/api/chats/group", { name, member_ids: memberIds, allow_all_write: allowAllWrite }),
   addMember: (chatId: number, userId: number) =>
     api.post(`/api/chats/${chatId}/members`, { user_id: userId }),
   getMessages: (chatId: number, limit = 50, beforeId?: number) =>
@@ -93,14 +96,21 @@ export const chatApi = {
   deleteChat: (chatId: number) => api.delete(`/api/chats/${chatId}`),
   searchMessages: (chatId: number, q: string) =>
     api.get<MessageOut[]>(`/api/chats/${chatId}/search?q=${encodeURIComponent(q)}`),
-  uploadFile: (chatId: number, file: File) => {
+  uploadFile: (chatId: number, file: File, caption = "", mediaGroupId?: string) => {
     const form = new FormData();
     form.append("file", file);
+    if (caption) form.append("caption", caption);
+    if (mediaGroupId) form.append("media_group_id", mediaGroupId);
     return api.post<MessageOut>(`/api/chats/${chatId}/files`, form);
   },
   getReadStatus: (chatId: number) => api.get<Array<{ user_id: number; last_read_message_id: number }>>(`/api/chats/${chatId}/read-status`),
   getUnreadCounts: () => api.get<Record<string, number>>("/api/chats/unread/counts"),
   getOnlineUsers: () => api.get<{ online_user_ids: number[] }>("/api/chats/online/users"),
+  uploadGroupAvatar: (chatId: number, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api.post<ChatOut>(`/api/chats/${chatId}/avatar`, form);
+  },
   adminDeleteOldMessages: (opts: { beforeDays?: number; beforeDate?: string }) => {
     const params = new URLSearchParams();
     if (opts.beforeDays) params.set("before_days", String(opts.beforeDays));

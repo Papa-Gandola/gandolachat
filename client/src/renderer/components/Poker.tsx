@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ChatOut, UserOut, PokerTableOut, PokerSeatOut, PokerGameView, pokerApi } from "../services/api";
 import { wsService } from "../services/ws";
 import { useTheme } from "../services/theme";
+import { playCardSound, playChipSound, playTurnSound } from "../services/sounds";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -19,6 +20,11 @@ export default function Poker({ chat, currentUser }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [gameState, setGameState] = useState<PokerGameView | null>(null);
+  // Track previous game state to detect transitions worth a sound
+  const prevHandNoRef = useRef<number | null>(null);
+  const prevCommunityCountRef = useRef<number>(0);
+  const prevLastActionRef = useRef<string | null>(null);
+  const prevMyTurnRef = useRef<boolean>(false);
 
   // Load tables for this chat
   useEffect(() => {
@@ -29,6 +35,49 @@ export default function Poker({ chat, currentUser }: Props) {
       setError(e.response?.data?.detail || "Не удалось загрузить столы");
     });
   }, [chat.id]);
+
+  // Play sound effects on meaningful game-state transitions.
+  useEffect(() => {
+    if (!gameState || !gameState.hand) {
+      prevHandNoRef.current = null;
+      prevCommunityCountRef.current = 0;
+      prevLastActionRef.current = null;
+      prevMyTurnRef.current = false;
+      return;
+    }
+    const handNo = gameState.hand.hand_no;
+    const communityCount = gameState.hand.community.length;
+    const lastActionKey = gameState.hand.last_action
+      ? `${gameState.hand.last_action.user_id}:${gameState.hand.last_action.action}:${gameState.hand.last_action.amount}`
+      : null;
+    const me = gameState.players.find((p) => p.user_id === currentUser.id);
+    const myTurnNow = !!me?.is_my_turn;
+
+    // New hand started — deal sound (hole cards)
+    if (prevHandNoRef.current != null && handNo !== prevHandNoRef.current) {
+      playCardSound();
+    }
+    // More community cards on the felt — flop/turn/river reveal
+    if (communityCount > prevCommunityCountRef.current) {
+      playCardSound();
+    }
+    // Someone made a bet-class action
+    if (lastActionKey && lastActionKey !== prevLastActionRef.current) {
+      const action = gameState.hand.last_action!.action;
+      if (action === "call" || action === "raise") {
+        playChipSound();
+      }
+    }
+    // It just became my turn
+    if (myTurnNow && !prevMyTurnRef.current) {
+      playTurnSound();
+    }
+
+    prevHandNoRef.current = handNo;
+    prevCommunityCountRef.current = communityCount;
+    prevLastActionRef.current = lastActionKey;
+    prevMyTurnRef.current = myTurnNow;
+  }, [gameState, currentUser.id]);
 
   // When we open a table that's already playing, ask the server to push us the
   // current game state (we may have lost it when remounting after a mode switch).
@@ -415,6 +464,38 @@ export default function Poker({ chat, currentUser }: Props) {
         </div>
       </div>
       {error && <div style={{ ...s.error, ...mono }}>{error}</div>}
+      {liveGame && liveGame.hand && liveGame.hand.street !== "done" && (() => {
+        // Banner above the felt — who is currently to act.
+        const actingSeat = liveGame.hand.to_act_seat;
+        if (actingSeat == null) return null;
+        const actingPlayer = liveGame.players.find((p) => p.seat_index === actingSeat);
+        if (!actingPlayer) return null;
+        const seatRow = t.seats.find((sx) => sx.seat_index === actingSeat);
+        const name = actingPlayer.user_id === currentUser.id
+          ? (isNeo ? "ВЫ" : "Вы")
+          : (seatRow?.username || `Игрок #${actingSeat + 1}`);
+        const isYou = actingPlayer.user_id === currentUser.id;
+        return (
+          <div style={{
+            padding: "6px 14px",
+            margin: "0 16px",
+            background: isYou
+              ? (isNeo ? "rgba(198,255,61,0.18)" : "rgba(88,101,242,0.18)")
+              : (isNeo ? "transparent" : "var(--bg-secondary)"),
+            border: `1px solid ${isYou ? "var(--accent)" : (isNeo ? "var(--border-strong)" : "var(--border)")}`,
+            borderRadius: isNeo ? 0 : 6,
+            color: isYou ? "var(--accent)" : "var(--text-primary)",
+            fontFamily: isNeo ? "var(--font-mono)" : undefined,
+            fontSize: 13,
+            fontWeight: 600,
+            letterSpacing: isNeo ? "0.05em" : undefined,
+            textAlign: "center" as const,
+            ...(isYou ? { animation: "neo-blink 1.2s infinite" } : {}),
+          }}>
+            {isNeo ? (isYou ? "> ТВОЙ_ХОД" : `> ходит ${name.toLowerCase()}`) : (isYou ? "🎯 Твой ход" : `Ходит ${name}`)}
+          </div>
+        );
+      })()}
       <div style={{ ...s.tableArea, position: "relative" }}>
         {liveGame ? (
           <LiveTableLayout

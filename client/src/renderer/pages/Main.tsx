@@ -72,6 +72,14 @@ export default function Main({ token, user, onLogout }: Props) {
       setActiveChat((prev) => prev?.id === data.chat_id ? null : prev);
     });
 
+    // Broadcast when a group's avatar or metadata changes (e.g. creator uploaded new avatar)
+    wsService.on("chat_updated", (data) => {
+      const updated: ChatOut = data.chat;
+      if (!updated) return;
+      setChats((prev) => prev.map((c) => c.id === updated.id ? { ...c, ...updated } : c));
+      setActiveChat((prev) => prev && prev.id === updated.id ? { ...prev, ...updated } : prev);
+    });
+
     wsService.on("call_signal", (data) => {
       if (webrtcService.isInCall()) return;
       setIncomingCalls((prev) => {
@@ -187,6 +195,8 @@ export default function Main({ token, user, onLogout }: Props) {
 
   function rejectCall(chatId: number) {
     setIncomingCalls((prev) => prev.filter((c) => c.chatId !== chatId));
+    // Tell the server this was an explicit decline — recorded as "Отклонён" in chat history
+    wsService.send({ type: "call_end", chat_id: chatId, declined: true });
   }
 
   function endCall() {

@@ -37,6 +37,7 @@ def _message_out(msg: Message) -> MessageOut:
         reply_to_content=reply_content,
         reactions=[{"emoji": r.emoji, "user_id": r.user_id} for r in (msg.reactions if hasattr(msg, 'reactions') and msg.reactions else [])],
         created_at=msg.created_at,
+        media_group_id=msg.media_group_id,
     )
 
 
@@ -75,6 +76,8 @@ async def get_chats(
             created_by=chat.created_by,
             members=[UserOut.model_validate(m) for m in chat.members],
             last_message=last,
+            allow_all_write=chat.allow_all_write,
+            avatar_url=chat.avatar_url,
         ))
     return out
 
@@ -109,6 +112,8 @@ async def create_dm(
                 created_by=chat.created_by,
                 members=[UserOut.model_validate(m) for m in chat.members],
                 last_message=await _get_last_message(chat.id, db),
+                allow_all_write=chat.allow_all_write,
+                avatar_url=chat.avatar_url,
             )
 
     chat = Chat(is_group=False, created_by=current_user.id)
@@ -136,6 +141,8 @@ async def create_dm(
         created_by=chat.created_by,
         members=[UserOut.model_validate(m) for m in chat.members],
         last_message=None,
+        allow_all_write=chat.allow_all_write,
+        avatar_url=chat.avatar_url,
     )
 
 
@@ -156,7 +163,12 @@ async def create_group(
         if user:
             members.append(user)
 
-    chat = Chat(name=data.name, is_group=True, created_by=current_user.id)
+    chat = Chat(
+        name=data.name,
+        is_group=True,
+        created_by=current_user.id,
+        allow_all_write=data.allow_all_write,
+    )
     chat.members = members
     db.add(chat)
     await db.commit()
@@ -178,7 +190,71 @@ async def create_group(
         created_by=chat.created_by,
         members=[UserOut.model_validate(m) for m in chat.members],
         last_message=None,
+        allow_all_write=chat.allow_all_write,
+        avatar_url=chat.avatar_url,
     )
+
+
+@router.post("/{chat_id}/avatar", response_model=ChatOut)
+async def upload_group_avatar(
+    chat_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Set/change the group avatar. Only the creator can do this. DM chats have no avatar."""
+    result = await db.execute(
+        select(Chat).options(selectinload(Chat.members)).where(Chat.id == chat_id)
+    )
+    chat = result.scalar_one_or_none()
+    if not chat:
+        raise HTTPException(404, "Chat not found")
+    if not chat.is_group:
+        raise HTTPException(400, "Аватарка только для групп")
+    if chat.created_by != current_user.id:
+        raise HTTPException(403, "Только создатель может менять аватарку")
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(400, "Only image files allowed")
+
+    upload_dir = Path(settings.UPLOAD_DIR) / "group_avatars"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    ext = file.filename.rsplit(".", 1)[-1] if "." in (file.filename or "") else "png"
+    filename = f"{uuid.uuid4()}.{ext}"
+    path = upload_dir / filename
+    async with aiofiles.open(path, "wb") as f:
+        content = await file.read()
+        if len(content) > 10 * 1024 * 1024:
+            raise HTTPException(400, "Avatar too large (max 10MB)")
+        await f.write(content)
+
+    # Delete old avatar file to avoid disk leak
+    if chat.avatar_url:
+        try:
+            old = chat.avatar_url.lstrip("/")
+            old_path = Path(old)
+            if old_path.exists() and old_path.is_file():
+                old_path.unlink()
+        except Exception:
+            pass
+
+    chat.avatar_url = f"/uploads/group_avatars/{filename}"
+    await db.commit()
+    await db.refresh(chat)
+
+    # Broadcast update so everyone sees the new avatar immediately
+    payload_chat = ChatOut(
+        id=chat.id, name=chat.name, is_group=True,
+        created_by=chat.created_by,
+        members=[UserOut.model_validate(m) for m in chat.members],
+        last_message=None,
+        allow_all_write=chat.allow_all_write,
+        avatar_url=chat.avatar_url,
+    )
+    await manager.broadcast_to_chat(chat.id, {
+        "type": "chat_updated",
+        "chat": payload_chat.model_dump(mode="json"),
+    })
+    return payload_chat
 
 
 @router.post("/{chat_id}/members")
@@ -324,15 +400,20 @@ async def get_messages(
 async def upload_file(
     chat_id: int,
     file: UploadFile = File(...),
+    caption: str = "",
+    media_group_id: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # Verify membership
+    # Verify membership + channel write-permission
     result = await db.execute(
         select(Chat).join(Chat.members).where(Chat.id == chat_id, User.id == current_user.id)
     )
-    if not result.scalar_one_or_none():
+    chat = result.scalar_one_or_none()
+    if not chat:
         raise HTTPException(403, "Not a member")
+    if chat.is_group and not chat.allow_all_write and chat.created_by != current_user.id:
+        raise HTTPException(403, "Только создатель может писать в этот канал")
 
     upload_dir = Path(settings.UPLOAD_DIR) / "files"
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -341,10 +422,14 @@ async def upload_file(
     filename = f"{uuid.uuid4()}.{ext}"
     path = upload_dir / filename
 
+    # Per-file cap is 10 MB for multi-pack uploads; single-file legacy uploads still respect
+    # the global MAX_FILE_SIZE_MB setting, whichever is smaller.
+    per_file_cap = min(10, settings.MAX_FILE_SIZE_MB) * 1024 * 1024
+
     async with aiofiles.open(path, "wb") as f:
         content = await file.read()
-        if len(content) > settings.MAX_FILE_SIZE_MB * 1024 * 1024:
-            raise HTTPException(400, f"File too large (max {settings.MAX_FILE_SIZE_MB}MB)")
+        if len(content) > per_file_cap:
+            raise HTTPException(400, f"File too large (max {per_file_cap // (1024 * 1024)}MB per file)")
         await f.write(content)
 
     msg = Message(
@@ -352,6 +437,8 @@ async def upload_file(
         sender_id=current_user.id,
         file_url=f"/uploads/files/{filename}",
         file_name=file.filename,
+        content=caption.strip() or None,
+        media_group_id=(media_group_id[:40] if media_group_id else None),
     )
     db.add(msg)
     await db.commit()

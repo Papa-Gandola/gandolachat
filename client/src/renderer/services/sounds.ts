@@ -79,6 +79,65 @@ export function playCallRing() {
   });
 }
 
+// Card flip / deal — short noise burst with sharp attack/decay (sounds like paper sliding)
+export function playCardSound() {
+  const ac = ctx();
+  const bufferSize = ac.sampleRate * 0.15;
+  const buf = ac.createBuffer(1, bufferSize, ac.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    // White noise envelope: quick attack, exponential decay
+    const t = i / bufferSize;
+    const env = Math.exp(-6 * t);
+    data[i] = (Math.random() * 2 - 1) * env;
+  }
+  const noise = ac.createBufferSource();
+  noise.buffer = buf;
+  // Filter to bring out the high-frequency "shhh" of paper
+  const filter = ac.createBiquadFilter();
+  filter.type = "highpass";
+  filter.frequency.value = 1800;
+  const g = ac.createGain();
+  g.gain.value = 0.18;
+  noise.connect(filter);
+  filter.connect(g);
+  g.connect(ac.destination);
+  noise.start();
+}
+
+// Chip drop — short percussive click for bets/calls
+export function playChipSound() {
+  const ac = ctx();
+  const osc = ac.createOscillator();
+  const g = ac.createGain();
+  osc.type = "square";
+  osc.frequency.value = 240;
+  osc.frequency.exponentialRampToValueAtTime(120, ac.currentTime + 0.06);
+  g.gain.value = 0.12;
+  osc.connect(g);
+  g.connect(ac.destination);
+  osc.start();
+  g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.08);
+  osc.stop(ac.currentTime + 0.1);
+}
+
+// "Your turn" notification — soft two-tone beep
+export function playTurnSound() {
+  const ac = ctx();
+  [660, 880].forEach((f, i) => {
+    const osc = ac.createOscillator();
+    const g = ac.createGain();
+    osc.type = "sine";
+    osc.frequency.value = f;
+    g.gain.value = 0.12;
+    osc.connect(g);
+    g.connect(ac.destination);
+    osc.start(ac.currentTime + i * 0.08);
+    g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + i * 0.08 + 0.18);
+    osc.stop(ac.currentTime + i * 0.08 + 0.2);
+  });
+}
+
 // Call end — descending tone
 export function playCallEndSound() {
   const ac = ctx();

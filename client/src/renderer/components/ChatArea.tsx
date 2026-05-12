@@ -53,6 +53,8 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   const [showFormatBar, setShowFormatBar] = useState(() => localStorage.getItem("showFormatBar") !== "false");
   const [sendFlash, setSendFlash] = useState(false);
   const [highlightMsgId, setHighlightMsgId] = useState<number | null>(null);
+  const [pendingAttachments, setPendingAttachments] = useState<Array<{ file: File; caption: string; preview: string | null }>>([]);
+  const [uploadingPack, setUploadingPack] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
   const [pendingSeenId, setPendingSeenId] = useState<number>(0); // highest msg id actually seen in viewport
   const unreadSinceScrollRef = useRef<number>(0);
@@ -569,17 +571,65 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     await chatApi.uploadFile(chat.id, file);
   }
 
+  function queueFiles(files: File[]) {
+    if (files.length === 0) return;
+    // Cap at 10 per pack; if user dropped 12 we keep the first 10
+    const toAdd = files.slice(0, 10 - pendingAttachments.length);
+    const enriched = toAdd.map((file) => ({
+      file,
+      caption: "",
+      preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
+    }));
+    setPendingAttachments((prev) => [...prev, ...enriched].slice(0, 10));
+  }
+
   function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (file) sendFile(file);
+    const files = Array.from(e.target.files || []);
+    queueFiles(files);
     e.target.value = "";
   }
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
     setDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) sendFile(file);
+    const files = Array.from(e.dataTransfer.files || []);
+    queueFiles(files);
+  }
+
+  async function sendAttachmentPack() {
+    if (pendingAttachments.length === 0) return;
+    setUploadingPack(true);
+    const groupId = pendingAttachments.length > 1 ? `mg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` : undefined;
+    try {
+      // Upload sequentially so the server-side broadcast order matches the user's order
+      for (const att of pendingAttachments) {
+        if (att.file.size > 10 * 1024 * 1024) {
+          alert(`Файл "${att.file.name}" больше 10 МБ`);
+          continue;
+        }
+        await chatApi.uploadFile(chat.id, att.file, att.caption, groupId);
+      }
+      // Free preview URLs
+      pendingAttachments.forEach((a) => { if (a.preview) URL.revokeObjectURL(a.preview); });
+      setPendingAttachments([]);
+    } catch (err: any) {
+      alert(err?.response?.data?.detail || "Ошибка загрузки файлов");
+    } finally {
+      setUploadingPack(false);
+    }
+  }
+
+  function removePendingAttachment(idx: number) {
+    setPendingAttachments((prev) => {
+      const next = [...prev];
+      const removed = next.splice(idx, 1)[0];
+      if (removed?.preview) URL.revokeObjectURL(removed.preview);
+      return next;
+    });
+  }
+
+  function setPendingCaption(idx: number, caption: string) {
+    setPendingAttachments((prev) => prev.map((a, i) => i === idx ? { ...a, caption } : a));
   }
 
   function handleEditSave() {
@@ -677,15 +727,26 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
         const files = Array.from(e.clipboardData?.files || []);
         if (files.length > 0) {
           e.preventDefault();
-          files.forEach((f) => sendFile(f));
+          queueFiles(files);
         }
       }}
     >
       {/* Header */}
       <div style={s.header}>
         <div style={s.headerLeft}>
-          <span style={{ ...s.chatIcon, ...(isNeo ? { ...mono, color: "var(--accent)" } : {}) }}>{chat.is_group ? "#" : "@"}</span>
+          {chat.is_group ? (
+            <GroupHeaderAvatar
+              chat={chat}
+              currentUser={currentUser}
+              isNeo={isNeo}
+            />
+          ) : (
+            <span style={{ ...s.chatIcon, ...(isNeo ? { ...mono, color: "var(--accent)" } : {}) }}>@</span>
+          )}
           <span style={{ ...s.chatTitle, ...(isNeo ? mono : {}) }}>{getChatTitle()}</span>
+          {chat.is_group && chat.allow_all_write === false && (
+            <span title="Канал — пишет только создатель" style={{ marginLeft: 6, color: "var(--text-muted)", fontSize: 14 }}>🔒</span>
+          )}
           {!chat.is_group && (() => {
             const other = chat.members.find((m) => m.id !== currentUser.id);
             if (!other) return null;
@@ -761,8 +822,9 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
               const prev = group.messages[i - 1];
               const isMine = msg.sender_id === currentUser.id;
               const isPending = msg.id < 0;
-              const isGrouped = prev && prev.sender_id === msg.sender_id &&
-                (new Date(msg.created_at).getTime() - new Date(prev.created_at).getTime()) < 5 * 60000;
+              const inSamePack = prev && msg.media_group_id && prev.media_group_id === msg.media_group_id;
+              const isGrouped = (prev && prev.sender_id === msg.sender_id &&
+                (new Date(msg.created_at).getTime() - new Date(prev.created_at).getTime()) < 5 * 60000) || !!inSamePack;
 
               const neoBubble = isNeo ? {
                 maxWidth: "68%",
@@ -900,6 +962,18 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                           const pokerMatch = msg.content.match(/^\/poker_table (\d+)$/);
                           if (pokerMatch) {
                             return <PokerInviteCard tableId={Number(pokerMatch[1])} chatId={chat.id} isNeo={isNeo} isMine={isMine} senderName={msg.sender_username} />;
+                          }
+                          const callMatch = msg.content.match(/^\/call_record (completed|missed|declined|cancelled)\|(\d+)\|(\d+)\|(\d+)$/);
+                          if (callMatch) {
+                            return <CallRecordCard
+                              kind={callMatch[1] as "completed" | "missed" | "declined" | "cancelled"}
+                              durationSec={Number(callMatch[2])}
+                              participants={Number(callMatch[3])}
+                              initiatorId={Number(callMatch[4])}
+                              currentUserId={currentUser.id}
+                              isNeo={isNeo}
+                              isMine={isMine}
+                            />;
                           }
                           return <p className="msg-content" style={{ ...s.msgText, ...(isNeo && isMine ? { color: "#0a0a0a" } : {}), ...(!isNeo && isMine ? { color: "#fff" } : {}) }}><FormattedText text={msg.content} /></p>;
                         })()}
@@ -1152,10 +1226,153 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
         />
       )}
 
-      {/* Input */}
-      <form onSubmit={sendMessage} style={s.inputBar}>
+      {/* Pending attachments preview (up to 10 files) */}
+      {pendingAttachments.length > 0 && (
+        <div style={{
+          padding: "10px 16px",
+          borderTop: "1px solid var(--border)",
+          background: "var(--bg-secondary)",
+          maxHeight: 280,
+          overflowY: "auto",
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <span style={{ ...mono, color: "var(--text-muted)", fontSize: 12 }}>
+              {isNeo ? `// ${pendingAttachments.length} файл(ов) · до 10 шт, каждый ≤ 10МБ` : `Файлов: ${pendingAttachments.length}/10`}
+            </span>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                style={{
+                  background: "transparent",
+                  color: "var(--text-primary)",
+                  border: "1px solid var(--border)",
+                  borderRadius: isNeo ? 0 : 4,
+                  padding: "4px 10px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  ...mono,
+                }}
+              >
+                {isNeo ? "[+ ЕЩЁ]" : "+ Ещё файлы"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  pendingAttachments.forEach((a) => a.preview && URL.revokeObjectURL(a.preview));
+                  setPendingAttachments([]);
+                }}
+                style={{
+                  background: "transparent",
+                  color: "var(--text-muted)",
+                  border: "1px solid var(--border)",
+                  borderRadius: isNeo ? 0 : 4,
+                  padding: "4px 10px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  ...mono,
+                }}
+              >
+                {isNeo ? "[ОТМЕНА]" : "Отмена"}
+              </button>
+              <button
+                type="button"
+                onClick={sendAttachmentPack}
+                disabled={uploadingPack}
+                style={{
+                  background: "var(--accent)",
+                  color: "var(--accent-text)",
+                  border: "none",
+                  borderRadius: isNeo ? 0 : 4,
+                  padding: "4px 14px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  ...mono,
+                  letterSpacing: isNeo ? "0.05em" : undefined,
+                }}
+              >
+                {uploadingPack
+                  ? (isNeo ? "[ОТПРАВКА...]" : "Отправка...")
+                  : (isNeo ? `[ОТПРАВИТЬ ${pendingAttachments.length}]` : `Отправить ${pendingAttachments.length}`)}
+              </button>
+            </div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {pendingAttachments.map((att, idx) => (
+              <div key={idx} style={{
+                display: "flex",
+                gap: 10,
+                alignItems: "center",
+                padding: 6,
+                background: "var(--bg-tertiary)",
+                borderRadius: isNeo ? 0 : 4,
+                border: isNeo ? "1px solid var(--border)" : undefined,
+              }}>
+                {att.preview ? (
+                  <img src={att.preview} style={{ width: 48, height: 48, objectFit: "cover", borderRadius: isNeo ? 0 : 4, flexShrink: 0 }} />
+                ) : (
+                  <div style={{ width: 48, height: 48, background: "var(--bg-input)", borderRadius: isNeo ? 0 : 4, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>📎</div>
+                )}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ ...mono, fontSize: 12, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>
+                    {att.file.name}
+                  </div>
+                  <input
+                    type="text"
+                    value={att.caption}
+                    onChange={(e) => setPendingCaption(idx, e.target.value)}
+                    placeholder={isNeo ? "подпись..." : "Подпись (необязательно)"}
+                    style={{
+                      width: "100%",
+                      marginTop: 3,
+                      background: "var(--bg-input)",
+                      border: "none",
+                      padding: "3px 6px",
+                      borderRadius: isNeo ? 0 : 3,
+                      fontSize: 11,
+                      color: "var(--text-primary)",
+                      ...mono,
+                    }}
+                    maxLength={300}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removePendingAttachment(idx)}
+                  style={{ background: "none", color: "var(--text-muted)", fontSize: 16, padding: 4, cursor: "pointer" }}
+                  title="Удалить"
+                >✕</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Input — locked in channel mode when current user isn't the creator */}
+      {(() => {
+        const isLockedChannel =
+          chat.is_group && chat.allow_all_write === false && chat.created_by !== currentUser.id;
+        if (isLockedChannel) {
+          return (
+            <div style={{
+              padding: "14px 16px",
+              borderTop: "1px solid var(--border)",
+              background: "var(--bg-secondary)",
+              color: "var(--text-muted)",
+              fontSize: 13,
+              textAlign: "center" as const,
+              ...(isNeo ? { fontFamily: "var(--font-mono)", letterSpacing: "0.04em" } : {}),
+            }}>
+              {isNeo ? "// канал · писать_может_только_создатель" : "🔒 Это канал — писать может только создатель"}
+            </div>
+          );
+        }
+        return null;
+      })()}
+      <form onSubmit={sendMessage} style={{ ...s.inputBar, ...(chat.is_group && chat.allow_all_write === false && chat.created_by !== currentUser.id ? { display: "none" } : {}) }}>
         <button type="button" style={s.attachBtn} onClick={() => fileRef.current?.click()} title="Прикрепить файл">+</button>
-        <input type="file" ref={fileRef} style={{ display: "none" }} onChange={handleFileInput} />
+        <input type="file" multiple ref={fileRef} style={{ display: "none" }} onChange={handleFileInput} />
         <button
           type="button"
           style={s.emojiBtn}
@@ -1221,6 +1438,121 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
           disabled={!text.trim()}
         >{isNeo ? "SEND" : "➤"}</button>
       </form>
+    </div>
+  );
+}
+
+function GroupHeaderAvatar({ chat, currentUser, isNeo }: { chat: ChatOut; currentUser: UserOut; isNeo: boolean }) {
+  const fileInput = useRef<HTMLInputElement>(null);
+  const isCreator = chat.created_by === currentUser.id;
+  const size = 28;
+  const radius = isNeo ? 5 : "50%";
+  const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+
+  async function pickFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    try {
+      await chatApi.uploadGroupAvatar(chat.id, f);
+    } catch (err) {
+      console.error("[group avatar] upload failed", err);
+    }
+    e.target.value = "";
+  }
+
+  return (
+    <label
+      onClick={(e) => { if (!isCreator) e.preventDefault(); }}
+      style={{
+        position: "relative" as const,
+        width: size, height: size,
+        borderRadius: radius as any,
+        cursor: isCreator ? "pointer" : "default",
+        flexShrink: 0,
+        display: "block",
+      }}
+      title={isCreator ? "Сменить аватарку" : ""}
+    >
+      {chat.avatar_url ? (
+        <img
+          src={chat.avatar_url.startsWith("http") ? chat.avatar_url : `${BASE_URL}${chat.avatar_url}`}
+          style={{ width: size, height: size, borderRadius: radius as any, objectFit: "cover" as const, display: "block",
+                   border: isNeo ? "1px solid var(--accent)" : undefined }}
+          alt={chat.name || "group"}
+        />
+      ) : (
+        <div style={{
+          width: size, height: size, borderRadius: radius as any,
+          background: isNeo ? "#0a0a0a" : "#5865f2",
+          color: isNeo ? "var(--accent)" : "#fff",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontWeight: 700, fontSize: 14,
+          fontFamily: isNeo ? "var(--font-mono)" : undefined,
+          border: isNeo ? "1px solid var(--accent)" : undefined,
+        }}>
+          #
+        </div>
+      )}
+      {isCreator && <input ref={fileInput} type="file" accept="image/*" style={{ display: "none" }} onChange={pickFile} />}
+    </label>
+  );
+}
+
+function CallRecordCard({ kind, durationSec, participants, initiatorId, currentUserId, isNeo, isMine }: {
+  kind: "completed" | "missed" | "declined" | "cancelled";
+  durationSec: number;
+  participants: number;
+  initiatorId: number;
+  currentUserId: number;
+  isNeo: boolean;
+  isMine: boolean;
+}) {
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
+  const initiatedByMe = initiatorId === currentUserId;
+  let title = "";
+  let icon = "📞";
+  let color = "var(--text-primary)";
+  if (kind === "completed") {
+    const min = Math.floor(durationSec / 60);
+    const sec = durationSec % 60;
+    const time = min > 0 ? `${min} мин ${sec.toString().padStart(2, "0")} сек` : `${sec} сек`;
+    title = participants > 2 ? `Звонок · ${time} · ${participants} участника` : `Звонок · ${time}`;
+    icon = "📞";
+  } else if (kind === "missed") {
+    title = initiatedByMe ? "Никто не ответил" : "Пропущенный звонок";
+    icon = "📵";
+    color = "#ed4245";
+  } else if (kind === "declined") {
+    title = initiatedByMe ? "Отклонён" : "Вы отклонили звонок";
+    icon = "✕";
+    color = "#ed4245";
+  } else if (kind === "cancelled") {
+    title = initiatedByMe ? "Вы отменили звонок" : "Звонок отменён";
+    icon = "↩";
+    color = "var(--text-muted)";
+  }
+  const cardBg = isMine
+    ? (isNeo ? "rgba(0,0,0,0.18)" : "rgba(255,255,255,0.16)")
+    : (isNeo ? "transparent" : "rgba(0,0,0,0.18)");
+  const cardBorder = isMine
+    ? (isNeo ? "1px solid rgba(0,0,0,0.55)" : "1px solid rgba(255,255,255,0.55)")
+    : `1px solid ${isNeo ? "var(--border-strong)" : "var(--border)"}`;
+  const titleColor = isMine ? (isNeo ? "#0a0a0a" : "#fff") : color;
+  return (
+    <div style={{
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 10,
+      padding: "8px 12px",
+      background: cardBg,
+      border: cardBorder,
+      borderRadius: isNeo ? 0 : 8,
+      margin: "2px 0",
+      ...mono,
+      fontSize: 13,
+    }}>
+      <span style={{ fontSize: 18 }}>{icon}</span>
+      <span style={{ color: titleColor, fontWeight: 600 }}>{isNeo ? `// ${title.toLowerCase()}` : title}</span>
     </div>
   );
 }

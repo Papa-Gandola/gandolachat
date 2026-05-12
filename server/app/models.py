@@ -38,6 +38,10 @@ class Chat(Base):
     is_group: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    # Group flag: when False the group becomes a "channel" — only the creator can post,
+    # everyone else can read and react. Default True so existing groups stay open.
+    allow_all_write: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     members: Mapped[list["User"]] = relationship(secondary=chat_members, back_populates="chats")
     messages: Mapped[list["Message"]] = relationship(back_populates="chat", cascade="all, delete-orphan")
@@ -56,6 +60,9 @@ class Message(Base):
     reply_to_id: Mapped[int | None] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    # When user attaches up to 10 files in one go, every resulting Message gets the
+    # same media_group_id so the client can render them together as a mosaic.
+    media_group_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
 
     reply_to: Mapped["Message | None"] = relationship(remote_side=[id], foreign_keys=[reply_to_id])
     chat: Mapped["Chat"] = relationship(back_populates="messages")

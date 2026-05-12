@@ -45,6 +45,7 @@ class MessageOut(BaseModel):
     reply_to_content: str | None = None
     reactions: list[dict] = []
     created_at: datetime
+    media_group_id: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -56,6 +57,8 @@ class ChatOut(BaseModel):
     created_by: int | None = None
     members: list[UserOut]
     last_message: MessageOut | None = None
+    allow_all_write: bool = True
+    avatar_url: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -63,6 +66,7 @@ class ChatOut(BaseModel):
 class CreateGroupChat(BaseModel):
     name: str
     member_ids: list[int]
+    allow_all_write: bool = True
 
 
 class AddMember(BaseModel):

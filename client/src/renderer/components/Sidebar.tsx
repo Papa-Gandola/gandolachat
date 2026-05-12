@@ -22,6 +22,7 @@ export default function Sidebar({
   const [searchResults, setSearchResults] = useState<UserOut[]>([]);
   const [showNewGroup, setShowNewGroup] = useState(false);
   const [groupName, setGroupName] = useState("");
+  const [groupAllowAllWrite, setGroupAllowAllWrite] = useState(true);
   const [selectedForGroup, setSelectedForGroup] = useState<UserOut[]>([]);
   const [editingName, setEditingName] = useState(false);
   const [pendingUsers, setPendingUsers] = useState<Array<{ id: number; username: string; created_at: string }>>([]);
@@ -240,10 +241,10 @@ export default function Sidebar({
 
   async function createGroup() {
     if (!groupName.trim() || selectedForGroup.length === 0) return;
-    const res = await chatApi.createGroup(groupName.trim(), selectedForGroup.map((u) => u.id));
+    const res = await chatApi.createGroup(groupName.trim(), selectedForGroup.map((u) => u.id), groupAllowAllWrite);
     onChatsUpdate([res.data, ...chats]);
     onSelectChat(res.data);
-    setShowNewGroup(false); setGroupName(""); setSelectedForGroup([]);
+    setShowNewGroup(false); setGroupName(""); setSelectedForGroup([]); setGroupAllowAllWrite(true);
   }
 
   async function uploadAvatar(e: React.ChangeEvent<HTMLInputElement>) {
@@ -260,7 +261,7 @@ export default function Sidebar({
   }
 
   function getChatAvatar(chat: ChatOut): string | null {
-    if (chat.is_group) return null;
+    if (chat.is_group) return chat.avatar_url || null;
     const other = chat.members.find((m) => m.id !== currentUser.id);
     return other?.avatar_url || null;
   }
@@ -438,7 +439,21 @@ export default function Sidebar({
               ))}
             </div>
           )}
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, cursor: "pointer", color: "var(--text-secondary)", fontSize: 12, ...mono }}>
+            <input
+              type="checkbox"
+              checked={groupAllowAllWrite}
+              onChange={(e) => setGroupAllowAllWrite(e.target.checked)}
+              style={{ accentColor: "var(--accent)" }}
+            />
+            {isNeo ? "// возможность_писать_всем" : "Возможность писать в чат для всех"}
+          </label>
+          <div style={{ ...mono, fontSize: 11, color: "var(--text-muted)", marginTop: 4, marginLeft: 22 }}>
+            {groupAllowAllWrite
+              ? (isNeo ? "обычная группа — пишут все" : "Обычная группа — пишут все")
+              : (isNeo ? "канал — пишет только создатель, остальные читают" : "Канал — пишет только создатель, остальные читают")}
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
             <button style={s.btnSm} onClick={createGroup}>Создать</button>
             <button style={{ ...s.btnSm, background: "var(--bg-hover)" }} onClick={() => { setShowNewGroup(false); setSearchResults([]); }}>Отмена</button>
           </div>
