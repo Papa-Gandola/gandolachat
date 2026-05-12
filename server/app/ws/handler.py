@@ -2,9 +2,23 @@ from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime, timedelta, timezone
+import asyncio
 from app.models import Chat, Message, User, Reaction, read_receipts
 from app.ws.manager import manager
 from app.config import settings
+
+
+# asyncio only keeps WEAK references to tasks created via create_task — if no
+# one holds a strong ref, a sleeping task can be GC'd before it fires. This
+# bit us: a folded hand scheduled the next-hand timer, function returned, task
+# got collected, next hand never started. Hold strong refs here until done.
+_bg_tasks: set[asyncio.Task] = set()
+
+def _spawn(coro):
+    t = asyncio.create_task(coro)
+    _bg_tasks.add(t)
+    t.add_done_callback(_bg_tasks.discard)
+    return t
 
 
 async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSession):
@@ -234,7 +248,6 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                     # If this was the very first signal of the call, schedule a 60-sec
                     # "missed" timeout — finalises the call as missed if nobody picks up.
                     if just_created_meta:
-                        import asyncio
                         async def _missed_timeout(_chat_id: int, _db: AsyncSession):
                             await asyncio.sleep(60)
                             m = manager.call_meta.get(_chat_id)
@@ -257,7 +270,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                         async def _wrap():
                             async with _ASL() as session:
                                 await _missed_timeout(chat_id, session)
-                        asyncio.create_task(_wrap())
+                        _spawn(_wrap())
                     # Always broadcast updated participants
                     if chat_obj and chat_obj.is_group:
                         await manager.broadcast_to_chat(chat_id, {
@@ -502,7 +515,6 @@ async def handle_poker_action(data: dict, user_id: int, db: AsyncSession):
     # one at a time with a short pause between them so the UI shows cards appearing.
     from app.poker_game import needs_fast_forward, deal_next_street_or_finish
     if needs_fast_forward(g):
-        import asyncio
         async def _ff():
             try:
                 # Small initial pause before the first reveal so the last action stays on screen
@@ -528,7 +540,7 @@ async def handle_poker_action(data: dict, user_id: int, db: AsyncSession):
                     await asyncio.sleep(0.85)
             except Exception as exc:
                 print(f"[poker] fast-forward task failed: {exc}")
-        asyncio.create_task(_ff())
+        _spawn(_ff())
         return  # don't run the normal "hand ended" branch — _ff() will do it
 
     # Hand ended via the normal action flow (someone folded, or final showdown).
@@ -581,20 +593,22 @@ async def _finish_hand_and_maybe_next(table_id: int, g, db=None):
         # Schedule the next hand after a short pause. The pause is longer at showdown
         # (5s — players want to see who had what) and shorter on uncalled wins (3s).
         wait = 5.0 if (g.last_summary and g.last_summary.get("reason") == "showdown") else 3.0
-        import asyncio
         async def _next():
-            await asyncio.sleep(wait)
-            live = game_store.get(table_id)
-            if live is not g or g.finished:
-                return
-            start_hand(g)
-            for uid in g.players.keys():
-                await manager.send_to_user(uid, {
-                    "type": "poker_game_state",
-                    "table_id": table_id,
-                    "state": public_view(g, uid),
-                })
-        asyncio.create_task(_next())
+            try:
+                await asyncio.sleep(wait)
+                live = game_store.get(table_id)
+                if live is not g or g.finished:
+                    return
+                start_hand(g)
+                for uid in g.players.keys():
+                    await manager.send_to_user(uid, {
+                        "type": "poker_game_state",
+                        "table_id": table_id,
+                        "state": public_view(g, uid),
+                    })
+            except Exception as exc:
+                print(f"[poker] next-hand task failed: {exc}")
+        _spawn(_next())
     finally:
         if own_session:
             await db.close()

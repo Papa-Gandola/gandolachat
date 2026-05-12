@@ -30,6 +30,18 @@ class Token(BaseModel):
     user: UserOut
 
 
+# Returned from /api/users/me. Backward-compat: pre-2.1.1 clients did
+# `setUser(res.data)` and accessed `.username` directly. The new shape wraps
+# the user under `.user` plus adds an access token for renewal. To keep BOTH
+# old and new clients working, we flatten the UserOut fields onto the top
+# level alongside the new wrapper fields, so old clients still see id/username
+# at res.data.*, and new clients see res.data.user/access_token as well.
+class MeOut(UserOut):
+    access_token: str
+    token_type: str
+    user: UserOut
+
+
 class MessageOut(BaseModel):
     id: int
     chat_id: int

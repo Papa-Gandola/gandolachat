@@ -8,19 +8,25 @@ from app.database import get_db
 from app.models import User
 from app.schemas import UserOut
 from app.auth import get_current_user, create_access_token
-from app.schemas import Token
+from app.schemas import Token, MeOut
 from app.config import settings
 from app.ws.manager import manager
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
 
-@router.get("/me", response_model=Token)
+@router.get("/me", response_model=MeOut)
 async def get_me(current_user: User = Depends(get_current_user)):
-    return Token(
-        access_token=create_access_token(current_user.id),
+    """Returns the user PLUS access_token/user wrapper so both pre-2.1.1
+    clients (which read res.data.username directly) and 2.1.1+ clients
+    (which read res.data.user and res.data.access_token) keep working."""
+    user_out = UserOut.model_validate(current_user)
+    token = create_access_token(current_user.id)
+    return MeOut(
+        **user_out.model_dump(),
+        access_token=token,
         token_type="bearer",
-        user=UserOut.model_validate(current_user),
+        user=user_out,
     )
 
 

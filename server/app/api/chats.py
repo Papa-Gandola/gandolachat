@@ -590,10 +590,10 @@ async def upload_file(
     # the global MAX_FILE_SIZE_MB setting, whichever is smaller.
     per_file_cap = min(10, settings.MAX_FILE_SIZE_MB) * 1024 * 1024
 
+    content = await file.read()
+    if len(content) > per_file_cap:
+        raise HTTPException(400, f"File too large (max {per_file_cap // (1024 * 1024)}MB per file)")
     async with aiofiles.open(path, "wb") as f:
-        content = await file.read()
-        if len(content) > per_file_cap:
-            raise HTTPException(400, f"File too large (max {per_file_cap // (1024 * 1024)}MB per file)")
         await f.write(content)
 
     msg = Message(
