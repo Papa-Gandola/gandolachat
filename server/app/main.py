@@ -96,6 +96,8 @@ async def startup():
         for stmt in (
             "ALTER TABLE chats ADD COLUMN IF NOT EXISTS allow_all_write boolean NOT NULL DEFAULT true",
             "ALTER TABLE chats ADD COLUMN IF NOT EXISTS avatar_url varchar(500)",
+            "ALTER TABLE chats ADD COLUMN IF NOT EXISTS description varchar(1000)",
+            "ALTER TABLE chats ADD COLUMN IF NOT EXISTS admin_ids varchar(500)",
             "ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_group_id varchar(40)",
             "CREATE INDEX IF NOT EXISTS ix_messages_media_group_id ON messages(media_group_id)",
         ):

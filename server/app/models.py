@@ -42,6 +42,9 @@ class Chat(Base):
     # everyone else can read and react. Default True so existing groups stay open.
     allow_all_write: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    # JSON-encoded list of user_ids granted admin powers (creator is always implicit owner).
+    admin_ids: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     members: Mapped[list["User"]] = relationship(secondary=chat_members, back_populates="chats")
     messages: Mapped[list["Message"]] = relationship(back_populates="chat", cascade="all, delete-orphan")

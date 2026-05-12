@@ -8,6 +8,7 @@ import ChatArea from "../components/ChatArea";
 import MemberList from "../components/MemberList";
 import VideoCall from "../components/VideoCall";
 import ProfilePage from "../components/ProfilePage";
+import GroupInfoPage from "../components/GroupInfoPage";
 import Poker from "../components/Poker";
 import { useTheme } from "../services/theme";
 
@@ -27,6 +28,9 @@ export default function Main({ token, user, onLogout }: Props) {
   const [callChat, setCallChat] = useState<ChatOut | null>(null);
   const [callInitiator, setCallInitiator] = useState(false);
   const [viewingProfile, setViewingProfile] = useState<UserOut | null>(null);
+  const [viewingGroupInfo, setViewingGroupInfo] = useState<ChatOut | null>(null);
+  const [pendingChatSearch, setPendingChatSearch] = useState<number | null>(null);
+  const [pendingAddMember, setPendingAddMember] = useState<number | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(240);
   const [resizing, setResizing] = useState(false);
   const [connQuality, setConnQuality] = useState<string>("good");
@@ -78,6 +82,7 @@ export default function Main({ token, user, onLogout }: Props) {
       if (!updated) return;
       setChats((prev) => prev.map((c) => c.id === updated.id ? { ...c, ...updated } : c));
       setActiveChat((prev) => prev && prev.id === updated.id ? { ...prev, ...updated } : prev);
+      setViewingGroupInfo((prev) => prev && prev.id === updated.id ? { ...prev, ...updated } : prev);
     });
 
     wsService.on("call_signal", (data) => {
@@ -275,7 +280,7 @@ export default function Main({ token, user, onLogout }: Props) {
               </div>
             </>
           )}
-          <span style={{ ...s.titleText, fontSize: 10, opacity: 0.6 }}>v2.1.0</span>
+          <span style={{ ...s.titleText, fontSize: 10, opacity: 0.6 }}>v2.1.1</span>
           <span
             style={{
               width: 8, height: 8, borderRadius: "50%", marginLeft: 4,
@@ -352,6 +357,17 @@ export default function Main({ token, user, onLogout }: Props) {
               onUpdate={(u) => { if (u.id === currentUser.id) setCurrentUser(u); }}
             />
           </div>
+        ) : viewingGroupInfo ? (
+          <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
+            <GroupInfoPage
+              chat={chats.find((c) => c.id === viewingGroupInfo.id) || viewingGroupInfo}
+              currentUser={currentUser}
+              onClose={() => setViewingGroupInfo(null)}
+              onOpenSearch={() => { setPendingChatSearch(viewingGroupInfo.id); setViewingGroupInfo(null); }}
+              onAddMember={() => { setPendingAddMember(viewingGroupInfo.id); setViewingGroupInfo(null); }}
+              onOpenUserProfile={(u) => { setViewingGroupInfo(null); setViewingProfile(u); }}
+            />
+          </div>
         ) : activeChat && appMode === "poker" ? (
           <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
             <Poker key={`poker-${activeChat.id}`} chat={activeChat} currentUser={currentUser} />
@@ -366,6 +382,10 @@ export default function Main({ token, user, onLogout }: Props) {
                 onStartCall={() => startCall(activeChat)}
                 allChats={chats}
                 onOpenProfile={(u) => setViewingProfile(u)}
+                onOpenChatInfo={(c) => setViewingGroupInfo(c)}
+                pendingOpenSearch={pendingChatSearch === activeChat.id}
+                pendingAddMember={pendingAddMember === activeChat.id}
+                onPendingHandled={() => { setPendingChatSearch(null); setPendingAddMember(null); }}
               />
             </div>
             {activeChat.is_group && (

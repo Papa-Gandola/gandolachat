@@ -47,6 +47,14 @@ export interface ChatOut {
   last_message: MessageOut | null;
   allow_all_write?: boolean;
   avatar_url?: string | null;
+  description?: string | null;
+  admin_ids?: number[];
+}
+
+export interface ChatStats {
+  media_count: number;
+  link_count: number;
+  file_count: number;
 }
 
 export const authApi = {
@@ -111,6 +119,11 @@ export const chatApi = {
     form.append("file", file);
     return api.post<ChatOut>(`/api/chats/${chatId}/avatar`, form);
   },
+  stats: (chatId: number) => api.get<ChatStats>(`/api/chats/${chatId}/stats`),
+  update: (chatId: number, data: { name?: string; description?: string; admin_ids?: number[] }) =>
+    api.patch<ChatOut>(`/api/chats/${chatId}`, data),
+  kickMember: (chatId: number, userId: number) =>
+    api.delete<ChatOut>(`/api/chats/${chatId}/members/${userId}`),
   adminDeleteOldMessages: (opts: { beforeDays?: number; beforeDate?: string }) => {
     const params = new URLSearchParams();
     if (opts.beforeDays) params.set("before_days", String(opts.beforeDays));

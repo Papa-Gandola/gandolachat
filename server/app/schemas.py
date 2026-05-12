@@ -59,8 +59,22 @@ class ChatOut(BaseModel):
     last_message: MessageOut | None = None
     allow_all_write: bool = True
     avatar_url: str | None = None
+    description: str | None = None
+    admin_ids: list[int] = []
 
     model_config = {"from_attributes": True}
+
+
+class ChatStats(BaseModel):
+    media_count: int
+    link_count: int
+    file_count: int
+
+
+class UpdateChat(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    admin_ids: list[int] | None = None
 
 
 class CreateGroupChat(BaseModel):

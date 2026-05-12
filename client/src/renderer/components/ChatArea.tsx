@@ -12,11 +12,16 @@ interface Props {
   onStartCall: () => void;
   allChats?: ChatOut[];
   onOpenProfile?: (user: UserOut) => void;
+  onOpenChatInfo?: (chat: ChatOut) => void;
+  // External requests routed back into ChatArea (from GroupInfoPage action buttons)
+  pendingOpenSearch?: boolean;
+  pendingAddMember?: boolean;
+  onPendingHandled?: () => void;
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-export default function ChatArea({ chat, currentUser, onStartCall, allChats = [], onOpenProfile }: Props) {
+export default function ChatArea({ chat, currentUser, onStartCall, allChats = [], onOpenProfile, onOpenChatInfo, pendingOpenSearch, pendingAddMember, onPendingHandled }: Props) {
   const theme = useTheme();
   const isNeo = theme === "neo";
   const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
@@ -55,6 +60,22 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   const [highlightMsgId, setHighlightMsgId] = useState<number | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<Array<{ file: File; caption: string; preview: string | null }>>([]);
   const [uploadingPack, setUploadingPack] = useState(false);
+
+  // External request: GroupInfoPage asked us to open the search bar
+  useEffect(() => {
+    if (pendingOpenSearch) {
+      setShowSearch(true);
+      onPendingHandled?.();
+    }
+  }, [pendingOpenSearch]);
+  // External request: GroupInfoPage asked us to show "add member" UI.
+  // MemberList already has that flow; we just emit a custom event for it to pick up.
+  useEffect(() => {
+    if (pendingAddMember) {
+      window.dispatchEvent(new CustomEvent("focus-add-member", { detail: { chatId: chat.id } }));
+      onPendingHandled?.();
+    }
+  }, [pendingAddMember]);
   const [atBottom, setAtBottom] = useState(true);
   const [pendingSeenId, setPendingSeenId] = useState<number>(0); // highest msg id actually seen in viewport
   const unreadSinceScrollRef = useRef<number>(0);
@@ -743,7 +764,26 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
           ) : (
             <span style={{ ...s.chatIcon, ...(isNeo ? { ...mono, color: "var(--accent)" } : {}) }}>@</span>
           )}
-          <span style={{ ...s.chatTitle, ...(isNeo ? mono : {}) }}>{getChatTitle()}</span>
+          <span
+            style={{
+              ...s.chatTitle,
+              ...(isNeo ? mono : {}),
+              cursor: "pointer",
+              textDecoration: "none",
+              transition: "opacity 0.1s",
+            }}
+            onClick={() => {
+              if (chat.is_group) {
+                onOpenChatInfo?.(chat);
+              } else {
+                const other = chat.members.find((m) => m.id !== currentUser.id);
+                if (other) onOpenProfile?.(other);
+              }
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLSpanElement).style.opacity = "0.7"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLSpanElement).style.opacity = "1"; }}
+            title={chat.is_group ? "Открыть информацию о группе" : "Открыть профиль"}
+          >{getChatTitle()}</span>
           {chat.is_group && chat.allow_all_write === false && (
             <span title="Канал — пишет только создатель" style={{ marginLeft: 6, color: "var(--text-muted)", fontSize: 14 }}>🔒</span>
           )}

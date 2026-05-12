@@ -8,12 +8,24 @@ import aiofiles
 import uuid
 from app.database import get_db
 from app.models import Chat, User, Message, Reaction, chat_members, read_receipts
-from app.schemas import ChatOut, UserOut, MessageOut, CreateGroupChat, AddMember
+from app.schemas import ChatOut, UserOut, MessageOut, CreateGroupChat, AddMember, ChatStats, UpdateChat
 from app.auth import get_current_user
 from app.ws.manager import manager
 from app.config import settings
 
+import json
+
 router = APIRouter(prefix="/api/chats", tags=["chats"])
+
+
+def _parse_admin_ids(chat: Chat) -> list[int]:
+    if not chat.admin_ids:
+        return []
+    try:
+        v = json.loads(chat.admin_ids)
+        return [int(x) for x in v] if isinstance(v, list) else []
+    except Exception:
+        return []
 
 
 def _message_out(msg: Message) -> MessageOut:
@@ -78,6 +90,8 @@ async def get_chats(
             last_message=last,
             allow_all_write=chat.allow_all_write,
             avatar_url=chat.avatar_url,
+            description=chat.description,
+            admin_ids=_parse_admin_ids(chat),
         ))
     return out
 
@@ -114,6 +128,8 @@ async def create_dm(
                 last_message=await _get_last_message(chat.id, db),
                 allow_all_write=chat.allow_all_write,
                 avatar_url=chat.avatar_url,
+                description=chat.description,
+                admin_ids=_parse_admin_ids(chat),
             )
 
     chat = Chat(is_group=False, created_by=current_user.id)
@@ -192,7 +208,153 @@ async def create_group(
         last_message=None,
         allow_all_write=chat.allow_all_write,
         avatar_url=chat.avatar_url,
+        description=chat.description,
+        admin_ids=_parse_admin_ids(chat),
     )
+
+
+@router.get("/{chat_id}/stats", response_model=ChatStats)
+async def chat_stats(
+    chat_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Counts of media/links/files in the chat — shown on the GroupInfoPage."""
+    result = await db.execute(
+        select(Chat).join(Chat.members).where(Chat.id == chat_id, User.id == current_user.id)
+    )
+    chat = result.scalar_one_or_none()
+    if not chat:
+        raise HTTPException(403, "Not a member")
+
+    from sqlalchemy import func, or_, and_
+    # Media: image files (anything in /uploads/files with image extension)
+    media_re = r"\.(png|jpg|jpeg|gif|webp|bmp|svg)$"
+    media_rows = await db.execute(
+        select(func.count()).select_from(Message).where(
+            Message.chat_id == chat_id,
+            Message.file_url.is_not(None),
+            Message.file_url.op("~*")(media_re),
+        )
+    )
+    media_count = int(media_rows.scalar() or 0)
+    # Files: non-image attachments
+    files_rows = await db.execute(
+        select(func.count()).select_from(Message).where(
+            Message.chat_id == chat_id,
+            Message.file_url.is_not(None),
+            ~Message.file_url.op("~*")(media_re),
+        )
+    )
+    file_count = int(files_rows.scalar() or 0)
+    # Links: messages whose content contains http(s)://
+    link_rows = await db.execute(
+        select(func.count()).select_from(Message).where(
+            Message.chat_id == chat_id,
+            Message.content.op("~*")(r"https?://"),
+        )
+    )
+    link_count = int(link_rows.scalar() or 0)
+
+    return ChatStats(media_count=media_count, link_count=link_count, file_count=file_count)
+
+
+@router.patch("/{chat_id}", response_model=ChatOut)
+async def update_chat(
+    chat_id: int,
+    data: UpdateChat,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Creator-only: edit group name, description, admin list."""
+    result = await db.execute(
+        select(Chat).options(selectinload(Chat.members)).where(Chat.id == chat_id)
+    )
+    chat = result.scalar_one_or_none()
+    if not chat:
+        raise HTTPException(404, "Chat not found")
+    if not chat.is_group:
+        raise HTTPException(400, "Только для групп")
+    if chat.created_by != current_user.id:
+        raise HTTPException(403, "Только создатель")
+    if data.name is not None:
+        chat.name = data.name.strip()[:100] or chat.name
+    if data.description is not None:
+        chat.description = data.description.strip()[:1000] or None
+    if data.admin_ids is not None:
+        # Filter to only existing members (creator is implicit, never stored here)
+        member_ids = {m.id for m in chat.members}
+        clean = [uid for uid in data.admin_ids if uid in member_ids and uid != chat.created_by]
+        chat.admin_ids = json.dumps(sorted(set(clean)))
+    await db.commit()
+    await db.refresh(chat)
+    payload = ChatOut(
+        id=chat.id, name=chat.name, is_group=True,
+        created_by=chat.created_by,
+        members=[UserOut.model_validate(m) for m in chat.members],
+        last_message=None,
+        allow_all_write=chat.allow_all_write,
+        avatar_url=chat.avatar_url,
+        description=chat.description,
+        admin_ids=_parse_admin_ids(chat),
+    )
+    await manager.broadcast_to_chat(chat.id, {
+        "type": "chat_updated",
+        "chat": payload.model_dump(mode="json"),
+    })
+    return payload
+
+
+@router.delete("/{chat_id}/members/{user_id}")
+async def kick_member(
+    chat_id: int,
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Remove a member from a group. Creator OR admins can kick anyone except the creator."""
+    result = await db.execute(
+        select(Chat).options(selectinload(Chat.members)).where(Chat.id == chat_id)
+    )
+    chat = result.scalar_one_or_none()
+    if not chat:
+        raise HTTPException(404, "Chat not found")
+    if not chat.is_group:
+        raise HTTPException(400, "Только для групп")
+    admins = _parse_admin_ids(chat)
+    can_kick = current_user.id == chat.created_by or current_user.id in admins
+    if not can_kick:
+        raise HTTPException(403, "Кикать могут только создатель и админы")
+    if user_id == chat.created_by:
+        raise HTTPException(400, "Нельзя удалить создателя группы")
+    target = next((m for m in chat.members if m.id == user_id), None)
+    if not target:
+        raise HTTPException(404, "Не участник")
+    chat.members.remove(target)
+    # Strip from admins if was one
+    if user_id in admins:
+        admins.remove(user_id)
+        chat.admin_ids = json.dumps(admins) if admins else None
+    manager.chat_users.get(chat_id, set()).discard(user_id)
+    await db.commit()
+    await db.refresh(chat)
+    payload = ChatOut(
+        id=chat.id, name=chat.name, is_group=True,
+        created_by=chat.created_by,
+        members=[UserOut.model_validate(m) for m in chat.members],
+        last_message=None,
+        allow_all_write=chat.allow_all_write,
+        avatar_url=chat.avatar_url,
+        description=chat.description,
+        admin_ids=_parse_admin_ids(chat),
+    )
+    await manager.broadcast_to_chat(chat.id, {
+        "type": "chat_updated",
+        "chat": payload.model_dump(mode="json"),
+    })
+    # Tell the kicked user their chat is gone
+    await manager.send_to_user(user_id, {"type": "chat_deleted", "chat_id": chat_id})
+    return payload
 
 
 @router.post("/{chat_id}/avatar", response_model=ChatOut)
@@ -249,6 +411,8 @@ async def upload_group_avatar(
         last_message=None,
         allow_all_write=chat.allow_all_write,
         avatar_url=chat.avatar_url,
+        description=chat.description,
+        admin_ids=_parse_admin_ids(chat),
     )
     await manager.broadcast_to_chat(chat.id, {
         "type": "chat_updated",
