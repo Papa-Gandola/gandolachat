@@ -848,16 +848,36 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                       </div>
                     )}
                     {/* Reply preview */}
-                    {msg.reply_to_id && msg.reply_to_username && (
-                      <div
-                        style={{ ...s.replyPreview, cursor: "pointer" }}
-                        onClick={(e) => { e.stopPropagation(); scrollToMessage(msg.reply_to_id!); }}
-                        title="Перейти к сообщению"
-                      >
-                        <span style={s.replyAuthor}>{msg.reply_to_username}</span>
-                        <span style={s.replyText}>{msg.reply_to_content || "..."}</span>
-                      </div>
-                    )}
+                    {msg.reply_to_id && msg.reply_to_username && (() => {
+                      // Custom palette when the reply preview sits inside our own coloured
+                      // bubble — otherwise text reads accent-on-accent and disappears.
+                      const ownNeo = isNeo && isMine;
+                      const ownDiscord = !isNeo && isMine;
+                      const previewOverride: React.CSSProperties =
+                        ownNeo ? {
+                          background: "rgba(0,0,0,0.18)",
+                          borderLeft: "3px solid rgba(0,0,0,0.5)",
+                        } : ownDiscord ? {
+                          background: "rgba(255,255,255,0.16)",
+                          borderLeft: "3px solid rgba(255,255,255,0.6)",
+                        } : {};
+                      const authorOverride: React.CSSProperties =
+                        ownNeo ? { color: "rgba(0,0,0,0.85)" } :
+                        ownDiscord ? { color: "rgba(255,255,255,0.95)" } : {};
+                      const textOverride: React.CSSProperties =
+                        ownNeo ? { color: "rgba(0,0,0,0.65)" } :
+                        ownDiscord ? { color: "rgba(255,255,255,0.75)" } : {};
+                      return (
+                        <div
+                          style={{ ...s.replyPreview, ...previewOverride, cursor: "pointer" }}
+                          onClick={(e) => { e.stopPropagation(); scrollToMessage(msg.reply_to_id!); }}
+                          title="Перейти к сообщению"
+                        >
+                          <span style={{ ...s.replyAuthor, ...authorOverride }}>{msg.reply_to_username}</span>
+                          <span style={{ ...s.replyText, ...textOverride }}>{msg.reply_to_content || "..."}</span>
+                        </div>
+                      );
+                    })()}
                     {/* Editing */}
                     {editingMsg?.id === msg.id ? (
                       <div style={{ display: "flex", gap: 8 }}>
@@ -879,7 +899,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                         {msg.content && (() => {
                           const pokerMatch = msg.content.match(/^\/poker_table (\d+)$/);
                           if (pokerMatch) {
-                            return <PokerInviteCard tableId={Number(pokerMatch[1])} chatId={chat.id} isNeo={isNeo} senderName={msg.sender_username} />;
+                            return <PokerInviteCard tableId={Number(pokerMatch[1])} chatId={chat.id} isNeo={isNeo} isMine={isMine} senderName={msg.sender_username} />;
                           }
                           return <p className="msg-content" style={{ ...s.msgText, ...(isNeo && isMine ? { color: "#0a0a0a" } : {}), ...(!isNeo && isMine ? { color: "#fff" } : {}) }}><FormattedText text={msg.content} /></p>;
                         })()}
@@ -896,7 +916,15 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                               return (
                                 <span
                                   key={emoji}
-                                  style={{ ...s.reactionBadge, cursor: "pointer", border: myReact ? "1px solid var(--accent)" : "1px solid transparent" }}
+                                  style={{
+                                    ...s.reactionBadge,
+                                    cursor: "pointer",
+                                    border: myReact ? "1px solid var(--accent)" : "1px solid transparent",
+                                    // Force readable colour for the number/emoji inside —
+                                    // the parent bubble may set color to var(--accent-text)
+                                    // (dark) which renders invisible on the dark badge bg.
+                                    color: "var(--text-primary)",
+                                  }}
                                   onClick={() => {
                                     if (myReact) {
                                       wsService.send({ type: "remove_reaction", message_id: msg.id, chat_id: chat.id, emoji });
@@ -1197,39 +1225,61 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   );
 }
 
-function PokerInviteCard({ tableId, chatId, isNeo, senderName }: { tableId: number; chatId: number; isNeo: boolean; senderName: string }) {
+function PokerInviteCard({ tableId, chatId, isNeo, isMine, senderName }: { tableId: number; chatId: number; isNeo: boolean; isMine: boolean; senderName: string }) {
   const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
+  // The card sits inside the message bubble, so the surrounding background varies:
+  //  - Neo own bubble: lime (#87b82a) → use dark text + dark border
+  //  - Neo other bubble: dark grey (#131313) → keep light text + accent border
+  //  - Discord own bubble: blurple (#5865f2) → light text + light border
+  //  - Discord other: dark grey → muted backdrop tint
+  const cardBg = isNeo
+    ? (isMine ? "rgba(0,0,0,0.18)" : "transparent")
+    : (isMine ? "rgba(255,255,255,0.16)" : "rgba(88,101,242,0.08)");
+  const cardBorder = isNeo
+    ? (isMine ? "1px solid rgba(0,0,0,0.55)" : "1px solid var(--accent)")
+    : (isMine ? "1px solid rgba(255,255,255,0.55)" : "1px solid rgba(88,101,242,0.4)");
+  const titleColor = isNeo
+    ? (isMine ? "#0a0a0a" : "var(--text-header)")
+    : (isMine ? "#fff" : "var(--text-header)");
+  const subColor = isNeo
+    ? (isMine ? "rgba(0,0,0,0.65)" : "var(--text-muted)")
+    : (isMine ? "rgba(255,255,255,0.75)" : "var(--text-muted)");
+  const btnBg = isNeo
+    ? (isMine ? "#0a0a0a" : "var(--accent)")
+    : (isMine ? "rgba(255,255,255,0.95)" : "var(--accent)");
+  const btnColor = isNeo
+    ? (isMine ? "var(--accent)" : "var(--accent-text)")
+    : (isMine ? "var(--accent)" : "var(--accent-text)");
   return (
     <div style={{
       display: "flex",
       alignItems: "center",
       gap: 12,
       padding: "10px 12px",
-      background: isNeo ? "transparent" : "rgba(88,101,242,0.08)",
-      border: `1px solid ${isNeo ? "var(--accent)" : "rgba(88,101,242,0.4)"}`,
+      background: cardBg,
+      border: cardBorder,
       borderRadius: isNeo ? 0 : 8,
       margin: "4px 0",
       maxWidth: 360,
     }}>
       <div style={{ fontSize: 28 }}>🎴</div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ ...mono, color: "var(--text-header)", fontWeight: 700, fontSize: 14 }}>
+        <div style={{ ...mono, color: titleColor, fontWeight: 700, fontSize: 14 }}>
           {isNeo ? `// ПОКЕРНЫЙ_СТОЛ #${tableId}` : `Покерный стол #${tableId}`}
         </div>
-        <div style={{ ...mono, color: "var(--text-muted)", fontSize: 12, marginTop: 2 }}>
+        <div style={{ ...mono, color: subColor, fontSize: 12, marginTop: 2 }}>
           {isNeo ? `${senderName} зовёт играть` : `${senderName} зовёт играть в покер`}
         </div>
       </div>
       <button
         onClick={() => {
-          // Switch to poker mode in this chat and let Poker component focus the table
           localStorage.setItem("gandola-mode", "poker");
           window.dispatchEvent(new CustomEvent("set-app-mode", { detail: { mode: "poker" } }));
           window.dispatchEvent(new CustomEvent("open-poker-table", { detail: { chatId, tableId } }));
         }}
         style={{
-          background: "var(--accent)",
-          color: "var(--accent-text)",
+          background: btnBg,
+          color: btnColor,
           border: "none",
           borderRadius: isNeo ? 0 : 6,
           padding: "8px 14px",

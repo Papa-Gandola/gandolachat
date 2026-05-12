@@ -72,8 +72,22 @@ export default function Poker({ chat, currentUser }: Props) {
     };
     const onUpdated = (data: any) => {
       if (data.table?.chat_id !== chat.id) return;
-      setTables((prev) => prev.map((t) => t.id === data.table.id ? data.table : t));
-      setActiveTable((cur) => (cur && cur.id === data.table.id ? data.table : cur));
+      // Preserve any optimistic ghost seats (id < 0) that the server hasn't
+      // confirmed yet — otherwise unrelated WS broadcasts wipe our local sit
+      // before the HTTP join roundtrip completes.
+      const mergeGhosts = (incoming: PokerTableOut, existing: PokerTableOut): PokerTableOut => {
+        const ghosts = existing.seats.filter((s) => s.id < 0 && !incoming.seats.find((x) => x.user_id === s.user_id));
+        if (!ghosts.length) return incoming;
+        return { ...incoming, seats: [...incoming.seats, ...ghosts] };
+      };
+      setTables((prev) => prev.map((t) => {
+        if (t.id !== data.table.id) return t;
+        return mergeGhosts(data.table, t);
+      }));
+      setActiveTable((cur) => {
+        if (!cur || cur.id !== data.table.id) return cur;
+        return mergeGhosts(data.table, cur);
+      });
     };
     const onRemoved = (data: any) => {
       setTables((prev) => prev.filter((t) => t.id !== data.table_id));
@@ -153,6 +167,9 @@ export default function Poker({ chat, currentUser }: Props) {
     });
     try {
       const res = await pokerApi.join(tableId);
+      // Always sync the row in the list — even if the user didn't open the table,
+      // we want the count/avatars to match server truth.
+      setTables((prev) => prev.map((t) => t.id === tableId ? res.data : t));
       setActiveTable((cur) => (cur && cur.id === tableId) || openAfter ? res.data : cur);
     } catch (e: any) {
       setTables((prev) => prev.map((t) => t.id !== tableId
@@ -209,6 +226,12 @@ export default function Poker({ chat, currentUser }: Props) {
     try {
       const res = await pokerApi.leave(tableId);
       setActiveTable(res.data);
+      if (res.data) {
+        setTables((prev) => prev.map((t) => t.id === tableId ? res.data! : t));
+      } else {
+        // Table was emptied and deleted on the server
+        setTables((prev) => prev.filter((t) => t.id !== tableId));
+      }
     } catch (e: any) {
       // Reload from server to get authoritative state
       pokerApi.list(chat.id).then((r) => {
@@ -282,7 +305,18 @@ export default function Poker({ chat, currentUser }: Props) {
                     </div>
                     <div style={{ display: "flex", gap: 8 }}>
                       <button
-                        onClick={() => setActiveTable(t)}
+                        onClick={() => {
+                          setActiveTable(t);
+                          // Belt-and-suspenders: pull fresh server truth in case
+                          // local cache is stale (missed broadcast, etc.)
+                          pokerApi.list(chat.id).then((r) => {
+                            const fresh = r.data.find((x) => x.id === t.id);
+                            if (fresh) {
+                              setActiveTable((cur) => cur && cur.id === t.id ? fresh : cur);
+                              setTables(r.data);
+                            }
+                          }).catch(() => {});
+                        }}
                         style={{ ...s.secondaryBtn, ...mono, ...(isNeo ? { borderRadius: 0 } : {}) }}
                       >
                         {isNeo ? "[ОТКРЫТЬ]" : "Открыть"}
@@ -535,9 +569,10 @@ function LiveTableLayout({ table, game, currentUserId, isNeo }: {
   return (
     <div style={{
       position: "relative",
+      // Scale to whatever space the parent flex offers, keeping 16:10 felt aspect ratio.
       width: "100%",
-      maxWidth: 760,
-      margin: "0 auto",
+      maxWidth: "min(100%, calc((100vh - 200px) * 1.6))",
+      maxHeight: "100%",
       aspectRatio: "16/10",
       background: isNeo
         ? "linear-gradient(180deg, #0a1410 0%, #050a08 100%)"
@@ -553,10 +588,10 @@ function LiveTableLayout({ table, game, currentUserId, isNeo }: {
         textAlign: "center", color: isNeo ? "var(--accent)" : "#fff",
         fontFamily: isNeo ? "var(--font-mono)" : undefined,
       }}>
-        <div style={{ display: "flex", gap: 6, justifyContent: "center", marginBottom: 10 }}>
-          {(game.hand?.community || []).map((c, i) => <CardView key={i} code={c} isNeo={isNeo} />)}
+        <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 12 }}>
+          {(game.hand?.community || []).map((c, i) => <CardView key={i} code={c} isNeo={isNeo} large />)}
           {Array.from({ length: 5 - (game.hand?.community.length || 0) }).map((_, i) => (
-            <CardView key={`b${i}`} code={null} isNeo={isNeo} />
+            <CardView key={`b${i}`} code={null} isNeo={isNeo} large />
           ))}
         </div>
         <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: 1 }}>
@@ -587,7 +622,7 @@ function LiveTableLayout({ table, game, currentUserId, isNeo }: {
                 transition: "border-color 0.2s",
                 position: "relative",
               }}>
-                <div style={{ display: "flex", gap: 2, justifyContent: "center", marginBottom: 4, height: 56 }}>
+                <div style={{ display: "flex", gap: 3, justifyContent: "center", marginBottom: 4, height: 60 }}>
                   {player.hole.map((c, i) => <CardView key={i} code={c === "?" ? null : c} isNeo={isNeo} small />)}
                 </div>
                 <div style={{ textAlign: "center", color: "#fff", fontSize: 12, fontFamily: isNeo ? "var(--font-mono)" : undefined }}>
@@ -625,18 +660,21 @@ function LiveTableLayout({ table, game, currentUserId, isNeo }: {
   );
 }
 
-function CardView({ code, isNeo, small }: { code: string | null; isNeo: boolean; small?: boolean }) {
-  const w = small ? 32 : 44;
-  const h = small ? 46 : 64;
+function CardView({ code, isNeo, small, large }: { code: string | null; isNeo: boolean; small?: boolean; large?: boolean }) {
+  // Three size buckets. small = player hole cards in tile, normal = pre-game placeholder,
+  // large = community cards on the felt where suits need to be clearly visible.
+  const w = large ? 64 : small ? 40 : 50;
+  const h = large ? 92 : small ? 58 : 72;
+  const rankSize = large ? 22 : small ? 14 : 18;
+  const suitSize = large ? 28 : small ? 18 : 22;
   if (!code) {
-    // Face-down or empty placeholder
     return (
       <div style={{
         width: w, height: h,
-        borderRadius: isNeo ? 0 : 4,
+        borderRadius: isNeo ? 0 : 5,
         background: isNeo ? "transparent" : "linear-gradient(135deg, #5865f2 0%, #3a45a5 100%)",
         border: isNeo ? "1px dashed var(--accent)" : "1px solid rgba(255,255,255,0.3)",
-        opacity: 0.55,
+        opacity: 0.5,
       }}/>
     );
   }
@@ -647,9 +685,10 @@ function CardView({ code, isNeo, small }: { code: string | null; isNeo: boolean;
   return (
     <div style={{
       width: w, height: h,
-      borderRadius: isNeo ? 0 : 4,
+      borderRadius: isNeo ? 0 : 5,
       background: isNeo ? "#0a0a0a" : "#fff",
-      border: isNeo ? "1px solid var(--accent)" : "1px solid #ccc",
+      border: isNeo ? "1px solid var(--accent)" : "1px solid #d6d6d6",
+      boxShadow: isNeo ? "0 0 4px rgba(198,255,61,0.18)" : "0 1px 3px rgba(0,0,0,0.25)",
       color: isNeo ? (isRed ? "#ff7777" : "var(--accent)") : (isRed ? "#d33" : "#222"),
       fontFamily: isNeo ? "var(--font-mono)" : "Inter, sans-serif",
       fontWeight: 700,
@@ -658,11 +697,11 @@ function CardView({ code, isNeo, small }: { code: string | null; isNeo: boolean;
       alignItems: "center",
       justifyContent: "center",
       lineHeight: 1,
-      fontSize: small ? 12 : 16,
-      gap: 2,
+      fontSize: rankSize,
+      gap: large ? 6 : 3,
     }}>
       <span>{rank}</span>
-      <span style={{ fontSize: small ? 14 : 18 }}>{suitChar}</span>
+      <span style={{ fontSize: suitSize }}>{suitChar}</span>
     </div>
   );
 }
@@ -718,8 +757,8 @@ function PokerTableLayout({ table, currentUserId, isNeo }: { table: PokerTableOu
     <div style={{
       position: "relative",
       width: "100%",
-      maxWidth: 760,
-      margin: "0 auto",
+      maxWidth: "min(100%, calc((100vh - 200px) * 1.6))",
+      maxHeight: "100%",
       aspectRatio: "16/10",
       background: isNeo
         ? "linear-gradient(180deg, #0a1410 0%, #050a08 100%)"
@@ -795,7 +834,7 @@ const s: Record<string, React.CSSProperties> = {
   tableCard: { background: "var(--bg-secondary)", borderRadius: 8, padding: 14 },
   tableTitle: { color: "var(--text-header)", fontWeight: 700, fontSize: 15 },
   tableMeta: { color: "var(--text-muted)", fontSize: 12, marginTop: 4 },
-  tableArea: { flex: 1, padding: 24, overflow: "auto" as const },
+  tableArea: { flex: 1, padding: 16, overflow: "hidden" as const, display: "flex", alignItems: "center", justifyContent: "center" },
   primaryBtn: { background: "var(--accent)", color: "var(--accent-text)", border: "none", padding: "8px 14px", borderRadius: 4, cursor: "pointer", fontSize: 13, fontWeight: 600 },
   secondaryBtn: { background: "var(--bg-tertiary)", color: "var(--text-primary)", border: "none", padding: "8px 14px", borderRadius: 4, cursor: "pointer", fontSize: 13 },
   error: { padding: "8px 16px", color: "var(--danger)", fontSize: 12 },

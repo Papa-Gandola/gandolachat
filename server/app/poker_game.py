@@ -113,6 +113,53 @@ def new_game(table_id: int, chat_id: int, players_in: list[tuple[int, int, int]]
     )
 
 
+def needs_fast_forward(g: GameState) -> bool:
+    """True if the hand can't accept any more actions but isn't done yet —
+    meaning every still-in player is all-in (or only one remains), and we should
+    deal remaining streets through to showdown without waiting on player input."""
+    if g.hand is None:
+        return False
+    if g.hand.street == "done":
+        return False
+    in_hand = [p for p in g.players.values() if not p.has_folded]
+    if len(in_hand) <= 1:
+        return False  # someone won uncalled; handled separately
+    return all(p.is_all_in for p in in_hand)
+
+
+def deal_next_street_or_finish(g: GameState) -> dict | None:
+    """Deal one more street (flop/turn/river). After river, run showdown.
+    Returns the showdown summary if hand finished, else None. Called by the
+    WS layer in a paced loop while needs_fast_forward(g) is True."""
+    hand = g.hand
+    if hand is None or hand.street == "done":
+        return None
+    # Reset per-street betting state (purely cosmetic since no one can act, but keeps
+    # current_bet/min_raise consistent for any inspector)
+    for p in g.players.values():
+        p.bet = 0
+        p.has_acted = False
+    hand.current_bet = 0
+    hand.min_raise = g.big_blind
+    if hand.street == "preflop":
+        if hand.deck: hand.deck.pop()
+        for _ in range(3):
+            if hand.deck: hand.community.append(hand.deck.pop())
+        hand.street = "flop"
+    elif hand.street == "flop":
+        if hand.deck: hand.deck.pop()
+        if hand.deck: hand.community.append(hand.deck.pop())
+        hand.street = "turn"
+    elif hand.street == "turn":
+        if hand.deck: hand.deck.pop()
+        if hand.deck: hand.community.append(hand.deck.pop())
+        hand.street = "river"
+    elif hand.street == "river":
+        hand.street = "showdown"
+        return _showdown(g)
+    return None
+
+
 def maybe_escalate_blinds(g: GameState) -> bool:
     """Returns True if blinds were just raised. Caller can broadcast."""
     if time.time() < g.next_blind_increase_at:
@@ -310,10 +357,11 @@ def _advance(g: GameState):
     # Find next player who needs to act
     can_act = g.players_can_act()
     if not can_act:
-        # Everyone is all-in; deal remaining streets and showdown
-        while hand.street != "showdown":
-            _next_street(g)
-        return _showdown(g)
+        # Everyone in the hand is all-in or folded — no more betting possible.
+        # We do NOT loop to showdown here so the caller can deal remaining streets
+        # one at a time with a visual pause between them (handled in the WS layer).
+        # Just keep to_act_seat where it is; UI will hide action controls naturally.
+        return
     # Players who haven't acted OR who haven't matched current bet still need to act
     needs_action = [p for p in can_act if not p.has_acted or p.bet < hand.current_bet]
     if not needs_action:

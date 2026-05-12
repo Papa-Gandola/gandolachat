@@ -443,12 +443,58 @@ async def handle_poker_action(data: dict, user_id: int, db: AsyncSession):
             "state": public_view(g, uid),
         })
 
-    # Hand ended? Persist stacks back to DB and start the next hand after a small pause
+    # Fast-forward: if everyone still in the hand is all-in, deal remaining streets
+    # one at a time with a short pause between them so the UI shows cards appearing.
+    from app.poker_game import needs_fast_forward, deal_next_street_or_finish
+    if needs_fast_forward(g):
+        import asyncio
+        async def _ff():
+            try:
+                # Small initial pause before the first reveal so the last action stays on screen
+                await asyncio.sleep(0.7)
+                while True:
+                    live = game_store.get(table_id)
+                    if live is not g or g.finished:
+                        return
+                    if g.hand is None or g.hand.street == "done":
+                        return
+                    deal_next_street_or_finish(g)
+                    for uid in g.players.keys():
+                        await manager.send_to_user(uid, {
+                            "type": "poker_game_state",
+                            "table_id": table_id,
+                            "state": public_view(g, uid),
+                        })
+                    if g.hand and g.hand.street == "done":
+                        # Hand-end path below in the regular flow handles stacks/next hand,
+                        # but we're inside a background task so we need to do it ourselves.
+                        await _finish_hand_and_maybe_next(table_id, g)
+                        return
+                    await asyncio.sleep(0.85)
+            except Exception as exc:
+                print(f"[poker] fast-forward task failed: {exc}")
+        asyncio.create_task(_ff())
+        return  # don't run the normal "hand ended" branch — _ff() will do it
+
+    # Hand ended via the normal action flow (someone folded, or final showdown).
     if g.hand and g.hand.street == "done":
-        # Persist stacks
-        rows = await db.execute(
-            select(PokerSeat).where(PokerSeat.table_id == table_id)
-        )
+        await _finish_hand_and_maybe_next(table_id, g, db=db)
+
+
+async def _finish_hand_and_maybe_next(table_id: int, g, db=None):
+    """Persist stacks, end tournament if only one player has chips left, otherwise
+    schedule the next hand. Safe to call from a background task (opens its own
+    DB session if `db` is not provided)."""
+    from app.database import AsyncSessionLocal
+    from app.poker_game import start_hand
+    from sqlalchemy import select as _select
+    from app.models import PokerSeat as _PokerSeat, PokerTable as _PokerTable
+
+    own_session = db is None
+    if own_session:
+        db = AsyncSessionLocal()
+    try:
+        rows = await db.execute(_select(_PokerSeat).where(_PokerSeat.table_id == table_id))
         seats = rows.scalars().all()
         for seat in seats:
             p = g.players.get(seat.user_id)
@@ -460,10 +506,9 @@ async def handle_poker_action(data: dict, user_id: int, db: AsyncSession):
 
         alive = [p for p in g.players.values() if p.stack > 0]
         if len(alive) <= 1:
-            # Tournament over
             g.finished = True
             g.winner_user_id = alive[0].user_id if alive else None
-            t_rows = await db.execute(select(PokerTable).where(PokerTable.id == table_id))
+            t_rows = await db.execute(_select(_PokerTable).where(_PokerTable.id == table_id))
             t = t_rows.scalar_one_or_none()
             if t:
                 t.status = "finished"
@@ -476,21 +521,25 @@ async def handle_poker_action(data: dict, user_id: int, db: AsyncSession):
                     "table_id": table_id,
                     "state": public_view(g, uid),
                 })
-        else:
-            # Auto-start next hand after 5 seconds. Need to re-check that the table
-            # still exists and our game instance is still in the store — the creator
-            # might press "Close table" during the gap.
-            import asyncio
-            async def _next():
-                await asyncio.sleep(5)
-                live = game_store.get(table_id)
-                if live is not g or g.finished:
-                    return
-                start_hand(g)
-                for uid in g.players.keys():
-                    await manager.send_to_user(uid, {
-                        "type": "poker_game_state",
-                        "table_id": table_id,
-                        "state": public_view(g, uid),
-                    })
-            asyncio.create_task(_next())
+            return
+
+        # Schedule the next hand after a short pause. The pause is longer at showdown
+        # (5s — players want to see who had what) and shorter on uncalled wins (3s).
+        wait = 5.0 if (g.last_summary and g.last_summary.get("reason") == "showdown") else 3.0
+        import asyncio
+        async def _next():
+            await asyncio.sleep(wait)
+            live = game_store.get(table_id)
+            if live is not g or g.finished:
+                return
+            start_hand(g)
+            for uid in g.players.keys():
+                await manager.send_to_user(uid, {
+                    "type": "poker_game_state",
+                    "table_id": table_id,
+                    "state": public_view(g, uid),
+                })
+        asyncio.create_task(_next())
+    finally:
+        if own_session:
+            await db.close()

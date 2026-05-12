@@ -454,7 +454,7 @@ export default function Main({ token, user, onLogout }: Props) {
             <p style={{ color: "var(--text-secondary)", marginBottom: 20 }}>Что сделать с приложением?</p>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <button style={s.closeDialogBtn} onClick={() => { (window as any).electron?.hide(); setShowCloseDialog(false); }}>
-                Свернуть в трей
+                Свернуть в фон
               </button>
               <button style={{ ...s.closeDialogBtn, background: "#ed4245" }} onClick={() => (window as any).electron?.quit()}>
                 Полностью закрыть
