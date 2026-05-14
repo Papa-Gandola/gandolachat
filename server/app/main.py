@@ -100,14 +100,33 @@ async def startup():
             "ALTER TABLE chats ADD COLUMN IF NOT EXISTS admin_ids varchar(500)",
             "ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_group_id varchar(40)",
             "CREATE INDEX IF NOT EXISTS ix_messages_media_group_id ON messages(media_group_id)",
-            # is_admin flag on users — bootstraps Papa Gandola + werfire on first run.
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin boolean NOT NULL DEFAULT false",
-            "UPDATE users SET is_admin = true WHERE username IN ('Papa Gandola', 'werfire') AND is_admin = false",
+            # Tracks one-time data migrations so we don't re-run them on every
+            # startup and undo manual admin changes (e.g. demoting a user).
+            "CREATE TABLE IF NOT EXISTS _migrations (id varchar(50) PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT NOW())",
         ):
             try:
                 await db.execute(text(stmt))
             except Exception as e:
                 print(f"[migrate] {stmt}: {e}")
+
+        # One-shot data seed: promote the two bootstrap admins on first run only.
+        # After this fires once, demoting a user via SQL (UPDATE users SET
+        # is_admin=false ...) is permanent — we won't re-promote on restart.
+        seeded = await db.execute(text("SELECT 1 FROM _migrations WHERE id = 'admin_seed_v1'"))
+        if not seeded.scalar():
+            try:
+                await db.execute(text(
+                    "UPDATE users SET is_admin = true "
+                    "WHERE username IN ('Papa Gandola', 'werfire')"
+                ))
+                await db.execute(text(
+                    "INSERT INTO _migrations (id) VALUES ('admin_seed_v1')"
+                ))
+                print("[migrate] admin_seed_v1 applied")
+            except Exception as e:
+                print(f"[migrate] admin_seed_v1: {e}")
+
         await db.commit()
     _scheduler = AsyncIOScheduler()
     _scheduler.add_job(cleanup_expired_messages, "interval", hours=1)
