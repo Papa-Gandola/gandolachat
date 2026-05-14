@@ -11,6 +11,9 @@ export default defineConfig({
   build: {
     outDir: "../../dist/renderer",
     emptyOutDir: true,
+    // Ship source maps with production builds so the auto-update users can
+    // share readable stack traces from DevTools (otherwise we get i2/cs/Hg).
+    sourcemap: true,
   },
   resolve: {
     alias: {

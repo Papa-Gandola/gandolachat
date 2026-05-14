@@ -653,14 +653,15 @@ function Avatar({ url, name, size, isGroup }: { url: string | null; name: string
       border: isNeo && isGroup ? "1px solid var(--border)" : undefined,
       fontFamily,
     }}>
-      {isGroup ? groupChar : name.charAt(0).toUpperCase()}
+      {isGroup ? groupChar : (name && typeof name === "string" ? name.charAt(0).toUpperCase() : "?")}
     </div>
   );
 }
 
 function stringToColor(str: string) {
   let hash = 0;
-  for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  const s = typeof str === "string" ? str : "";
+  for (let i = 0; i < s.length; i++) hash = s.charCodeAt(i) + ((hash << 5) - hash);
   const colors = ["#5865f2", "#57f287", "#fee75c", "#ed4245", "#eb459e", "#faa61a", "#00b0f4"];
   return colors[Math.abs(hash) % colors.length];
 }

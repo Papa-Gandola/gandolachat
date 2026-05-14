@@ -7,6 +7,7 @@ type Node = { type: "text" | "bold" | "bolditalic" | "italic" | "strike" | "unde
 
 function parse(text: string): Node[] {
   const nodes: Node[] = [];
+  if (typeof text !== "string") return nodes;
   let i = 0;
   let current = "";
 
@@ -56,6 +57,7 @@ const URL_RE = /(https?:\/\/[^\s<>]+)/gi;
 
 function renderText(text: string, keyBase: string): React.ReactNode[] {
   const out: React.ReactNode[] = [];
+  if (typeof text !== "string") return out;
   let lastIdx = 0;
   let match: RegExpExecArray | null;
   URL_RE.lastIndex = 0;
