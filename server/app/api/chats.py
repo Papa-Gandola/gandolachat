@@ -483,7 +483,7 @@ async def admin_delete_old_messages(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.username != "Papa Gandola":
+    if not current_user.is_admin:
         raise HTTPException(403, "Admin only")
     if before_date:
         try:

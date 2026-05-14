@@ -19,6 +19,7 @@ class UserOut(BaseModel):
     status: str | None = None
     about: str | None = None
     grammar_errors: int = 0
+    is_admin: bool = False
     last_seen: datetime | None = None
 
     model_config = {"from_attributes": True}

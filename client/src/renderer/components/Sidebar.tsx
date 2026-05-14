@@ -34,7 +34,7 @@ export default function Sidebar({
   const isNeo = theme === "neo";
   const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
   const [chatContextMenu, setChatContextMenu] = useState<{ x: number; y: number; chat: ChatOut } | null>(null);
-  const isAdmin = currentUser.username === "Papa Gandola";
+  const isAdmin = !!currentUser.is_admin;
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [updatePercent, setUpdatePercent] = useState(0);
   const [showUpdateBanner, setShowUpdateBanner] = useState(false);

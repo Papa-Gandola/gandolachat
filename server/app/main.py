@@ -100,6 +100,9 @@ async def startup():
             "ALTER TABLE chats ADD COLUMN IF NOT EXISTS admin_ids varchar(500)",
             "ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_group_id varchar(40)",
             "CREATE INDEX IF NOT EXISTS ix_messages_media_group_id ON messages(media_group_id)",
+            # is_admin flag on users — bootstraps Papa Gandola + werfire on first run.
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin boolean NOT NULL DEFAULT false",
+            "UPDATE users SET is_admin = true WHERE username IN ('Papa Gandola', 'werfire') AND is_admin = false",
         ):
             try:
                 await db.execute(text(stmt))

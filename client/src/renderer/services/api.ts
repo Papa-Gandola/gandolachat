@@ -18,6 +18,7 @@ export interface UserOut {
   status?: string | null;
   about?: string | null;
   grammar_errors?: number;
+  is_admin?: boolean;
   last_seen?: string | null;
 }
 

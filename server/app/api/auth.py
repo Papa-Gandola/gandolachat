@@ -8,8 +8,6 @@ from app.schemas import UserRegister, UserLogin, Token, UserOut
 from app.auth import hash_password, verify_password, create_access_token, get_current_user
 from app.ws.manager import manager
 
-ADMIN_USERNAME = "Papa Gandola"
-
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
@@ -19,32 +17,29 @@ async def register(data: UserRegister, db: AsyncSession = Depends(get_db)):
     if result.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Username already taken")
 
-    # Admin auto-approved, everyone else needs approval
-    is_admin = data.username == ADMIN_USERNAME
+    # Everyone registers as a regular user — needs approval, never admin.
+    # Admin rights are granted only via the users.is_admin column (set by
+    # the startup migration in main.py, or manual SQL on the VPS).
     user = User(
         username=data.username,
         password_hash=hash_password(data.password),
-        is_approved=is_admin,
+        is_approved=False,
+        is_admin=False,
     )
     db.add(user)
     await db.commit()
     await db.refresh(user)
 
-    if is_admin:
-        token = create_access_token(user.id)
-        return {"status": "approved", "access_token": token, "token_type": "bearer", "user": UserOut.model_validate(user).model_dump()}
-    else:
-        # Notify admin in real-time
-        admin_result = await db.execute(select(User).where(User.username == ADMIN_USERNAME))
-        admin = admin_result.scalar_one_or_none()
-        if admin:
-            await manager.send_to_user(admin.id, {
-                "type": "new_pending_user",
-                "id": user.id,
-                "username": user.username,
-                "created_at": user.created_at.isoformat(),
-            })
-        return {"status": "pending", "message": "Ваша заявка отправлена. Ожидайте одобрения администратора."}
+    # Notify every admin in real-time (multiple admins supported).
+    admins_result = await db.execute(select(User).where(User.is_admin == True))
+    for admin in admins_result.scalars().all():
+        await manager.send_to_user(admin.id, {
+            "type": "new_pending_user",
+            "id": user.id,
+            "username": user.username,
+            "created_at": user.created_at.isoformat(),
+        })
+    return {"status": "pending", "message": "Ваша заявка отправлена. Ожидайте одобрения администратора."}
 
 
 @router.post("/login", response_model=Token)
@@ -68,7 +63,7 @@ async def get_pending_users(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.username != ADMIN_USERNAME:
+    if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Only admin can view pending users")
 
     result = await db.execute(select(User).where(User.is_approved == False))
@@ -82,7 +77,7 @@ async def approve_user(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.username != ADMIN_USERNAME:
+    if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Only admin can approve users")
 
     user = await db.get(User, user_id)
@@ -100,7 +95,7 @@ async def reject_user(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.username != ADMIN_USERNAME:
+    if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Only admin can reject users")
 
     user = await db.get(User, user_id)

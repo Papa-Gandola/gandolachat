@@ -219,7 +219,7 @@ export default function ProfilePage({ user: initialUser, currentUser, onClose, o
           </div>
         </div>
 
-        {isOwn && user.username === "Papa Gandola" && (
+        {isOwn && user.is_admin && (
           <AdminCleanup isNeo={isNeo} />
         )}
       </div>
