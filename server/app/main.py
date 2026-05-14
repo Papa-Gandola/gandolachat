@@ -8,7 +8,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.database import init_db, get_db, AsyncSessionLocal
+from app.database import get_db, AsyncSessionLocal
 from app.config import settings
 from app.models import Message
 from app.auth import get_current_user
@@ -76,58 +76,6 @@ _scheduler = None
 @app.on_event("startup")
 async def startup():
     global _scheduler
-    from sqlalchemy import text
-    await init_db()
-    # One-time schema migration + data fix so existing messages never auto-expire.
-    # create_all doesn't alter columns, so we drop NOT NULL manually before setting NULLs.
-    async with AsyncSessionLocal() as db:
-        try:
-            await db.execute(text("ALTER TABLE messages ALTER COLUMN expires_at DROP NOT NULL"))
-        except Exception:
-            pass  # already nullable
-        await db.execute(
-            Message.__table__.update()
-            .where(Message.expires_at.is_not(None))
-            .values(expires_at=None)
-        )
-        # Add channel-mode + group-avatar columns to existing chats table.
-        # Both default to safe values so old data is unchanged: allow_all_write=true
-        # keeps existing groups open, avatar_url null lets the # placeholder render.
-        for stmt in (
-            "ALTER TABLE chats ADD COLUMN IF NOT EXISTS allow_all_write boolean NOT NULL DEFAULT true",
-            "ALTER TABLE chats ADD COLUMN IF NOT EXISTS avatar_url varchar(500)",
-            "ALTER TABLE chats ADD COLUMN IF NOT EXISTS description varchar(1000)",
-            "ALTER TABLE chats ADD COLUMN IF NOT EXISTS admin_ids varchar(500)",
-            "ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_group_id varchar(40)",
-            "CREATE INDEX IF NOT EXISTS ix_messages_media_group_id ON messages(media_group_id)",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin boolean NOT NULL DEFAULT false",
-            # Tracks one-time data migrations so we don't re-run them on every
-            # startup and undo manual admin changes (e.g. demoting a user).
-            "CREATE TABLE IF NOT EXISTS _migrations (id varchar(50) PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT NOW())",
-        ):
-            try:
-                await db.execute(text(stmt))
-            except Exception as e:
-                print(f"[migrate] {stmt}: {e}")
-
-        # One-shot data seed: promote the two bootstrap admins on first run only.
-        # After this fires once, demoting a user via SQL (UPDATE users SET
-        # is_admin=false ...) is permanent — we won't re-promote on restart.
-        seeded = await db.execute(text("SELECT 1 FROM _migrations WHERE id = 'admin_seed_v1'"))
-        if not seeded.scalar():
-            try:
-                await db.execute(text(
-                    "UPDATE users SET is_admin = true "
-                    "WHERE username IN ('Papa Gandola', 'werfire')"
-                ))
-                await db.execute(text(
-                    "INSERT INTO _migrations (id) VALUES ('admin_seed_v1')"
-                ))
-                print("[migrate] admin_seed_v1 applied")
-            except Exception as e:
-                print(f"[migrate] admin_seed_v1: {e}")
-
-        await db.commit()
     _scheduler = AsyncIOScheduler()
     _scheduler.add_job(cleanup_expired_messages, "interval", hours=1)
     _scheduler.start()
