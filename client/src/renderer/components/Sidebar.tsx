@@ -38,6 +38,7 @@ export default function Sidebar({
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [updatePercent, setUpdatePercent] = useState(0);
   const [showUpdateBanner, setShowUpdateBanner] = useState(false);
+  const [isDebInstall, setIsDebInstall] = useState(false);
   const [newName, setNewName] = useState("");
   const [onlineUsers, setOnlineUsers] = useState<Set<number>>(new Set());
   const [unread, setUnread] = useState<Map<number, number>>(new Map());
@@ -45,6 +46,7 @@ export default function Sidebar({
 
   useEffect(() => {
     const electron = (window as any).electron;
+    electron?.isDebInstall?.().then((v: boolean) => setIsDebInstall(v));
     if (electron?.onUpdateStatus) {
       electron.onUpdateStatus((status: string, info?: any) => {
         setUpdateStatus(status);
@@ -483,6 +485,18 @@ export default function Sidebar({
       </div>
 
       {/* Update banner */}
+      {updateStatus === "available" && isDebInstall && (
+        <div
+          style={{
+            ...s.updateBanner,
+            cursor: "pointer",
+            ...(isNeo ? { background: "transparent", color: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 0, ...mono, letterSpacing: "0.04em" } : {}),
+          }}
+          onClick={() => (window as any).electron?.openExternal("https://github.com/Papa-Gandola/gandolachat/releases/latest")}
+        >
+          {isNeo ? "● новая_версия → скачать" : "Доступна новая версия — скачать ↗"}
+        </div>
+      )}
       {showUpdateBanner && updateStatus === "not-available" && (
         <div style={{
           ...s.updateBanner,
