@@ -553,7 +553,7 @@ async def _finish_hand_and_maybe_next(table_id: int, g, db=None):
     schedule the next hand. Safe to call from a background task (opens its own
     DB session if `db` is not provided)."""
     from app.database import AsyncSessionLocal
-    from app.poker_game import start_hand
+    from app.poker_game import start_hand, game_store, public_view
     from sqlalchemy import select as _select
     from app.models import PokerSeat as _PokerSeat, PokerTable as _PokerTable
 
