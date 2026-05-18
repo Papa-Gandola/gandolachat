@@ -16,4 +16,6 @@ contextBridge.exposeInMainWorld("electron", {
   getTrayBaseIcon: () => ipcRenderer.invoke("tray:getBaseIcon"),
   setTrayImage: (dataUrl: string) => ipcRenderer.send("tray:setImage", dataUrl),
   focus: () => ipcRenderer.send("window:focus"),
+  isDebInstall: () => ipcRenderer.invoke("app:isDebInstall"),
+  openExternal: (url: string) => ipcRenderer.invoke("shell:openExternal", url),
 });

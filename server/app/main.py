@@ -1,4 +1,5 @@
-import os
+import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, Depends, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -11,11 +12,32 @@ from pathlib import Path
 from app.database import get_db, AsyncSessionLocal
 from app.config import settings
 from app.models import Message
-from app.auth import get_current_user
 from app.ws.handler import websocket_endpoint
 from app.api import auth, users, chats, poker
 
-app = FastAPI(title="GandolaChat")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from alembic.config import Config
+    from alembic import command
+
+    def _upgrade():
+        cfg = Config("alembic.ini")
+        cfg.attributes["skip_logging"] = True
+        command.upgrade(cfg, "head")
+
+    await asyncio.to_thread(_upgrade)
+
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(cleanup_expired_messages, "interval", hours=1)
+    scheduler.start()
+
+    yield
+
+    scheduler.shutdown()
+
+
+app = FastAPI(title="GandolaChat", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -70,22 +92,6 @@ async def cleanup_expired_messages():
         )
         await db.commit()
 
-
-_scheduler = None
-
-@app.on_event("startup")
-async def startup():
-    global _scheduler
-    _scheduler = AsyncIOScheduler()
-    _scheduler.add_job(cleanup_expired_messages, "interval", hours=1)
-    _scheduler.start()
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    global _scheduler
-    if _scheduler:
-        _scheduler.shutdown()
 
 
 @app.get("/health")

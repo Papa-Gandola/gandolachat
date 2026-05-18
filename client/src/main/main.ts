@@ -1,11 +1,13 @@
-import { app, BrowserWindow, ipcMain, shell, desktopCapturer, session, Tray, Menu, nativeImage } from "electron";
+import { app, BrowserWindow, ipcMain, shell, desktopCapturer, Tray, Menu, nativeImage } from "electron";
 import { autoUpdater } from "electron-updater";
 import path from "path";
 import fs from "fs";
 const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
 
-// Let Chromium hibernate rendering when the window is fully covered (idle CPU win).
-app.commandLine.appendSwitch("enable-features", "CalculateNativeWinOcclusion");
+// Windows-only: let Chromium hibernate rendering when the window is fully covered.
+if (process.platform === "win32") {
+  app.commandLine.appendSwitch("enable-features", "CalculateNativeWinOcclusion");
+}
 
 let tray: Tray | null = null;
 let isQuitting = false;
@@ -35,7 +37,7 @@ function createWindow() {
     titleBarStyle: "hidden",
     backgroundColor: "#36393f",
     useContentSize: true,
-    icon: path.join(__dirname, "../../assets/icon.ico"),
+    icon: path.join(__dirname, process.platform === "win32" ? "../../assets/icon.ico" : "../../assets/icon.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -74,7 +76,14 @@ function createWindow() {
 
 function createTray() {
   if (tray) return;
-  tray = new Tray(path.join(__dirname, "../../assets/gandola.ico"));
+  const trayIconFile = process.platform === "win32" ? "icon.ico" : "icon.png";
+  const trayIconPath = path.join(__dirname, `../../assets/${trayIconFile}`);
+  if (!fs.existsSync(trayIconPath)) return;
+  try {
+    tray = new Tray(trayIconPath);
+  } catch {
+    return;
+  }
   tray.setToolTip("GandolaChat");
   const showWin = () => {
     if (!mainWindow) return;
@@ -97,9 +106,15 @@ function createTray() {
   tray.on("double-click", showWin);
 }
 
+// deb/pacman installs can't auto-update — no APPIMAGE env var means it's a system package
+const isDebInstall = process.platform === "linux" && !process.env.APPIMAGE;
+
+ipcMain.handle("app:isDebInstall", () => isDebInstall);
+ipcMain.handle("shell:openExternal", (_e, url: string) => shell.openExternal(url));
+
 // Auto-updater events
-autoUpdater.autoDownload = true;
-autoUpdater.autoInstallOnAppQuit = true;
+autoUpdater.autoDownload = !isDebInstall;
+autoUpdater.autoInstallOnAppQuit = !isDebInstall;
 
 autoUpdater.on("update-available", (info) => {
   mainWindow?.webContents.send("update:status", "available", info);
@@ -125,7 +140,7 @@ autoUpdater.on("error", (err) => {
 ipcMain.handle("update:check", async () => {
   if (isDev) return { status: "dev" };
   try {
-    const result = await autoUpdater.checkForUpdates();
+    await autoUpdater.checkForUpdates();
     return { status: "checking" };
   } catch (err: any) {
     return { status: "error", message: err.message };
@@ -189,12 +204,8 @@ ipcMain.on("window:focus", () => {
 // Expose base app icon to the renderer so it can composite a red-dot tray
 // version when there are unread messages.
 ipcMain.handle("tray:getBaseIcon", () => {
-  // Return the base image for the tray renderer to composite a red-dot version over.
-  // gandola.ico/.png is the current art; the older icon.png that used to live here
-  // was the previous logo and shouldn't be picked up.
   const tryPaths = [
-    path.join(__dirname, "../../assets/gandola.png"),
-    path.join(__dirname, "../../assets/gandola.ico"),
+    path.join(__dirname, "../../assets/icon.png"),
     path.join(__dirname, "../../assets/icon.ico"),
   ];
   for (const p of tryPaths) {

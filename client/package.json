@@ -2,6 +2,11 @@
   "name": "gandola-chat",
   "version": "2.1.3",
   "description": "GandolaChat — a simple Discord-like desktop messenger",
+  "homepage": "https://github.com/Papa-Gandola/gandolachat",
+  "author": {
+    "name": "Papa-Gandola",
+    "email": "chumatema@gmail.com"
+  },
   "main": "dist/main/main.js",
   "scripts": {
     "dev": "tsc -p tsconfig.main.json && concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
@@ -44,10 +49,10 @@
       "owner": "Papa-Gandola",
       "repo": "gandolachat"
     },
-    "artifactName": "GandolaChat-Setup-${version}.${ext}",
     "win": {
       "target": "nsis",
-      "icon": "assets/icon.ico"
+      "icon": "assets/icon.ico",
+      "artifactName": "GandolaChat-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": true,
@@ -56,6 +61,12 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "GandolaChat"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "icon": "assets/icon.png",
+      "category": "Network",
+      "artifactName": "GandolaChat-${version}.${ext}"
     },
     "files": [
       "dist/**/*",
