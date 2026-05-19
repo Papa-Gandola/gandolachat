@@ -1,0 +1,65 @@
+name: Mobile OTA Update
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "mobile/src/**"
+      - "mobile/App.tsx"
+      - "mobile/index.ts"
+      - "mobile/assets/**"
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "EAS Update branch (preview / production)"
+        required: true
+        default: preview
+        type: choice
+        options:
+          - preview
+          - production
+      message:
+        description: "Update message"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # eas update --auto reads recent commits for the changelog
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup EAS CLI
+        run: npm install -g eas-cli
+
+      - name: Publish OTA update
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -n "${{ github.event.inputs.branch }}" ]; then
+            BRANCH="${{ github.event.inputs.branch }}"
+          else
+            BRANCH="preview"
+          fi
+          if [ -n "${{ github.event.inputs.message }}" ]; then
+            MSG="${{ github.event.inputs.message }}"
+          else
+            MSG="$(git log -1 --pretty=%s)"
+          fi
+          eas update --branch "$BRANCH" --message "$MSG" --non-interactive
