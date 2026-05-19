@@ -33,17 +33,27 @@ export function ChatsListScreen({ navigation }: Props) {
         }
       />
 
-      {/* Filter chips */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6, gap: 6 }}
-      >
-        <Chip on>{theme.decorate ? "● ВСЕ" : "Все"}</Chip>
-        <Chip>{theme.decorate ? "НЕПРОЧИТАННЫЕ · 19" : "Непрочитанные · 19"}</Chip>
-        <Chip>{theme.decorate ? "ГРУППЫ · 2" : "Группы · 2"}</Chip>
-        <Chip>{theme.decorate ? "АРХИВ" : "Архив"}</Chip>
-      </ScrollView>
+      {/* Filter chips. Wrapped in a fixed-height View — bare horizontal
+          ScrollView would flex-grow into the column and push the chat list
+          to the bottom of the screen. */}
+      <View style={{ height: 44 }}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{
+            paddingHorizontal: 14,
+            paddingTop: 10,
+            paddingBottom: 6,
+            gap: 6,
+            alignItems: "center",
+          }}
+        >
+          <Chip on>{theme.decorate ? "● ВСЕ" : "Все"}</Chip>
+          <Chip>{theme.decorate ? "НЕПРОЧИТАННЫЕ · 19" : "Непрочитанные · 19"}</Chip>
+          <Chip>{theme.decorate ? "ГРУППЫ · 2" : "Группы · 2"}</Chip>
+          <Chip>{theme.decorate ? "АРХИВ" : "Архив"}</Chip>
+        </ScrollView>
+      </View>
 
       <ScrollView style={{ flex: 1 }}>
         {CHAT_LIST.map((c) => (
