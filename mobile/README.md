@@ -61,6 +61,56 @@ eas build --profile preview --platform android
 переключение между **Neo Venezia** и **Discord**. Выбор сохраняется через
 `expo-secure-store` и переживает рестарты.
 
+## OTA-обновления (без переустановки APK)
+
+Подключено через `expo-updates`. Большинство изменений (UI, экраны,
+бизнес-логика, фиксы багов) можно доставить **прозрачно** без новой
+сборки APK.
+
+### Когда хватает OTA, а когда нужен новый APK
+
+| Тип изменения | Способ |
+|---|---|
+| Поправить UI, текст, фикс багов | OTA |
+| Новый экран, новая логика | OTA |
+| Подключить новую нативную библиотеку | Новый APK |
+| Поменять `app.json` (permissions, plugins) | Новый APK |
+| Обновить Expo SDK мажорно | Новый APK |
+| Сменить `version` в `app.json` | Новый APK |
+
+### Настройка (один раз)
+
+1. Создай токен на https://expo.dev/accounts/papagandola/settings/access-tokens
+   — кнопка **Create token**, дай имя `gh-actions`, скопируй значение.
+2. Открой https://github.com/Papa-Gandola/gandolachat/settings/secrets/actions
+   и добавь секрет **`EXPO_TOKEN`** со скопированным значением.
+
+После этого автообновления работают сами.
+
+### Как работает
+
+- При мерже в `main` любого изменения в `mobile/src/**`, `mobile/App.tsx`,
+  `mobile/index.ts` или `mobile/assets/**` — запускается workflow
+  `mobile-ota.yml`, который публикует обновление на канал `preview`.
+- Установленные APK подхватывают его при следующем запуске (~30 секунд
+  после старта) и применяют при следующем рестарте.
+
+### Ручная публикация
+
+```bash
+cd mobile
+eas update --branch preview --message "Описание"
+```
+
+### Когда нужно собрать новый APK
+
+После любого изменения, помеченного «Новый APK» в таблице выше:
+```bash
+cd mobile
+eas build --profile preview --platform android
+```
+Скачать новый `.apk`, поставить руками. После этого OTA снова работает.
+
 ## Структура
 
 ```

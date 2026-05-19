@@ -16,6 +16,9 @@ type Props = NativeStackScreenProps<ProfileStackParamList, "MyProfile">;
 export function MyProfileScreen({ navigation }: Props) {
   const theme = useTheme();
   const auth = useAuth();
+  const u = auth.user;
+
+  const initial = (u?.username?.[0] ?? "?").toUpperCase();
 
   return (
     <ScreenContainer>
@@ -28,7 +31,7 @@ export function MyProfileScreen({ navigation }: Props) {
         }
       />
       <View style={{ alignItems: "center", paddingVertical: 24 }}>
-        <Avatar letter="P" size={96} bg="#ff7f3d" />
+        <Avatar letter={initial} size={96} bg="#ff7f3d" />
         <Text
           style={{
             fontFamily: theme.fonts.mono,
@@ -38,18 +41,33 @@ export function MyProfileScreen({ navigation }: Props) {
             marginTop: 14,
           }}
         >
-          Papa Gandola
+          {u?.username ?? "—"}
         </Text>
-        <Text
-          style={{
-            fontFamily: theme.fonts.mono,
-            fontSize: 11,
-            color: theme.colors.inkDim,
-            marginTop: 4,
-          }}
-        >
-          @papa_gandola
-        </Text>
+        {u?.status ? (
+          <Text
+            style={{
+              fontFamily: theme.fonts.body,
+              fontSize: 12,
+              color: theme.colors.inkDim,
+              marginTop: 4,
+            }}
+          >
+            {u.status}
+          </Text>
+        ) : null}
+        {u?.is_admin ? (
+          <Text
+            style={{
+              marginTop: 6,
+              fontFamily: theme.fonts.mono,
+              fontSize: 10,
+              color: theme.colors.accent,
+              letterSpacing: 1,
+            }}
+          >
+            {theme.decorate ? "// ADMIN" : "Админ"}
+          </Text>
+        ) : null}
       </View>
       <View style={{ flex: 1 }} />
       <View style={{ padding: 16 }}>

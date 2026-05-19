@@ -2,7 +2,7 @@
   "expo": {
     "name": "GandolaChat",
     "slug": "gandolachat",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "gandolachat",
@@ -49,7 +49,17 @@
     ],
     "extra": {
       "apiUrl": "http://2.26.117.77:8000",
-      "wsUrl": "ws://2.26.117.77:8000"
+      "wsUrl": "ws://2.26.117.77:8000",
+      "eas": {
+        "projectId": "40d53c62-406d-44e9-99ae-bb4c01a3dc28"
+      }
+    },
+    "updates": {
+      "url": "https://u.expo.dev/40d53c62-406d-44e9-99ae-bb4c01a3dc28",
+      "fallbackToCacheTimeout": 3000
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
     }
   }
 }

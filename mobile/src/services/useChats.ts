@@ -1,0 +1,160 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+import { ChatRowData } from "../components/ChatRow";
+import { apiErrorMessage, chatApi, ChatOut } from "./api";
+import { useAuth } from "./AuthContext";
+import { wsService } from "./ws";
+
+// Deterministic palette per chat id — same chat keeps the same avatar tint
+// across sessions. Matches the desktop client's approach informally.
+const PALETTE = [
+  "#ef5350",
+  "#7c4dff",
+  "#ffa726",
+  "#26a69a",
+  "#ec407a",
+  "#5c6bc0",
+  "#ff7043",
+  "#8d6e63",
+  "#3949ab",
+  "#66bb6a",
+];
+
+function colorFor(id: number): string {
+  return PALETTE[id % PALETTE.length];
+}
+
+function letterFor(name: string | null): string {
+  if (!name) return "?";
+  const first = name.trim()[0] ?? "?";
+  return first.toUpperCase();
+}
+
+function formatTs(iso: string | undefined | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) {
+    return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
+  }
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return "вчера";
+  return `${d.getDate()}.${(d.getMonth() + 1).toString().padStart(2, "0")}`;
+}
+
+interface ChatsState {
+  chats: ChatRowData[];
+  raw: ChatOut[];
+  loading: boolean;
+  error: string | null;
+  refresh: () => Promise<void>;
+}
+
+export function useChats(): ChatsState {
+  const { user, token } = useAuth();
+  const [raw, setRaw] = useState<ChatOut[]>([]);
+  const [unread, setUnread] = useState<Record<string, number>>({});
+  const [online, setOnline] = useState<Set<number>>(new Set());
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    if (!user) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const [chatsRes, unreadRes, onlineRes] = await Promise.all([
+        chatApi.list(),
+        chatApi.getUnreadCounts(),
+        chatApi.getOnlineUsers(),
+      ]);
+      setRaw(chatsRes.data);
+      setUnread(unreadRes.data);
+      setOnline(new Set(onlineRes.data.online_user_ids));
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  // Live updates via WebSocket — refresh the chat list on any event that
+  // could change it. Cheap because /api/chats is paginated server-side.
+  useEffect(() => {
+    if (!token) return;
+    const onNewChat = () => refresh();
+    const onMessage = () => refresh();
+    const onChatUpdated = () => refresh();
+    const onChatDeleted = () => refresh();
+    const onUserOnline = (data: Record<string, unknown>) => {
+      const uid = data.user_id as number | undefined;
+      if (typeof uid === "number") setOnline((prev) => new Set(prev).add(uid));
+    };
+    const onUserOffline = (data: Record<string, unknown>) => {
+      const uid = data.user_id as number | undefined;
+      if (typeof uid === "number")
+        setOnline((prev) => {
+          const next = new Set(prev);
+          next.delete(uid);
+          return next;
+        });
+    };
+    wsService.on("new_chat", onNewChat);
+    wsService.on("message", onMessage);
+    wsService.on("chat_updated", onChatUpdated);
+    wsService.on("chat_deleted", onChatDeleted);
+    wsService.on("user_online", onUserOnline);
+    wsService.on("user_offline", onUserOffline);
+    return () => {
+      wsService.off("new_chat", onNewChat);
+      wsService.off("message", onMessage);
+      wsService.off("chat_updated", onChatUpdated);
+      wsService.off("chat_deleted", onChatDeleted);
+      wsService.off("user_online", onUserOnline);
+      wsService.off("user_offline", onUserOffline);
+    };
+  }, [token, refresh]);
+
+  // Transform raw API chats → flat rows the ChatRow component expects.
+  const chats = useMemo<ChatRowData[]>(() => {
+    if (!user) return [];
+    return raw.map((c) => {
+      const isGroup = c.is_group;
+      // For a DM the row should display the OTHER participant — not "Pavel ↔
+      // Marina", just "Marina". For groups, show the group name.
+      const counterpart = isGroup ? null : c.members.find((m) => m.id !== user.id) ?? c.members[0];
+      const displayName = isGroup ? c.name ?? "Группа" : counterpart?.username ?? "Без имени";
+      const isOnline = !isGroup && counterpart ? online.has(counterpart.id) : false;
+      const last = c.last_message;
+      const lastText = last?.content
+        ? last.content
+        : last?.file_name
+          ? `📎 ${last.file_name}`
+          : "";
+      const senderPrefix =
+        isGroup && last && last.sender_id !== user.id && last.sender_username
+          ? `${last.sender_username}: `
+          : "";
+      return {
+        id: String(c.id),
+        name: displayName,
+        letter: letterFor(displayName),
+        color: colorFor(counterpart?.id ?? c.id),
+        last: senderPrefix + lastText,
+        ts: formatTs(last?.created_at),
+        unread: unread[String(c.id)] ?? 0,
+        online: isOnline,
+        group: isGroup,
+      };
+    });
+  }, [raw, user, unread, online]);
+
+  return { chats, raw, loading, error, refresh };
+}

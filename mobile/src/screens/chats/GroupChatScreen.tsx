@@ -1,16 +1,13 @@
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 
-import { StubScreen } from "../../components/StubScreen";
 import { ChatsStackParamList } from "../../navigation/types";
+import { ChatScreen } from "./ChatScreen";
 
 type Props = NativeStackScreenProps<ChatsStackParamList, "GroupChat">;
 
-export function GroupChatScreen({ navigation, route }: Props) {
-  return (
-    <StubScreen
-      title={route.params.name}
-      note="Групповая переписка с avatar-ленточкой авторов сверху каждого сообщения."
-      onBack={() => navigation.goBack()}
-    />
-  );
+// Group chats reuse the DM chat UI for now. Per-sender avatar rows + the
+// dedicated group composer features (mentions, channel mode hint) come in
+// a later step.
+export function GroupChatScreen(props: Props) {
+  return <ChatScreen {...(props as unknown as NativeStackScreenProps<ChatsStackParamList, "Chat">)} />;
 }
