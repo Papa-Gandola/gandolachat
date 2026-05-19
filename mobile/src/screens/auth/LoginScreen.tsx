@@ -8,6 +8,7 @@ import { NeoField } from "../../components/NeoField";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import { AuthStackParamList } from "../../navigation/types";
 import { useAuth } from "../../services/AuthContext";
+import { APP_VERSION } from "../../services/config";
 import { useTheme } from "../../theme";
 
 type Props = NativeStackScreenProps<AuthStackParamList, "Login">;
@@ -19,9 +20,13 @@ export function LoginScreen({ navigation }: Props) {
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
 
-  // TODO: wire to /api/auth/login in step 2. For now stub-login.
-  const onSignIn = () => {
-    auth.signIn("dev-token-placeholder");
+  const onSignIn = async () => {
+    if (!username.trim() || !password) return;
+    try {
+      await auth.signIn(username.trim(), password);
+    } catch {
+      // error already surfaced via auth.error
+    }
   };
 
   return (
@@ -78,15 +83,21 @@ export function LoginScreen({ navigation }: Props) {
           <NeoField
             label="ИМЯ ПОЛЬЗОВАТЕЛЯ"
             value={username}
-            onChangeText={setUsername}
+            onChangeText={(v) => {
+              setUsername(v);
+              auth.clearError();
+            }}
             placeholder="papa_gandola"
             autoCapitalize="none"
           />
           <NeoField
             label="ПАРОЛЬ"
             value={password}
-            onChangeText={setPassword}
-            placeholder="●●●●●●●●"
+            onChangeText={(v) => {
+              setPassword(v);
+              auth.clearError();
+            }}
+            placeholder="••••••••"
             secureTextEntry
             autoCapitalize="none"
           />
@@ -128,8 +139,23 @@ export function LoginScreen({ navigation }: Props) {
           </Text>
         </View>
 
+        {auth.error ? (
+          <Text
+            style={{
+              marginTop: 12,
+              fontFamily: theme.fonts.mono,
+              fontSize: 12,
+              color: theme.colors.danger,
+            }}
+          >
+            {theme.decorate ? `! ${auth.error}` : auth.error}
+          </Text>
+        ) : null}
+
         <View style={{ marginTop: 22 }}>
-          <NeoButton onPress={onSignIn}>ВОЙТИ</NeoButton>
+          <NeoButton onPress={onSignIn} disabled={auth.loading || !username.trim() || !password}>
+            {auth.loading ? "ВХОД..." : "ВОЙТИ"}
+          </NeoButton>
         </View>
 
         <View style={{ marginTop: 16, alignItems: "center" }}>
@@ -141,10 +167,7 @@ export function LoginScreen({ navigation }: Props) {
             }}
           >
             {theme.decorate ? "// нет аккаунта? " : "Нет аккаунта? "}
-            <Text
-              onPress={() => navigation.navigate("Register")}
-              style={{ color: theme.colors.accent }}
-            >
+            <Text onPress={() => navigation.navigate("Register")} style={{ color: theme.colors.accent }}>
               {theme.decorate ? "[зарегистрироваться]" : "зарегистрироваться"}
             </Text>
           </Text>
@@ -159,7 +182,7 @@ export function LoginScreen({ navigation }: Props) {
               letterSpacing: 1,
             }}
           >
-            v0.1.0 · build dev · {theme.decorate ? "connected ●" : "онлайн"}
+            v{APP_VERSION}
           </Text>
         </View>
       </View>
