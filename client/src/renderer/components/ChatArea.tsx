@@ -60,6 +60,8 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   const [highlightMsgId, setHighlightMsgId] = useState<number | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<Array<{ file: File; caption: string; preview: string | null }>>([]);
   const [uploadingPack, setUploadingPack] = useState(false);
+  const [otherLastSeenAt, setOtherLastSeenAt] = useState<string | null | undefined>(undefined);
+  const [, setTimeTick] = useState(0);
 
   // External request: GroupInfoPage asked us to open the search bar
   useEffect(() => {
@@ -263,14 +265,26 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     return () => document.removeEventListener("click", close);
   }, []);
 
-  // Track online users
+  // Track online users + capture last_seen on offline
   useEffect(() => {
     chatApi.getOnlineUsers().then((res) => setOnlineUserIds(new Set(res.data.online_user_ids))).catch(() => {});
     const onOnline = (d: any) => setOnlineUserIds((prev) => new Set([...prev, d.user_id]));
-    const onOffline = (d: any) => setOnlineUserIds((prev) => { const n = new Set(prev); n.delete(d.user_id); return n; });
+    const onOffline = (d: any) => {
+      setOnlineUserIds((prev) => { const n = new Set(prev); n.delete(d.user_id); return n; });
+      if (!chat.is_group && d.last_seen) {
+        const other = chat.members.find((m) => m.id !== currentUser.id);
+        if (other && d.user_id === other.id) setOtherLastSeenAt(d.last_seen);
+      }
+    };
     wsService.on("user_online", onOnline);
     wsService.on("user_offline", onOffline);
     return () => { wsService.off("user_online", onOnline); wsService.off("user_offline", onOffline); };
+  }, [chat.id]);
+
+  // Re-render every minute so relative "X min ago" timestamps stay current
+  useEffect(() => {
+    const id = setInterval(() => setTimeTick((t) => t + 1), 60_000);
+    return () => clearInterval(id);
   }, []);
 
   // ESC closes image preview (capture phase, before global ESC handler)
@@ -791,7 +805,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
             const other = chat.members.find((m) => m.id !== currentUser.id);
             if (!other) return null;
             const isOnline = onlineUserIds.has(other.id);
-            const lastSeen = formatLastSeen(other.last_seen);
+            const lastSeen = formatLastSeen(otherLastSeenAt !== undefined ? otherLastSeenAt : other.last_seen);
             return (
               <>
                 {other.status && <span style={s.chatStatus}>— {other.status}</span>}
@@ -825,8 +839,10 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
           <button style={s.headerBtn} title="Поиск" onClick={() => setShowSearch(!showSearch)}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           </button>
-          <button style={s.headerBtn} title="Видеозвонок" onClick={onStartCall}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+          <button style={s.headerBtn} title="Звонок" onClick={onStartCall}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6.6 10.8a15.4 15.4 0 006.6 6.6l2.2-2.2a1 1 0 011.1-.2 11.5 11.5 0 003.6.7 1 1 0 011 1V21a1 1 0 01-1 1A17 17 0 012 5a1 1 0 011-1h3.5a1 1 0 011 1c0 1.25.2 2.45.7 3.6a1 1 0 01-.2 1.1L6.6 10.8z"/>
+            </svg>
           </button>
         </div>
       </div>

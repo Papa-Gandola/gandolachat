@@ -324,10 +324,12 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                 "chat_id": cid,
             }, exclude_user=user_id)
         # Broadcast offline status
+        last_seen_iso = user_obj.last_seen.isoformat() if user_obj and user_obj.last_seen else None
         for cid in chat_ids:
             await manager.broadcast_to_chat(cid, {
                 "type": "user_offline",
                 "user_id": user_id,
+                "last_seen": last_seen_iso,
             })
 
 

@@ -24,6 +24,7 @@ class WebRTCService {
   private currentChatId: number | null = null;
   private myUserId: number | null = null;
   private pendingSignals: Map<string, any[]> = new Map(); // key = `${userId}:${purpose}`
+  private _videoSenders = new Map<number, RTCRtpSender>(); // userId -> video sender (for disable/enable)
 
   onStream: OnStreamCallback | null = null;
   onScreenStream: OnStreamCallback | null = null;
@@ -239,6 +240,11 @@ class WebRTCService {
     });
 
     map.set(targetUserId, peer);
+    // Store the video sender so disableVideo/enableVideo can replaceTrack without renegotiation
+    if (purpose === "webcam" && pc2) {
+      const vSender = pc2.getSenders().find((s: any) => s.track?.kind === "video");
+      if (vSender) this._videoSenders.set(targetUserId, vSender as RTCRtpSender);
+    }
   }
 
   private _handleSignal = (data: any) => {
@@ -306,11 +312,15 @@ class WebRTCService {
     this.onPeerLeft?.(fromId);
 
     if (this.peers.size === 0 && this.localStream) {
+      if (this.currentChatId) {
+        wsService.send({ type: "call_end", chat_id: this.currentChatId });
+      }
       this.localStream.getTracks().forEach((t) => t.stop());
       this.localStream = null;
       this.localScreenStream?.getTracks().forEach((t) => t.stop());
       this.localScreenStream = null;
       this.currentChatId = null;
+      this._videoSenders.clear();
       this.onCallEnded?.();
     }
   };
@@ -331,6 +341,7 @@ class WebRTCService {
     this.localScreenStream = null;
     this.currentChatId = null;
     this.pendingSignals.clear();
+    this._videoSenders.clear();
     if (this.gainContext) {
       this.gainContext.close().catch(() => {});
       this.gainContext = null;
@@ -350,6 +361,28 @@ class WebRTCService {
           console.error("[WebRTC] replaceTrack(video) failed", err);
         });
       }
+    });
+  }
+
+  // Stop local video tracks (releases camera hardware) and null out peer senders.
+  // Keeps senders alive so enableVideo() can replaceTrack without renegotiation.
+  disableVideo(): void {
+    this.localStream?.getVideoTracks().forEach((t) => t.stop());
+    this._videoSenders.forEach((sender) => {
+      (sender as any).replaceTrack(null).catch(() => {});
+    });
+  }
+
+  // Re-acquire the camera, add the new track to localStream, and push it to all peer senders.
+  async enableVideo(): Promise<void> {
+    if (!this.localStream) return;
+    const camStream = await navigator.mediaDevices.getUserMedia({ video: true });
+    const newTrack = camStream.getVideoTracks()[0];
+    if (!newTrack) return;
+    this.localStream.getVideoTracks().forEach((t) => { t.stop(); this.localStream!.removeTrack(t); });
+    this.localStream.addTrack(newTrack);
+    this._videoSenders.forEach((sender) => {
+      (sender as any).replaceTrack(newTrack).catch(() => {});
     });
   }
 
