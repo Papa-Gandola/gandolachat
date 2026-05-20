@@ -32,7 +32,11 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
   const [remoteVideos, setRemoteVideos] = useState<VideoEntry[]>([]);
   const [remoteScreens, setRemoteScreens] = useState<VideoEntry[]>([]);
   const [muted, setMuted] = useState(false);
-  const [videoOff, setVideoOff] = useState(false);
+  const WEBCAM_PREF_KEY = "gandola-cam-default";
+  const [videoOff, setVideoOff] = useState(() => {
+    const saved = localStorage.getItem(WEBCAM_PREF_KEY);
+    return saved !== null ? saved === "true" : true;
+  });
   const [deafened, setDeafened] = useState(false);
   const [screenSharing, setScreenSharing] = useState(false);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
@@ -246,6 +250,11 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = localStream;
       }
+      // Apply persisted camera preference immediately after peers are set up
+      if (videoOff) {
+        webrtcService.disableVideo();
+        wsService.send({ type: "video_status", chat_id: chat.id, video_off: true });
+      }
     })();
   }, []);
 
@@ -263,12 +272,23 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
     wsService.send({ type: "mute_status", chat_id: chat.id, muted: newMuted });
   }
 
-  function toggleVideo() {
+  async function toggleVideo() {
     const newVideoOff = !videoOff;
-    const stream = webrtcService.getLocalStream();
-    stream?.getVideoTracks().forEach((t) => (t.enabled = !newVideoOff));
-    setVideoOff(newVideoOff);
-    wsService.send({ type: "video_status", chat_id: chat.id, video_off: newVideoOff });
+    try {
+      if (newVideoOff) {
+        webrtcService.disableVideo();
+      } else {
+        await webrtcService.enableVideo();
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = webrtcService.getLocalStream();
+        }
+      }
+      setVideoOff(newVideoOff);
+      localStorage.setItem(WEBCAM_PREF_KEY, String(newVideoOff));
+      wsService.send({ type: "video_status", chat_id: chat.id, video_off: newVideoOff });
+    } catch {
+      // Camera acquisition failed — keep current state
+    }
   }
 
   function toggleDeafen() {
