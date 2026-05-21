@@ -14,6 +14,10 @@ function fmt(ms: number): string {
   return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
 }
 
+// Only one voice message should play at a time. When a player starts, it
+// pauses whichever was playing before (Telegram-style).
+let activePause: (() => void) | null = null;
+
 // Voice-message player: play/pause + a progress bar + elapsed/total time.
 export function VoiceMessage({ uri, mine }: Props) {
   const theme = useTheme();
@@ -23,11 +27,18 @@ export function VoiceMessage({ uri, mine }: Props) {
   const [durMs, setDurMs] = useState(0);
   const [loading, setLoading] = useState(false);
 
+  // Stable pause handle (created once) this player registers as the active one.
+  const pauseSelf = useRef(() => {
+    soundRef.current?.pauseAsync().catch(() => {});
+    setPlaying(false);
+  }).current;
+
   useEffect(() => {
     return () => {
+      if (activePause === pauseSelf) activePause = null;
       soundRef.current?.unloadAsync().catch(() => {});
     };
-  }, []);
+  }, [pauseSelf]);
 
   const onStatus = (st: AVPlaybackStatus) => {
     if (!st.isLoaded) return;
@@ -42,6 +53,13 @@ export function VoiceMessage({ uri, mine }: Props) {
     setPlaying(st.isPlaying);
   };
 
+  const beginPlay = () => {
+    // Pause any other voice message that's currently playing.
+    if (activePause && activePause !== pauseSelf) activePause();
+    activePause = pauseSelf;
+    setPlaying(true);
+  };
+
   const toggle = async () => {
     try {
       if (!soundRef.current) {
@@ -54,7 +72,7 @@ export function VoiceMessage({ uri, mine }: Props) {
         );
         soundRef.current = sound;
         setLoading(false);
-        setPlaying(true);
+        beginPlay();
         return;
       }
       if (playing) {
@@ -67,6 +85,7 @@ export function VoiceMessage({ uri, mine }: Props) {
       } else {
         await soundRef.current.playAsync();
       }
+      beginPlay();
     } catch {
       setLoading(false);
     }

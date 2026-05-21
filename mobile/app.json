@@ -2,7 +2,7 @@
   "expo": {
     "name": "GandolaChat",
     "slug": "gandolachat",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "gandolachat",
@@ -14,7 +14,7 @@
     },
     "android": {
       "package": "com.gandola.chat",
-      "versionCode": 3,
+      "versionCode": 4,
       "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
@@ -58,6 +58,12 @@
         "expo-av",
         {
           "microphonePermission": "GandolaChat использует микрофон для записи голосовых сообщений."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "GandolaChat использует камеру для съёмки фото в чат."
         }
       ],
       [

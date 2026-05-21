@@ -7,6 +7,7 @@ import { GroupChatScreen } from "../screens/chats/GroupChatScreen";
 import { NewChatScreen } from "../screens/chats/NewChatScreen";
 import { NewGroupScreen } from "../screens/chats/NewGroupScreen";
 import { SearchScreen } from "../screens/chats/SearchScreen";
+import { CameraScreen } from "../screens/extras/CameraScreen";
 import { MediaViewerScreen } from "../screens/extras/MediaViewerScreen";
 import { StickerPickerScreen } from "../screens/extras/StickerPickerScreen";
 import { OtherProfileScreen } from "../screens/profile/OtherProfileScreen";
@@ -34,6 +35,11 @@ export function ChatsStack() {
         name="StickerPicker"
         component={StickerPickerScreen}
         options={{ presentation: "modal", animation: "slide_from_bottom" }}
+      />
+      <Stack.Screen
+        name="Camera"
+        component={CameraScreen}
+        options={{ presentation: "fullScreenModal", animation: "slide_from_bottom" }}
       />
     </Stack.Navigator>
   );

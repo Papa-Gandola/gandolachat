@@ -16,6 +16,7 @@ export type ChatsStackParamList = {
   OtherProfile: { userId: number };
   MediaViewer: { url: string };
   StickerPicker: undefined;
+  Camera: { chatId: string };
 };
 
 export type CallsStackParamList = {
