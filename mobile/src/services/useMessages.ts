@@ -27,9 +27,9 @@ export function useMessages(chatId: string): MessagesState {
       setError(null);
       try {
         const res = await chatApi.getMessages(numericId, 50, beforeId);
-        // Server returns newest first — flip so oldest is at the top, which
-        // is what a scrolling thread expects (read top-to-bottom).
-        const ordered = [...res.data].reverse();
+        // Server already returns ascending order (oldest first, newest last) —
+        // exactly what a top-to-bottom thread wants. Do NOT reverse again.
+        const ordered = res.data;
         if (beforeId == null) {
           setMessages(ordered);
         } else {
