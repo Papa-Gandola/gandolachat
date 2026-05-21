@@ -101,10 +101,13 @@ export const authApi = {
 export const userApi = {
   me: () => getInstance().get<TokenResponse>("/api/users/me"),
   getUser: (userId: number) => getInstance().get<UserOut>(`/api/users/${userId}`),
+  search: (q: string) => getInstance().get<UserOut[]>(`/api/users/search?q=${encodeURIComponent(q)}`),
 };
 
 export const chatApi = {
   list: () => getInstance().get<ChatOut[]>("/api/chats"),
+  createDm: (userId: number) =>
+    getInstance().post<ChatOut>(`/api/chats/dm?target_user_id=${userId}`),
   getMessages: (chatId: number, limit = 50, beforeId?: number) => {
     const params = new URLSearchParams({ limit: String(limit) });
     if (beforeId) params.append("before_id", String(beforeId));
