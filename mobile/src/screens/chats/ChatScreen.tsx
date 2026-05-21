@@ -63,6 +63,7 @@ export function ChatScreen({ navigation, route }: Props) {
   const recordingRef = useRef<Audio.Recording | null>(null);
   const [recording, setRecording] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [cameraLaunching, setCameraLaunching] = useState(false);
   const recStartRef = useRef(0);
   // Highest message id the OTHER side has read — drives the ✓✓ indicator on
   // my own bubbles.
@@ -203,10 +204,14 @@ export function ChatScreen({ navigation, route }: Props) {
         Alert.alert("Нет доступа к камере", "Разреши доступ к камере в настройках Android.");
         return;
       }
+      // Camera cold-start can take several seconds on some devices — show a
+      // hint so it's clear the tap registered.
+      setCameraLaunching(true);
       const res = await ImagePicker.launchCameraAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         quality: 0.8,
       });
+      setCameraLaunching(false);
       if (res.canceled || !res.assets[0]) return;
       const a = res.assets[0];
       await doUpload({
@@ -215,6 +220,7 @@ export function ChatScreen({ navigation, route }: Props) {
         type: a.mimeType ?? "image/jpeg",
       });
     } catch (err) {
+      setCameraLaunching(false);
       Alert.alert("Камера недоступна", apiErrorMessage(err));
     }
   };
@@ -589,6 +595,33 @@ export function ChatScreen({ navigation, route }: Props) {
           )}
         </View>
       </KeyboardAvoidingView>
+
+      {cameraLaunching ? (
+        <View
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: "rgba(0,0,0,0.55)",
+          }}
+        >
+          <ActivityIndicator size="large" color={theme.colors.accent} />
+          <Text
+            style={{
+              marginTop: 12,
+              fontFamily: theme.fonts.mono,
+              fontSize: 13,
+              color: theme.colors.ink,
+            }}
+          >
+            Открываю камеру…
+          </Text>
+        </View>
+      ) : null}
     </ScreenContainer>
   );
 }

@@ -34,12 +34,12 @@ export function VoiceMessage({ uri, mine }: Props) {
     setPosMs(st.positionMillis);
     if (st.durationMillis) setDurMs(st.durationMillis);
     if (st.didJustFinish) {
+      // Stop at the end — no auto-rewind (rewinding here used to restart
+      // playback, making the clip loop forever). Tap play to listen again.
       setPlaying(false);
-      setPosMs(0);
-      soundRef.current?.setPositionAsync(0).catch(() => {});
-    } else {
-      setPlaying(st.isPlaying);
+      return;
     }
+    setPlaying(st.isPlaying);
   };
 
   const toggle = async () => {
@@ -47,14 +47,26 @@ export function VoiceMessage({ uri, mine }: Props) {
       if (!soundRef.current) {
         setLoading(true);
         await Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
-        const { sound } = await Audio.Sound.createAsync({ uri }, { shouldPlay: true }, onStatus);
+        const { sound } = await Audio.Sound.createAsync(
+          { uri },
+          { shouldPlay: true, isLooping: false },
+          onStatus,
+        );
         soundRef.current = sound;
         setLoading(false);
         setPlaying(true);
         return;
       }
-      if (playing) await soundRef.current.pauseAsync();
-      else await soundRef.current.playAsync();
+      if (playing) {
+        await soundRef.current.pauseAsync();
+        return;
+      }
+      // If we're at (or past) the end, replay from the start; otherwise resume.
+      if (durMs > 0 && posMs >= durMs - 50) {
+        await soundRef.current.replayAsync();
+      } else {
+        await soundRef.current.playAsync();
+      }
     } catch {
       setLoading(false);
     }
