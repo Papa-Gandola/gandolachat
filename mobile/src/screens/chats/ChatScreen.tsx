@@ -50,6 +50,7 @@ export function ChatScreen({ navigation, route }: Props) {
   const [draft, setDraft] = useState("");
   const [attachOpen, setAttachOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [reactionFor, setReactionFor] = useState<number | null>(null);
   // Highest message id the OTHER side has read — drives the ✓✓ indicator on
   // my own bubbles.
   const [peerLastRead, setPeerLastRead] = useState(0);
@@ -156,6 +157,18 @@ export function ChatScreen({ navigation, route }: Props) {
     });
   };
 
+  // Toggle my reaction: if I already reacted with this emoji, remove it; else add.
+  const toggleReaction = (messageId: number, emoji: string) => {
+    const msg = messages.find((m) => m.id === messageId);
+    const mineAlready = msg?.reactions?.some((r) => r.emoji === emoji && r.user_id === user?.id);
+    wsService.send({
+      type: mineAlready ? "remove_reaction" : "reaction",
+      message_id: messageId,
+      emoji,
+      chat_id: Number(chatId),
+    });
+  };
+
   const pickFile = async () => {
     const res = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
     if (res.canceled || !res.assets[0]) return;
@@ -250,15 +263,33 @@ export function ChatScreen({ navigation, route }: Props) {
           const img = isImage(m.file_url) ? fileUrl(m.file_url) : null;
           const text = m.content ?? (m.file_url && !img ? `📎 ${m.file_name ?? "файл"}` : "");
           return (
-            <Bubble
-              key={m.id}
-              mine={mine}
-              text={text}
-              imageUri={img}
-              onPressImage={() => img && navigation.navigate("MediaViewer", { url: img })}
-              ts={formatTs(m.created_at)}
-              status={mine ? (peerLastRead >= m.id ? "read" : "delivered") : undefined}
-            />
+            <Pressable key={m.id} onLongPress={() => setReactionFor(m.id)} delayLongPress={250}>
+              <Bubble
+                mine={mine}
+                text={text}
+                imageUri={img}
+                onPressImage={() => img && navigation.navigate("MediaViewer", { url: img })}
+                ts={formatTs(m.created_at)}
+                status={mine ? (peerLastRead >= m.id ? "read" : "delivered") : undefined}
+              >
+                <ReactionChips
+                  reactions={m.reactions ?? []}
+                  myId={user?.id}
+                  onToggle={(emoji) => toggleReaction(m.id, emoji)}
+                  theme={theme}
+                />
+              </Bubble>
+              {reactionFor === m.id ? (
+                <ReactionPicker
+                  mine={mine}
+                  theme={theme}
+                  onPick={(emoji) => {
+                    toggleReaction(m.id, emoji);
+                    setReactionFor(null);
+                  }}
+                />
+              ) : null}
+            </Pressable>
           );
         })}
       </ScrollView>
@@ -365,6 +396,93 @@ function formatTs(iso: string): string {
   return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
 }
 
+const QUICK_EMOJIS = ["👍", "❤️", "😂", "🔥", "😮", "😢"];
+
+type ThemeT = ReturnType<typeof useTheme>;
+
+function ReactionChips({
+  reactions,
+  myId,
+  onToggle,
+  theme,
+}: {
+  reactions: Array<{ emoji: string; user_id: number }>;
+  myId: number | undefined;
+  onToggle: (emoji: string) => void;
+  theme: ThemeT;
+}) {
+  if (reactions.length === 0) return null;
+  // Aggregate by emoji → count + whether I'm in it.
+  const groups = new Map<string, { count: number; mine: boolean }>();
+  reactions.forEach((r) => {
+    const g = groups.get(r.emoji) ?? { count: 0, mine: false };
+    g.count += 1;
+    if (r.user_id === myId) g.mine = true;
+    groups.set(r.emoji, g);
+  });
+  return (
+    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+      {[...groups.entries()].map(([emoji, g]) => (
+        <Pressable
+          key={emoji}
+          onPress={() => onToggle(emoji)}
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 3,
+            paddingHorizontal: 6,
+            paddingVertical: 2,
+            borderRadius: 10,
+            backgroundColor: g.mine ? theme.colors.accent + "33" : "rgba(0,0,0,0.18)",
+            borderWidth: 1,
+            borderColor: g.mine ? theme.colors.accent : "transparent",
+          }}
+        >
+          <Text style={{ fontSize: 12 }}>{emoji}</Text>
+          <Text style={{ fontSize: 11, color: theme.colors.ink, fontFamily: theme.fonts.mono }}>
+            {g.count}
+          </Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+function ReactionPicker({
+  mine,
+  theme,
+  onPick,
+}: {
+  mine: boolean;
+  theme: ThemeT;
+  onPick: (emoji: string) => void;
+}) {
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        gap: 6,
+        alignSelf: mine ? "flex-end" : "flex-start",
+        marginHorizontal: 14,
+        marginTop: 2,
+        marginBottom: 4,
+        paddingHorizontal: 8,
+        paddingVertical: 6,
+        backgroundColor: theme.colors.bgElevH,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        borderRadius: 20,
+      }}
+    >
+      {QUICK_EMOJIS.map((e) => (
+        <Pressable key={e} onPress={() => onPick(e)} hitSlop={6}>
+          <Text style={{ fontSize: 22 }}>{e}</Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
 function AttachOption({
   label,
   onPress,
@@ -372,7 +490,7 @@ function AttachOption({
 }: {
   label: string;
   onPress: () => void;
-  theme: ReturnType<typeof useTheme>;
+  theme: ThemeT;
 }) {
   return (
     <Pressable

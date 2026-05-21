@@ -29,6 +29,7 @@ export interface MessageOut {
   reply_to_content?: string | null;
   created_at: string;
   media_group_id?: string | null;
+  reactions?: Array<{ emoji: string; user_id: number }>;
 }
 
 export interface ChatOut {

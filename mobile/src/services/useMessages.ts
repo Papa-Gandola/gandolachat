@@ -67,6 +67,43 @@ export function useMessages(chatId: string): MessagesState {
     return () => wsService.off("message", handler);
   }, [numericId]);
 
+  // Live reaction add/remove.
+  useEffect(() => {
+    const onReaction = (d: Record<string, unknown>) => {
+      if ((d.chat_id as number) !== numericId) return;
+      const msgId = d.message_id as number;
+      const emoji = d.emoji as string;
+      const uid = d.user_id as number;
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== msgId) return m;
+          const existing = m.reactions ?? [];
+          if (existing.some((r) => r.emoji === emoji && r.user_id === uid)) return m;
+          return { ...m, reactions: [...existing, { emoji, user_id: uid }] };
+        }),
+      );
+    };
+    const onRemove = (d: Record<string, unknown>) => {
+      if ((d.chat_id as number) !== numericId) return;
+      const msgId = d.message_id as number;
+      const emoji = d.emoji as string;
+      const uid = d.user_id as number;
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId
+            ? { ...m, reactions: (m.reactions ?? []).filter((r) => !(r.emoji === emoji && r.user_id === uid)) }
+            : m,
+        ),
+      );
+    };
+    wsService.on("reaction", onReaction);
+    wsService.on("reaction_removed", onRemove);
+    return () => {
+      wsService.off("reaction", onReaction);
+      wsService.off("reaction_removed", onRemove);
+    };
+  }, [numericId]);
+
   const loadMore = useCallback(async () => {
     if (!hasMore || loading || messages.length === 0) return;
     await load(messages[0].id);
