@@ -77,7 +77,11 @@ type Props = NativeStackScreenProps<ChatsStackParamList, "Chat">;
 export function ChatScreen({ navigation, route }: Props) {
   const theme = useTheme();
   const { user } = useAuth();
-  const { chatId, name, userId, avatarUrl } = route.params;
+  const { chatId, name, userId, avatarUrl, allowAllWrite, createdBy } = route.params;
+  // Group when there's no single DM peer. A channel (allow_all_write === false)
+  // is read-only for everyone except its creator.
+  const isGroup = route.params.isGroup ?? userId == null;
+  const isChannelLocked = isGroup && allowAllWrite === false && createdBy !== user?.id;
   const { messages, loading, error, loadMore, hasMore } = useMessages(chatId);
   const scrollRef = useRef<ScrollView | null>(null);
   const [draft, setDraft] = useState("");
@@ -508,8 +512,9 @@ export function ChatScreen({ navigation, route }: Props) {
             </Text>
           </View>
         ) : null}
-        {messages.map((m) => {
+        {messages.map((m, i) => {
           const mine = m.sender_id === user?.id;
+          const showSender = isGroup && !mine && (i === 0 || messages[i - 1].sender_id !== m.sender_id);
           const audio = isAudio(m.file_url) ? fileUrl(m.file_url) : null;
           const img = !audio && isImage(m.file_url) ? fileUrl(m.file_url) : null;
           const text = m.content ?? (m.file_url && !img && !audio ? `📎 ${m.file_name ?? "файл"}` : "");
@@ -524,6 +529,7 @@ export function ChatScreen({ navigation, route }: Props) {
             >
               <Bubble
                 mine={mine}
+                senderName={showSender ? m.sender_username : undefined}
                 text={text}
                 imageUri={img}
                 media={audio ? <VoiceMessage uri={audio} mine={mine} /> : undefined}
@@ -567,6 +573,23 @@ export function ChatScreen({ navigation, route }: Props) {
       </ScrollView>
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        {isChannelLocked ? (
+          <View
+            style={{
+              paddingHorizontal: 16,
+              paddingVertical: 14,
+              borderTopWidth: 1,
+              borderTopColor: theme.colors.border,
+              backgroundColor: theme.colors.bgElev,
+              alignItems: "center",
+            }}
+          >
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.inkMuted }}>
+              {theme.decorate ? "// канал · пишет только создатель" : "🔒 Канал — пишет только создатель"}
+            </Text>
+          </View>
+        ) : (
+          <>
         {recError ? (
           <Pressable
             onPress={() => setRecError(null)}
@@ -774,6 +797,8 @@ export function ChatScreen({ navigation, route }: Props) {
             </Pressable>
           )}
         </View>
+          </>
+        )}
       </KeyboardAvoidingView>
 
       <Modal

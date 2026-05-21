@@ -21,6 +21,8 @@ export interface ChatRowData {
   // into their profile. Undefined for groups.
   peerId?: number;
   avatarUrl?: string | null;
+  createdBy?: number;
+  allowAllWrite?: boolean;
 }
 
 interface Props {

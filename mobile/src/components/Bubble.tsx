@@ -17,10 +17,12 @@ interface Props {
   reply?: { author: string; text: string } | null;
   // Show the "edited" marker next to the timestamp.
   edited?: boolean;
+  // Group chats: name of the sender, shown above other people's messages.
+  senderName?: string;
   children?: ReactNode;
 }
 
-export function Bubble({ mine = false, text, ts, status, imageUri, onPressImage, media, reply, edited, children }: Props) {
+export function Bubble({ mine = false, text, ts, status, imageUri, onPressImage, media, reply, edited, senderName, children }: Props) {
   const theme = useTheme();
   return (
     <View
@@ -44,6 +46,20 @@ export function Bubble({ mine = false, text, ts, status, imageUri, onPressImage,
           borderTopRightRadius: mine ? 6 : theme.radius.bubble,
         }}
       >
+        {senderName ? (
+          <Text
+            numberOfLines={1}
+            style={{
+              fontFamily: theme.fonts.mono,
+              fontSize: 12,
+              fontWeight: "700",
+              color: theme.colors.accent,
+              marginBottom: 2,
+            }}
+          >
+            {senderName}
+          </Text>
+        ) : null}
         {reply ? (
           <View
             style={{

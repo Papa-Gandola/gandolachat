@@ -166,6 +166,8 @@ export function useChats(): ChatsState {
         group: isGroup,
         peerId: counterpart?.id,
         avatarUrl,
+        createdBy: c.created_by,
+        allowAllWrite: c.allow_all_write,
       };
     });
   }, [raw, user, unread, online]);

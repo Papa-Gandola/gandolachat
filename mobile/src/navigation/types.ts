@@ -10,8 +10,24 @@ export type ChatsStackParamList = {
   Search: undefined;
   NewChat: undefined;
   NewGroup: undefined;
-  Chat: { chatId: string; name: string; userId?: number; avatarUrl?: string | null };
-  GroupChat: { chatId: string; name: string; userId?: number; avatarUrl?: string | null };
+  Chat: {
+    chatId: string;
+    name: string;
+    userId?: number;
+    avatarUrl?: string | null;
+    isGroup?: boolean;
+    allowAllWrite?: boolean;
+    createdBy?: number;
+  };
+  GroupChat: {
+    chatId: string;
+    name: string;
+    userId?: number;
+    avatarUrl?: string | null;
+    isGroup?: boolean;
+    allowAllWrite?: boolean;
+    createdBy?: number;
+  };
   ChatInfo: { chatId: string };
   OtherProfile: { userId: number };
   MediaViewer: { url: string };
