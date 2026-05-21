@@ -140,6 +140,9 @@ export function ChatsListScreen({ navigation }: Props) {
                 name: c.name,
                 userId: c.peerId,
                 avatarUrl: c.avatarUrl,
+                isGroup: c.group,
+                allowAllWrite: c.allowAllWrite,
+                createdBy: c.createdBy,
               })
             }
           />

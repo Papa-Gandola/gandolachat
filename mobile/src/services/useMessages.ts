@@ -104,6 +104,27 @@ export function useMessages(chatId: string): MessagesState {
     };
   }, [numericId]);
 
+  // Live edits & deletes.
+  useEffect(() => {
+    const onEdited = (d: Record<string, unknown>) => {
+      if ((d.chat_id as number) !== numericId) return;
+      const id = d.message_id as number;
+      const content = d.content as string;
+      setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, content, is_edited: true } : m)));
+    };
+    const onDeleted = (d: Record<string, unknown>) => {
+      if ((d.chat_id as number) !== numericId) return;
+      const id = d.message_id as number;
+      setMessages((prev) => prev.filter((m) => m.id !== id));
+    };
+    wsService.on("message_edited", onEdited);
+    wsService.on("message_deleted", onDeleted);
+    return () => {
+      wsService.off("message_edited", onEdited);
+      wsService.off("message_deleted", onDeleted);
+    };
+  }, [numericId]);
+
   const loadMore = useCallback(async () => {
     if (!hasMore || loading || messages.length === 0) return;
     await load(messages[0].id);

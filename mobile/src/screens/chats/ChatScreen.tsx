@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -24,7 +25,7 @@ import { IconBtn } from "../../components/IconBtn";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import { VoiceMessage } from "../../components/VoiceMessage";
 import { ChatsStackParamList } from "../../navigation/types";
-import { apiErrorMessage, chatApi, userApi } from "../../services/api";
+import { apiErrorMessage, chatApi, ChatOut, MessageOut, userApi } from "../../services/api";
 import { API_URL } from "../../services/config";
 import { useAuth } from "../../services/AuthContext";
 import { useMessages } from "../../services/useMessages";
@@ -53,18 +54,44 @@ function fileUrl(url: string | null | undefined): string | null {
 // taps) we can force-unload it before starting the next.
 let lastRecording: Audio.Recording | null = null;
 
+// Some Android devices never release expo-av's single global recorder after
+// stopAndUnloadAsync(), so the next prepareToRecordAsync rejects with "Only one
+// Recording object can be prepared at a given time" (after a long native stall)
+// and stays wedged until the app process is killed. Toggling the whole audio
+// subsystem off→on force-releases the stuck native recorder without a restart.
+async function resetAudioSubsystem() {
+  try {
+    await Audio.setIsEnabledAsync(false);
+    await new Promise((r) => setTimeout(r, 250));
+    await Audio.setIsEnabledAsync(true);
+  } catch {
+    // best-effort — nothing more we can do from JS
+  }
+}
+
+const FWD_PALETTE = ["#ef5350", "#7c4dff", "#ffa726", "#26a69a", "#ec407a", "#5c6bc0", "#ff7043", "#3949ab", "#66bb6a"];
+const fwdColorFor = (id: number) => FWD_PALETTE[id % FWD_PALETTE.length];
+
 type Props = NativeStackScreenProps<ChatsStackParamList, "Chat">;
 
 export function ChatScreen({ navigation, route }: Props) {
   const theme = useTheme();
   const { user } = useAuth();
-  const { chatId, name, userId, avatarUrl } = route.params;
-  const { messages, loading, error } = useMessages(chatId);
+  const { chatId, name, userId, avatarUrl, allowAllWrite, createdBy } = route.params;
+  // Group when there's no single DM peer. A channel (allow_all_write === false)
+  // is read-only for everyone except its creator.
+  const isGroup = route.params.isGroup ?? userId == null;
+  const isChannelLocked = isGroup && allowAllWrite === false && createdBy !== user?.id;
+  const { messages, loading, error, loadMore, hasMore } = useMessages(chatId);
   const scrollRef = useRef<ScrollView | null>(null);
   const [draft, setDraft] = useState("");
   const [attachOpen, setAttachOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [reactionFor, setReactionFor] = useState<number | null>(null);
+  const [replyTo, setReplyTo] = useState<MessageOut | null>(null);
+  const [editing, setEditing] = useState<MessageOut | null>(null);
+  const [forwardMsg, setForwardMsg] = useState<MessageOut | null>(null);
+  const [forwardChats, setForwardChats] = useState<ChatOut[]>([]);
   const recordingRef = useRef<Audio.Recording | null>(null);
   // True while a recording is being created or torn down — expo-av allows only
   // one prepared recording at a time, so block a new start until teardown ends.
@@ -79,12 +106,18 @@ export function ChatScreen({ navigation, route }: Props) {
   const [peerOnline, setPeerOnline] = useState(false);
   const [peerLastSeen, setPeerLastSeen] = useState<string | null>(null);
 
-  // Auto-scroll to bottom when new messages arrive — simple "messenger feel"
-  // and matches the desktop behaviour. setTimeout(0) lets layout settle.
+  // Auto-scroll to bottom only when a NEW message lands at the bottom (or on the
+  // first load) — never when older history is prepended on top, which would
+  // otherwise yank the user back down. setTimeout(0) lets layout settle.
+  const lastMsgIdRef = useRef<number | null>(null);
   useEffect(() => {
+    if (messages.length === 0) return;
+    const lastId = messages[messages.length - 1].id;
+    if (lastMsgIdRef.current === lastId) return;
+    lastMsgIdRef.current = lastId;
     const t = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 0);
     return () => clearTimeout(t);
-  }, [messages.length]);
+  }, [messages]);
 
   // Discard any in-progress recording if the screen unmounts mid-record.
   useEffect(() => {
@@ -155,16 +188,67 @@ export function ChatScreen({ navigation, route }: Props) {
   const send = () => {
     const content = draft.trim();
     if (!content) return;
+    if (editing) {
+      wsService.send({ type: "edit_message", message_id: editing.id, content });
+      setEditing(null);
+      setDraft("");
+      return;
+    }
     const ok = wsService.send({
       type: "message",
       chat_id: Number(chatId),
       content,
+      reply_to_id: replyTo?.id ?? null,
       _temp_id: `${Date.now()}-${Math.random()}`,
     });
-    if (ok) setDraft("");
-    // Server will echo the message back via WebSocket and useMessages will
-    // pick it up. No optimistic insert in this iteration — keeps the code
-    // small and the latency is already <100ms for the round-trip.
+    if (ok) {
+      setDraft("");
+      setReplyTo(null);
+    }
+    // Server echoes the message back over WebSocket; useMessages appends it.
+  };
+
+  const beginReply = (m: MessageOut) => {
+    setEditing(null);
+    setReplyTo(m);
+    setReactionFor(null);
+  };
+
+  const beginEdit = (m: MessageOut) => {
+    setReplyTo(null);
+    setEditing(m);
+    setDraft(m.content ?? "");
+    setReactionFor(null);
+  };
+
+  const deleteMessage = (id: number) => {
+    wsService.send({ type: "delete_message", message_id: id });
+    setReactionFor(null);
+  };
+
+  const cancelCompose = () => {
+    if (editing) setDraft("");
+    setEditing(null);
+    setReplyTo(null);
+  };
+
+  const beginForward = (m: MessageOut) => {
+    setReactionFor(null);
+    setForwardMsg(m);
+    chatApi.list().then((res) => setForwardChats(res.data)).catch(() => {});
+  };
+
+  const doForward = (c: ChatOut) => {
+    if (!forwardMsg) return;
+    wsService.send({
+      type: "forward_message",
+      target_chat_id: Number(c.id),
+      content: forwardMsg.content || (forwardMsg.file_url ? `[Файл: ${forwardMsg.file_name ?? "файл"}]` : ""),
+      original_author: forwardMsg.sender_username,
+      file_url: forwardMsg.file_url,
+      file_name: forwardMsg.file_name,
+    });
+    setForwardMsg(null);
   };
 
   const doUpload = async (file: { uri: string; name: string; type: string }) => {
@@ -237,8 +321,10 @@ export function ChatScreen({ navigation, route }: Props) {
       try {
         await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
       } catch {
-        // Stuck global recorder — nudge the audio session and retry once.
-        await Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => {});
+        // Previous recorder still held by the OS — force-release the whole audio
+        // subsystem (toggling the iOS audio-mode flag alone does nothing on
+        // Android) and retry once.
+        await resetAudioSubsystem();
         await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
         await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
       }
@@ -276,6 +362,10 @@ export function ChatScreen({ navigation, route }: Props) {
       setRecError(err instanceof Error ? err.message : String(err));
     } finally {
       lastRecording = null;
+      // Proactively release the native recorder so the NEXT recording starts
+      // from a clean audio session — without this, some Android devices let you
+      // record exactly once per app launch.
+      await resetAudioSubsystem();
       recBusyRef.current = false;
     }
     if (send && !tooShort && uri) {
@@ -375,7 +465,21 @@ export function ChatScreen({ navigation, route }: Props) {
         ref={scrollRef}
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingVertical: 8 }}
+        scrollEventThrottle={16}
+        maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+        onScroll={(e) => {
+          // Near the top → page in older history. maintainVisibleContentPosition
+          // keeps the visible messages from jumping when we prepend.
+          if (e.nativeEvent.contentOffset.y <= 40 && hasMore && !loading) {
+            loadMore();
+          }
+        }}
       >
+        {loading && messages.length > 0 ? (
+          <View style={{ paddingVertical: 10, alignItems: "center" }}>
+            <ActivityIndicator size="small" color={theme.colors.accent} />
+          </View>
+        ) : null}
         {loading && messages.length === 0 ? (
           <View style={{ paddingVertical: 40, alignItems: "center" }}>
             <ActivityIndicator color={theme.colors.accent} />
@@ -408,8 +512,9 @@ export function ChatScreen({ navigation, route }: Props) {
             </Text>
           </View>
         ) : null}
-        {messages.map((m) => {
+        {messages.map((m, i) => {
           const mine = m.sender_id === user?.id;
+          const showSender = isGroup && !mine && (i === 0 || messages[i - 1].sender_id !== m.sender_id);
           const audio = isAudio(m.file_url) ? fileUrl(m.file_url) : null;
           const img = !audio && isImage(m.file_url) ? fileUrl(m.file_url) : null;
           const text = m.content ?? (m.file_url && !img && !audio ? `📎 ${m.file_name ?? "файл"}` : "");
@@ -424,11 +529,18 @@ export function ChatScreen({ navigation, route }: Props) {
             >
               <Bubble
                 mine={mine}
+                senderName={showSender ? m.sender_username : undefined}
                 text={text}
                 imageUri={img}
                 media={audio ? <VoiceMessage uri={audio} mine={mine} /> : undefined}
                 onPressImage={() => img && navigation.navigate("MediaViewer", { url: img })}
                 ts={formatTs(m.created_at)}
+                edited={m.is_edited}
+                reply={
+                  m.reply_to_id && m.reply_to_username
+                    ? { author: m.reply_to_username, text: m.reply_to_content ?? "…" }
+                    : null
+                }
                 status={mine ? (peerLastRead >= m.id ? "read" : "delivered") : undefined}
               >
                 <ReactionChips
@@ -443,7 +555,12 @@ export function ChatScreen({ navigation, route }: Props) {
                   mine={mine}
                   theme={theme}
                   canCopy={!!m.content}
+                  canEdit={mine && !!m.content}
                   onCopy={() => copyMessage(m.content ?? "")}
+                  onReply={() => beginReply(m)}
+                  onForward={() => beginForward(m)}
+                  onEdit={() => beginEdit(m)}
+                  onDelete={() => deleteMessage(m.id)}
                   onPick={(emoji) => {
                     toggleReaction(m.id, emoji);
                     setReactionFor(null);
@@ -456,6 +573,23 @@ export function ChatScreen({ navigation, route }: Props) {
       </ScrollView>
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        {isChannelLocked ? (
+          <View
+            style={{
+              paddingHorizontal: 16,
+              paddingVertical: 14,
+              borderTopWidth: 1,
+              borderTopColor: theme.colors.border,
+              backgroundColor: theme.colors.bgElev,
+              alignItems: "center",
+            }}
+          >
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.inkMuted }}>
+              {theme.decorate ? "// канал · пишет только создатель" : "🔒 Канал — пишет только создатель"}
+            </Text>
+          </View>
+        ) : (
+          <>
         {recError ? (
           <Pressable
             onPress={() => setRecError(null)}
@@ -508,6 +642,42 @@ export function ChatScreen({ navigation, route }: Props) {
             <AttachOption label="Фото" onPress={pickPhoto} theme={theme} />
             <AttachOption label="Камера" onPress={takePhoto} theme={theme} />
             <AttachOption label="Файл" onPress={pickFile} theme={theme} />
+          </View>
+        ) : null}
+        {(replyTo || editing) && !recording ? (
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 8,
+              paddingHorizontal: 14,
+              paddingVertical: 8,
+              borderTopWidth: 1,
+              borderTopColor: theme.colors.border,
+              backgroundColor: theme.colors.bgElev,
+            }}
+          >
+            <View style={{ width: 3, alignSelf: "stretch", backgroundColor: theme.colors.accent }} />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, fontWeight: "700", color: theme.colors.accent }}>
+                {editing
+                  ? theme.decorate
+                    ? "// редактирование"
+                    : "Редактирование"
+                  : `${theme.decorate ? "// ответ · " : "Ответ · "}${replyTo?.sender_username ?? ""}`}
+              </Text>
+              <Text
+                numberOfLines={1}
+                style={{ fontFamily: theme.fonts.body, fontSize: 12, color: theme.colors.inkDim, marginTop: 1 }}
+              >
+                {editing
+                  ? editing.content ?? ""
+                  : replyTo?.content ?? (replyTo?.file_name ? `📎 ${replyTo.file_name}` : "…")}
+              </Text>
+            </View>
+            <Pressable onPress={cancelCompose} hitSlop={8}>
+              <Text style={{ color: theme.colors.inkMuted, fontSize: 18 }}>×</Text>
+            </Pressable>
           </View>
         ) : null}
         <View
@@ -627,7 +797,97 @@ export function ChatScreen({ navigation, route }: Props) {
             </Pressable>
           )}
         </View>
+          </>
+        )}
       </KeyboardAvoidingView>
+
+      <Modal
+        visible={!!forwardMsg}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setForwardMsg(null)}
+      >
+        <Pressable
+          onPress={() => setForwardMsg(null)}
+          style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", padding: 24 }}
+        >
+          <Pressable
+            onPress={() => {}}
+            style={{
+              backgroundColor: theme.colors.bg,
+              borderRadius: theme.radius.lg,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              maxHeight: "70%",
+              overflow: "hidden",
+            }}
+          >
+            <Text
+              style={{
+                fontFamily: theme.fonts.mono,
+                fontSize: 14,
+                fontWeight: "700",
+                color: theme.colors.ink,
+                padding: 14,
+                paddingBottom: forwardMsg?.content ? 4 : 10,
+              }}
+            >
+              {theme.decorate ? "// переслать" : "Переслать"}
+            </Text>
+            {forwardMsg?.content ? (
+              <Text
+                numberOfLines={1}
+                style={{
+                  fontFamily: theme.fonts.body,
+                  fontSize: 12,
+                  color: theme.colors.inkMuted,
+                  paddingHorizontal: 14,
+                  paddingBottom: 8,
+                }}
+              >
+                «{forwardMsg.content}»
+              </Text>
+            ) : null}
+            <ScrollView>
+              {forwardChats
+                .filter((c) => String(c.id) !== chatId)
+                .map((c) => {
+                  const other = c.is_group ? null : c.members.find((mm) => mm.id !== user?.id);
+                  const fname = c.is_group ? c.name ?? "Группа" : other?.username ?? "Личка";
+                  const favatar = c.is_group ? c.avatar_url ?? null : other?.avatar_url ?? null;
+                  return (
+                    <Pressable
+                      key={c.id}
+                      onPress={() => doForward(c)}
+                      style={({ pressed }) => ({
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 12,
+                        paddingHorizontal: 14,
+                        paddingVertical: 10,
+                        backgroundColor: pressed ? theme.colors.bgElev : "transparent",
+                      })}
+                    >
+                      <Avatar
+                        letter={(fname[0] ?? "?").toUpperCase()}
+                        size={36}
+                        bg={fwdColorFor(c.id)}
+                        uri={favatar}
+                        square={c.is_group}
+                      />
+                      <Text
+                        numberOfLines={1}
+                        style={{ flex: 1, fontFamily: theme.fonts.mono, fontSize: 14, color: theme.colors.ink }}
+                      >
+                        {fname}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </ScreenContainer>
   );
 }
@@ -709,53 +969,92 @@ function ReactionPicker({
   theme,
   onPick,
   canCopy,
+  canEdit,
   onCopy,
+  onReply,
+  onForward,
+  onEdit,
+  onDelete,
 }: {
   mine: boolean;
   theme: ThemeT;
   onPick: (emoji: string) => void;
   canCopy?: boolean;
+  canEdit?: boolean;
   onCopy?: () => void;
+  onReply?: () => void;
+  onForward?: () => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
 }) {
+  const chip = (label: string, onPress: (() => void) | undefined, danger?: boolean) =>
+    onPress ? (
+      <Pressable
+        onPress={onPress}
+        hitSlop={6}
+        style={{
+          paddingHorizontal: 10,
+          paddingVertical: 6,
+          borderRadius: theme.radius.sm,
+          borderWidth: 1,
+          borderColor: danger ? theme.colors.danger : theme.colors.border,
+          backgroundColor: theme.colors.bgElevH,
+        }}
+      >
+        <Text
+          style={{
+            fontFamily: theme.fonts.mono,
+            fontSize: 12,
+            color: danger ? theme.colors.danger : theme.colors.ink,
+          }}
+        >
+          {label}
+        </Text>
+      </Pressable>
+    ) : null;
   return (
     <View
       style={{
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 6,
         alignSelf: mine ? "flex-end" : "flex-start",
         marginHorizontal: 14,
         marginTop: 2,
-        marginBottom: 4,
-        paddingHorizontal: 8,
-        paddingVertical: 6,
-        backgroundColor: theme.colors.bgElevH,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        borderRadius: 20,
+        marginBottom: 6,
+        gap: 6,
       }}
     >
-      {QUICK_EMOJIS.map((e) => (
-        <Pressable key={e} onPress={() => onPick(e)} hitSlop={6}>
-          <Text style={{ fontSize: 22 }}>{e}</Text>
-        </Pressable>
-      ))}
-      {canCopy && onCopy ? (
-        <Pressable
-          onPress={onCopy}
-          hitSlop={6}
-          style={{
-            marginLeft: 4,
-            paddingLeft: 8,
-            borderLeftWidth: 1,
-            borderLeftColor: theme.colors.border,
-          }}
-        >
-          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.accent }}>
-            копир.
-          </Text>
-        </Pressable>
-      ) : null}
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 6,
+          paddingHorizontal: 8,
+          paddingVertical: 6,
+          backgroundColor: theme.colors.bgElevH,
+          borderWidth: 1,
+          borderColor: theme.colors.border,
+          borderRadius: 20,
+        }}
+      >
+        {QUICK_EMOJIS.map((e) => (
+          <Pressable key={e} onPress={() => onPick(e)} hitSlop={6}>
+            <Text style={{ fontSize: 22 }}>{e}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <View
+        style={{
+          flexDirection: "row",
+          flexWrap: "wrap",
+          gap: 6,
+          justifyContent: mine ? "flex-end" : "flex-start",
+        }}
+      >
+        {chip(theme.decorate ? "ответить" : "Ответить", onReply)}
+        {chip(theme.decorate ? "переслать" : "Переслать", onForward)}
+        {canCopy ? chip(theme.decorate ? "копир." : "Копир.", onCopy) : null}
+        {canEdit ? chip(theme.decorate ? "изменить" : "Изменить", onEdit) : null}
+        {mine ? chip(theme.decorate ? "удалить" : "Удалить", onDelete, true) : null}
+      </View>
     </View>
   );
 }
