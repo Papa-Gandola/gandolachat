@@ -24,7 +24,7 @@ import { IconBtn } from "../../components/IconBtn";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import { VoiceMessage } from "../../components/VoiceMessage";
 import { ChatsStackParamList } from "../../navigation/types";
-import { apiErrorMessage, chatApi, userApi } from "../../services/api";
+import { apiErrorMessage, chatApi, MessageOut, userApi } from "../../services/api";
 import { API_URL } from "../../services/config";
 import { useAuth } from "../../services/AuthContext";
 import { useMessages } from "../../services/useMessages";
@@ -80,6 +80,8 @@ export function ChatScreen({ navigation, route }: Props) {
   const [attachOpen, setAttachOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [reactionFor, setReactionFor] = useState<number | null>(null);
+  const [replyTo, setReplyTo] = useState<MessageOut | null>(null);
+  const [editing, setEditing] = useState<MessageOut | null>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
   // True while a recording is being created or torn down — expo-av allows only
   // one prepared recording at a time, so block a new start until teardown ends.
@@ -176,16 +178,48 @@ export function ChatScreen({ navigation, route }: Props) {
   const send = () => {
     const content = draft.trim();
     if (!content) return;
+    if (editing) {
+      wsService.send({ type: "edit_message", message_id: editing.id, content });
+      setEditing(null);
+      setDraft("");
+      return;
+    }
     const ok = wsService.send({
       type: "message",
       chat_id: Number(chatId),
       content,
+      reply_to_id: replyTo?.id ?? null,
       _temp_id: `${Date.now()}-${Math.random()}`,
     });
-    if (ok) setDraft("");
-    // Server will echo the message back via WebSocket and useMessages will
-    // pick it up. No optimistic insert in this iteration — keeps the code
-    // small and the latency is already <100ms for the round-trip.
+    if (ok) {
+      setDraft("");
+      setReplyTo(null);
+    }
+    // Server echoes the message back over WebSocket; useMessages appends it.
+  };
+
+  const beginReply = (m: MessageOut) => {
+    setEditing(null);
+    setReplyTo(m);
+    setReactionFor(null);
+  };
+
+  const beginEdit = (m: MessageOut) => {
+    setReplyTo(null);
+    setEditing(m);
+    setDraft(m.content ?? "");
+    setReactionFor(null);
+  };
+
+  const deleteMessage = (id: number) => {
+    wsService.send({ type: "delete_message", message_id: id });
+    setReactionFor(null);
+  };
+
+  const cancelCompose = () => {
+    if (editing) setDraft("");
+    setEditing(null);
+    setReplyTo(null);
   };
 
   const doUpload = async (file: { uri: string; name: string; type: string }) => {
@@ -470,6 +504,12 @@ export function ChatScreen({ navigation, route }: Props) {
                 media={audio ? <VoiceMessage uri={audio} mine={mine} /> : undefined}
                 onPressImage={() => img && navigation.navigate("MediaViewer", { url: img })}
                 ts={formatTs(m.created_at)}
+                edited={m.is_edited}
+                reply={
+                  m.reply_to_id && m.reply_to_username
+                    ? { author: m.reply_to_username, text: m.reply_to_content ?? "…" }
+                    : null
+                }
                 status={mine ? (peerLastRead >= m.id ? "read" : "delivered") : undefined}
               >
                 <ReactionChips
@@ -484,7 +524,11 @@ export function ChatScreen({ navigation, route }: Props) {
                   mine={mine}
                   theme={theme}
                   canCopy={!!m.content}
+                  canEdit={mine && !!m.content}
                   onCopy={() => copyMessage(m.content ?? "")}
+                  onReply={() => beginReply(m)}
+                  onEdit={() => beginEdit(m)}
+                  onDelete={() => deleteMessage(m.id)}
                   onPick={(emoji) => {
                     toggleReaction(m.id, emoji);
                     setReactionFor(null);
@@ -549,6 +593,42 @@ export function ChatScreen({ navigation, route }: Props) {
             <AttachOption label="Фото" onPress={pickPhoto} theme={theme} />
             <AttachOption label="Камера" onPress={takePhoto} theme={theme} />
             <AttachOption label="Файл" onPress={pickFile} theme={theme} />
+          </View>
+        ) : null}
+        {(replyTo || editing) && !recording ? (
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 8,
+              paddingHorizontal: 14,
+              paddingVertical: 8,
+              borderTopWidth: 1,
+              borderTopColor: theme.colors.border,
+              backgroundColor: theme.colors.bgElev,
+            }}
+          >
+            <View style={{ width: 3, alignSelf: "stretch", backgroundColor: theme.colors.accent }} />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, fontWeight: "700", color: theme.colors.accent }}>
+                {editing
+                  ? theme.decorate
+                    ? "// редактирование"
+                    : "Редактирование"
+                  : `${theme.decorate ? "// ответ · " : "Ответ · "}${replyTo?.sender_username ?? ""}`}
+              </Text>
+              <Text
+                numberOfLines={1}
+                style={{ fontFamily: theme.fonts.body, fontSize: 12, color: theme.colors.inkDim, marginTop: 1 }}
+              >
+                {editing
+                  ? editing.content ?? ""
+                  : replyTo?.content ?? (replyTo?.file_name ? `📎 ${replyTo.file_name}` : "…")}
+              </Text>
+            </View>
+            <Pressable onPress={cancelCompose} hitSlop={8}>
+              <Text style={{ color: theme.colors.inkMuted, fontSize: 18 }}>×</Text>
+            </Pressable>
           </View>
         ) : null}
         <View
@@ -750,53 +830,89 @@ function ReactionPicker({
   theme,
   onPick,
   canCopy,
+  canEdit,
   onCopy,
+  onReply,
+  onEdit,
+  onDelete,
 }: {
   mine: boolean;
   theme: ThemeT;
   onPick: (emoji: string) => void;
   canCopy?: boolean;
+  canEdit?: boolean;
   onCopy?: () => void;
+  onReply?: () => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
 }) {
+  const chip = (label: string, onPress: (() => void) | undefined, danger?: boolean) =>
+    onPress ? (
+      <Pressable
+        onPress={onPress}
+        hitSlop={6}
+        style={{
+          paddingHorizontal: 10,
+          paddingVertical: 6,
+          borderRadius: theme.radius.sm,
+          borderWidth: 1,
+          borderColor: danger ? theme.colors.danger : theme.colors.border,
+          backgroundColor: theme.colors.bgElevH,
+        }}
+      >
+        <Text
+          style={{
+            fontFamily: theme.fonts.mono,
+            fontSize: 12,
+            color: danger ? theme.colors.danger : theme.colors.ink,
+          }}
+        >
+          {label}
+        </Text>
+      </Pressable>
+    ) : null;
   return (
     <View
       style={{
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 6,
         alignSelf: mine ? "flex-end" : "flex-start",
         marginHorizontal: 14,
         marginTop: 2,
-        marginBottom: 4,
-        paddingHorizontal: 8,
-        paddingVertical: 6,
-        backgroundColor: theme.colors.bgElevH,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        borderRadius: 20,
+        marginBottom: 6,
+        gap: 6,
       }}
     >
-      {QUICK_EMOJIS.map((e) => (
-        <Pressable key={e} onPress={() => onPick(e)} hitSlop={6}>
-          <Text style={{ fontSize: 22 }}>{e}</Text>
-        </Pressable>
-      ))}
-      {canCopy && onCopy ? (
-        <Pressable
-          onPress={onCopy}
-          hitSlop={6}
-          style={{
-            marginLeft: 4,
-            paddingLeft: 8,
-            borderLeftWidth: 1,
-            borderLeftColor: theme.colors.border,
-          }}
-        >
-          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.accent }}>
-            копир.
-          </Text>
-        </Pressable>
-      ) : null}
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 6,
+          paddingHorizontal: 8,
+          paddingVertical: 6,
+          backgroundColor: theme.colors.bgElevH,
+          borderWidth: 1,
+          borderColor: theme.colors.border,
+          borderRadius: 20,
+        }}
+      >
+        {QUICK_EMOJIS.map((e) => (
+          <Pressable key={e} onPress={() => onPick(e)} hitSlop={6}>
+            <Text style={{ fontSize: 22 }}>{e}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <View
+        style={{
+          flexDirection: "row",
+          flexWrap: "wrap",
+          gap: 6,
+          justifyContent: mine ? "flex-end" : "flex-start",
+        }}
+      >
+        {chip(theme.decorate ? "ответить" : "Ответить", onReply)}
+        {canCopy ? chip(theme.decorate ? "копир." : "Копир.", onCopy) : null}
+        {canEdit ? chip(theme.decorate ? "изменить" : "Изменить", onEdit) : null}
+        {mine ? chip(theme.decorate ? "удалить" : "Удалить", onDelete, true) : null}
+      </View>
     </View>
   );
 }

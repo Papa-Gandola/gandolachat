@@ -13,10 +13,14 @@ interface Props {
   onPressImage?: () => void;
   // Custom media rendered above the text (e.g. a voice-message player).
   media?: ReactNode;
+  // Quoted message this one is replying to.
+  reply?: { author: string; text: string } | null;
+  // Show the "edited" marker next to the timestamp.
+  edited?: boolean;
   children?: ReactNode;
 }
 
-export function Bubble({ mine = false, text, ts, status, imageUri, onPressImage, media, children }: Props) {
+export function Bubble({ mine = false, text, ts, status, imageUri, onPressImage, media, reply, edited, children }: Props) {
   const theme = useTheme();
   return (
     <View
@@ -40,6 +44,35 @@ export function Bubble({ mine = false, text, ts, status, imageUri, onPressImage,
           borderTopRightRadius: mine ? 6 : theme.radius.bubble,
         }}
       >
+        {reply ? (
+          <View
+            style={{
+              borderLeftWidth: 3,
+              borderLeftColor: mine ? theme.colors.bubbleMineText : theme.colors.accent,
+              paddingLeft: 8,
+              paddingVertical: 2,
+              marginBottom: 6,
+            }}
+          >
+            <Text
+              numberOfLines={1}
+              style={{
+                fontFamily: theme.fonts.mono,
+                fontSize: 11,
+                fontWeight: "700",
+                color: mine ? theme.colors.bubbleMineText : theme.colors.accent,
+              }}
+            >
+              {reply.author}
+            </Text>
+            <Text
+              numberOfLines={1}
+              style={{ fontSize: 12, color: mine ? theme.colors.bubbleMineText : theme.colors.inkDim }}
+            >
+              {reply.text}
+            </Text>
+          </View>
+        ) : null}
         {imageUri ? (
           <Pressable onPress={onPressImage}>
             <Image
@@ -79,6 +112,18 @@ export function Bubble({ mine = false, text, ts, status, imageUri, onPressImage,
               marginTop: 3,
             }}
           >
+            {edited ? (
+              <Text
+                style={{
+                  fontFamily: theme.fonts.mono,
+                  fontSize: 10,
+                  fontStyle: "italic",
+                  color: mine ? "rgba(10,10,10,0.55)" : theme.colors.inkMuted,
+                }}
+              >
+                ред.
+              </Text>
+            ) : null}
             <Text
               style={{
                 fontFamily: theme.fonts.mono,
