@@ -423,8 +423,10 @@ export function ChatScreen({ navigation, route }: Props) {
         </IconBtn>
         <Pressable
           style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 10 }}
-          disabled={userId == null}
-          onPress={() => userId != null && navigation.navigate("OtherProfile", { userId })}
+          onPress={() => {
+            if (isGroup) navigation.navigate("ChatInfo", { chatId });
+            else if (userId != null) navigation.navigate("OtherProfile", { userId });
+          }}
         >
           <Avatar letter={(name[0] ?? "?").toUpperCase()} size={36} bg="#ef5350" uri={avatarUrl} />
           <View style={{ flex: 1 }}>
@@ -456,6 +458,9 @@ export function ChatScreen({ navigation, route }: Props) {
             ) : null}
           </View>
         </Pressable>
+        <IconBtn onPress={() => navigation.navigate("Poker", { chatId, chatName: name })}>
+          <Text style={{ fontSize: 18 }}>🎴</Text>
+        </IconBtn>
         <IconBtn>
           <PhoneIcon color={theme.colors.ink} />
         </IconBtn>
@@ -515,6 +520,33 @@ export function ChatScreen({ navigation, route }: Props) {
         {messages.map((m, i) => {
           const mine = m.sender_id === user?.id;
           const showSender = isGroup && !mine && (i === 0 || messages[i - 1].sender_id !== m.sender_id);
+          const pokerMatch = m.content?.match(/^\/poker_table (\d+)$/);
+          if (pokerMatch) {
+            return (
+              <PokerInviteCard
+                key={m.id}
+                theme={theme}
+                tableId={Number(pokerMatch[1])}
+                mine={mine}
+                onOpen={() => navigation.navigate("Poker", { chatId, chatName: name })}
+              />
+            );
+          }
+          const callMatch = m.content?.match(/^\/call_record (completed|missed|declined|cancelled)\|(\d+)\|(\d+)\|(\d+)$/);
+          if (callMatch) {
+            return (
+              <CallRecordCard
+                key={m.id}
+                theme={theme}
+                mine={mine}
+                kind={callMatch[1] as "completed" | "missed" | "declined" | "cancelled"}
+                durationSec={Number(callMatch[2])}
+                participants={Number(callMatch[3])}
+                initiatorId={Number(callMatch[4])}
+                meId={user?.id ?? -1}
+              />
+            );
+          }
           const audio = isAudio(m.file_url) ? fileUrl(m.file_url) : null;
           const img = !audio && isImage(m.file_url) ? fileUrl(m.file_url) : null;
           const text = m.content ?? (m.file_url && !img && !audio ? `📎 ${m.file_name ?? "файл"}` : "");
@@ -1085,5 +1117,114 @@ function AttachOption({
         {label}
       </Text>
     </Pressable>
+  );
+}
+
+function PokerInviteCard({
+  theme,
+  tableId,
+  mine,
+  onOpen,
+}: {
+  theme: ThemeT;
+  tableId: number;
+  mine: boolean;
+  onOpen: () => void;
+}) {
+  return (
+    <View style={{ flexDirection: "row", justifyContent: mine ? "flex-end" : "flex-start", paddingHorizontal: 14, paddingVertical: 4 }}>
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 10,
+          maxWidth: "85%",
+          padding: 10,
+          borderRadius: theme.radius.bubble,
+          borderWidth: 1,
+          borderColor: theme.colors.accent,
+          backgroundColor: theme.colors.bgElev,
+        }}
+      >
+        <Text style={{ fontSize: 24 }}>🎴</Text>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 13, fontWeight: "700", color: theme.colors.ink }}>
+            {theme.decorate ? `// ПОКЕР · СТОЛ #${tableId}` : `Покерный стол #${tableId}`}
+          </Text>
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkDim, marginTop: 1 }}>
+            {theme.decorate ? "зовут играть" : "Зовут играть в покер"}
+          </Text>
+        </View>
+        <Pressable
+          onPress={onOpen}
+          style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: theme.radius.sm, backgroundColor: theme.colors.accent }}
+        >
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "700", color: theme.colors.accentText }}>
+            {theme.decorate ? "[сесть]" : "Сесть"}
+          </Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function CallRecordCard({
+  theme,
+  mine,
+  kind,
+  durationSec,
+  participants,
+  initiatorId,
+  meId,
+}: {
+  theme: ThemeT;
+  mine: boolean;
+  kind: "completed" | "missed" | "declined" | "cancelled";
+  durationSec: number;
+  participants: number;
+  initiatorId: number;
+  meId: number;
+}) {
+  const initiatedByMe = initiatorId === meId;
+  let title = "";
+  let icon = "📞";
+  let color = theme.colors.ink;
+  if (kind === "completed") {
+    const m = Math.floor(durationSec / 60);
+    const s = durationSec % 60;
+    const time = m > 0 ? `${m} мин ${String(s).padStart(2, "0")} сек` : `${s} сек`;
+    title = participants > 2 ? `Звонок · ${time} · ${participants} уч.` : `Звонок · ${time}`;
+  } else if (kind === "missed") {
+    title = initiatedByMe ? "Никто не ответил" : "Пропущенный звонок";
+    icon = "📵";
+    color = theme.colors.danger;
+  } else if (kind === "declined") {
+    title = initiatedByMe ? "Отклонён" : "Вы отклонили звонок";
+    icon = "✕";
+    color = theme.colors.danger;
+  } else {
+    title = initiatedByMe ? "Вы отменили звонок" : "Звонок отменён";
+    icon = "↩";
+    color = theme.colors.inkMuted;
+  }
+  return (
+    <View style={{ flexDirection: "row", justifyContent: mine ? "flex-end" : "flex-start", paddingHorizontal: 14, paddingVertical: 4 }}>
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 8,
+          paddingHorizontal: 12,
+          paddingVertical: 8,
+          borderRadius: theme.radius.bubble,
+          borderWidth: 1,
+          borderColor: theme.colors.border,
+          backgroundColor: theme.colors.bgElev,
+        }}
+      >
+        <Text style={{ fontSize: 16 }}>{icon}</Text>
+        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 13, color, fontWeight: "600" }}>{title}</Text>
+      </View>
+    </View>
   );
 }
