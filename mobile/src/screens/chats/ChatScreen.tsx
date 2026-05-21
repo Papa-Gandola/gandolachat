@@ -61,8 +61,10 @@ export function ChatScreen({ navigation, route }: Props) {
   const [uploading, setUploading] = useState(false);
   const [reactionFor, setReactionFor] = useState<number | null>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
+  // True while a recording is being created or torn down — expo-av allows only
+  // one prepared recording at a time, so block a new start until teardown ends.
+  const recBusyRef = useRef(false);
   const [recording, setRecording] = useState(false);
-  const [cameraLaunching, setCameraLaunching] = useState(false);
   const recStartRef = useRef(0);
   // Highest message id the OTHER side has read — drives the ✓✓ indicator on
   // my own bubbles.
@@ -195,68 +197,22 @@ export function ChatScreen({ navigation, route }: Props) {
     }
   };
 
-  const takePhoto = async () => {
+  const takePhoto = () => {
+    // Open the in-app camera (instant) instead of the slow system intent.
     setAttachOpen(false);
-    try {
-      const perm = await ImagePicker.requestCameraPermissionsAsync();
-      if (!perm.granted) {
-        Alert.alert("Нет доступа к камере", "Разреши доступ к камере в настройках Android.");
-        return;
-      }
-      // Camera cold-start can take several seconds on some devices — show a
-      // hint so it's clear the tap registered.
-      setCameraLaunching(true);
-      const launchedAt = Date.now();
-      const res = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 0.8,
-      });
-      setCameraLaunching(false);
-      const elapsed = Date.now() - launchedAt;
-      if (res.canceled || !res.assets[0]) {
-        // If it "returned" almost instantly it never actually opened the
-        // camera (Android package-visibility / no camera activity). A real
-        // user cancel takes much longer.
-        if (elapsed < 1200) {
-          Alert.alert(
-            "Камера не открылась",
-            "Система не запустила приложение камеры. Похоже на ограничение устройства/эмулятора. Можно отправить фото из галереи.",
-          );
-        }
-        return;
-      }
-      const a = res.assets[0];
-      await doUpload({
-        uri: a.uri,
-        name: a.fileName ?? `camera_${Date.now()}.jpg`,
-        type: a.mimeType ?? "image/jpeg",
-      });
-    } catch (err) {
-      setCameraLaunching(false);
-      Alert.alert("Камера недоступна", err instanceof Error ? err.message : String(err));
-    }
+    navigation.navigate("Camera", { chatId });
   };
 
   const startRecording = async () => {
+    if (recBusyRef.current || recordingRef.current) return;
+    recBusyRef.current = true;
     try {
-      // Clean up any stale recording object first (defensive — a half-torn-down
-      // recording from a previous attempt would otherwise block a new one).
-      if (recordingRef.current) {
-        try {
-          await recordingRef.current.stopAndUnloadAsync();
-        } catch {
-          // already stopped
-        }
-        recordingRef.current = null;
-      }
       const perm = await Audio.requestPermissionsAsync();
       if (!perm.granted) {
         Alert.alert("Нет доступа к микрофону", "Разреши доступ к микрофону в настройках Android.");
         return;
       }
       await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      // High-level one-shot API — prepares + starts atomically; the manual
-      // new Recording()/prepare/start dance is more prone to native races.
       const { recording: rec } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY,
       );
@@ -265,28 +221,35 @@ export function ChatScreen({ navigation, route }: Props) {
       setRecording(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     } catch (err) {
-      // Surface the real reason instead of failing silently.
+      recordingRef.current = null;
       Alert.alert("Не удалось записать", err instanceof Error ? err.message : String(err));
+    } finally {
+      recBusyRef.current = false;
     }
   };
 
   const stopRecording = async (send: boolean) => {
     const rec = recordingRef.current;
+    if (!rec || recBusyRef.current) return;
+    // Block any new start until this recording is fully unloaded (expo-av only
+    // allows one prepared recording at a time).
+    recBusyRef.current = true;
     recordingRef.current = null;
     setRecording(false);
-    if (!rec) return;
+    let uri: string | null = null;
+    let tooShort = true;
     try {
       await rec.stopAndUnloadAsync();
-      // Reset audio mode so the next recording / playback starts clean.
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true }).catch(
-        () => {},
-      );
-      const uri = rec.getURI();
-      const tooShort = Date.now() - recStartRef.current < 800;
-      if (!send || tooShort || !uri) return;
-      await doUpload({ uri, name: `voice_${Date.now()}.m4a`, type: "audio/m4a" });
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
+      uri = rec.getURI();
+      tooShort = Date.now() - recStartRef.current < 800;
     } catch (err) {
-      Alert.alert("Не удалось отправить голосовое", err instanceof Error ? err.message : String(err));
+      Alert.alert("Ошибка записи", err instanceof Error ? err.message : String(err));
+    } finally {
+      recBusyRef.current = false;
+    }
+    if (send && !tooShort && uri) {
+      await doUpload({ uri, name: `voice_${Date.now()}.m4a`, type: "audio/m4a" });
     }
   };
 
@@ -619,33 +582,6 @@ export function ChatScreen({ navigation, route }: Props) {
           )}
         </View>
       </KeyboardAvoidingView>
-
-      {cameraLaunching ? (
-        <View
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            alignItems: "center",
-            justifyContent: "center",
-            backgroundColor: "rgba(0,0,0,0.55)",
-          }}
-        >
-          <ActivityIndicator size="large" color={theme.colors.accent} />
-          <Text
-            style={{
-              marginTop: 12,
-              fontFamily: theme.fonts.mono,
-              fontSize: 13,
-              color: theme.colors.ink,
-            }}
-          >
-            Открываю камеру…
-          </Text>
-        </View>
-      ) : null}
     </ScreenContainer>
   );
 }
