@@ -11,10 +11,12 @@ interface Props {
   status?: ReadStatus;
   imageUri?: string | null;
   onPressImage?: () => void;
+  // Custom media rendered above the text (e.g. a voice-message player).
+  media?: ReactNode;
   children?: ReactNode;
 }
 
-export function Bubble({ mine = false, text, ts, status, imageUri, onPressImage, children }: Props) {
+export function Bubble({ mine = false, text, ts, status, imageUri, onPressImage, media, children }: Props) {
   const theme = useTheme();
   return (
     <View
@@ -53,6 +55,7 @@ export function Bubble({ mine = false, text, ts, status, imageUri, onPressImage,
             />
           </Pressable>
         ) : null}
+        {media}
         {text ? (
           <Text
             style={{

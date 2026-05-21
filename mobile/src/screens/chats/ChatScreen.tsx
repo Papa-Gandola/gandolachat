@@ -1,5 +1,8 @@
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { Audio } from "expo-av";
+import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
+import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -19,6 +22,7 @@ import { Bubble } from "../../components/Bubble";
 import { ChevronLeftIcon, PhoneIcon, SendIcon } from "../../components/icons";
 import { IconBtn } from "../../components/IconBtn";
 import { ScreenContainer } from "../../components/ScreenContainer";
+import { VoiceMessage } from "../../components/VoiceMessage";
 import { ChatsStackParamList } from "../../navigation/types";
 import { apiErrorMessage, chatApi, userApi } from "../../services/api";
 import { API_URL } from "../../services/config";
@@ -28,9 +32,14 @@ import { wsService } from "../../services/ws";
 import { useTheme } from "../../theme";
 
 const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp|heic)$/i;
+const AUDIO_EXT = /\.(m4a|mp3|aac|wav|ogg|opus|caf)$/i;
 
 function isImage(url: string | null | undefined): boolean {
   return !!url && IMAGE_EXT.test(url);
+}
+
+function isAudio(url: string | null | undefined): boolean {
+  return !!url && AUDIO_EXT.test(url);
 }
 
 function fileUrl(url: string | null | undefined): string | null {
@@ -51,6 +60,10 @@ export function ChatScreen({ navigation, route }: Props) {
   const [attachOpen, setAttachOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [reactionFor, setReactionFor] = useState<number | null>(null);
+  const recordingRef = useRef<Audio.Recording | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const recStartRef = useRef(0);
   // Highest message id the OTHER side has read — drives the ✓✓ indicator on
   // my own bubbles.
   const [peerLastRead, setPeerLastRead] = useState(0);
@@ -64,6 +77,14 @@ export function ChatScreen({ navigation, route }: Props) {
     const t = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 0);
     return () => clearTimeout(t);
   }, [messages.length]);
+
+  // Discard any in-progress recording if the screen unmounts mid-record.
+  useEffect(() => {
+    return () => {
+      recordingRef.current?.stopAndUnloadAsync().catch(() => {});
+      recordingRef.current = null;
+    };
+  }, []);
 
   // Read receipts: fetch who's read what, then keep it live via WS.
   useEffect(() => {
@@ -198,8 +219,56 @@ export function ChatScreen({ navigation, route }: Props) {
     }
   };
 
+  const startRecording = async () => {
+    if (recordingRef.current || starting) return; // guard against double-start
+    setStarting(true);
+    try {
+      const perm = await Audio.requestPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert("Нет доступа к микрофону", "Разреши доступ к микрофону в настройках Android.");
+        return;
+      }
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      const rec = new Audio.Recording();
+      await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      await rec.startAsync();
+      recordingRef.current = rec;
+      recStartRef.current = Date.now();
+      setRecording(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    } catch (err) {
+      Alert.alert("Не удалось записать", apiErrorMessage(err));
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const stopRecording = async (send: boolean) => {
+    const rec = recordingRef.current;
+    recordingRef.current = null;
+    setRecording(false);
+    if (!rec) return;
+    try {
+      await rec.stopAndUnloadAsync();
+      const uri = rec.getURI();
+      const tooShort = Date.now() - recStartRef.current < 800;
+      if (!send || tooShort || !uri) return;
+      await doUpload({ uri, name: `voice_${Date.now()}.m4a`, type: "audio/m4a" });
+    } catch {
+      // ignore — recording discarded
+    }
+  };
+
+  const copyMessage = async (text: string) => {
+    if (!text) return;
+    await Clipboard.setStringAsync(text);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    setReactionFor(null);
+  };
+
   // Toggle my reaction: if I already reacted with this emoji, remove it; else add.
   const toggleReaction = (messageId: number, emoji: string) => {
+    Haptics.selectionAsync().catch(() => {});
     const msg = messages.find((m) => m.id === messageId);
     const mineAlready = msg?.reactions?.some((r) => r.emoji === emoji && r.user_id === user?.id);
     wsService.send({
@@ -317,14 +386,23 @@ export function ChatScreen({ navigation, route }: Props) {
         ) : null}
         {messages.map((m) => {
           const mine = m.sender_id === user?.id;
-          const img = isImage(m.file_url) ? fileUrl(m.file_url) : null;
-          const text = m.content ?? (m.file_url && !img ? `📎 ${m.file_name ?? "файл"}` : "");
+          const audio = isAudio(m.file_url) ? fileUrl(m.file_url) : null;
+          const img = !audio && isImage(m.file_url) ? fileUrl(m.file_url) : null;
+          const text = m.content ?? (m.file_url && !img && !audio ? `📎 ${m.file_name ?? "файл"}` : "");
           return (
-            <Pressable key={m.id} onLongPress={() => setReactionFor(m.id)} delayLongPress={250}>
+            <Pressable
+              key={m.id}
+              onLongPress={() => {
+                Haptics.selectionAsync().catch(() => {});
+                setReactionFor(m.id);
+              }}
+              delayLongPress={250}
+            >
               <Bubble
                 mine={mine}
                 text={text}
                 imageUri={img}
+                media={audio ? <VoiceMessage uri={audio} mine={mine} /> : undefined}
                 onPressImage={() => img && navigation.navigate("MediaViewer", { url: img })}
                 ts={formatTs(m.created_at)}
                 status={mine ? (peerLastRead >= m.id ? "read" : "delivered") : undefined}
@@ -340,6 +418,8 @@ export function ChatScreen({ navigation, route }: Props) {
                 <ReactionPicker
                   mine={mine}
                   theme={theme}
+                  canCopy={!!m.content}
+                  onCopy={() => copyMessage(m.content ?? "")}
                   onPick={(emoji) => {
                     toggleReaction(m.id, emoji);
                     setReactionFor(null);
@@ -352,6 +432,27 @@ export function ChatScreen({ navigation, route }: Props) {
       </ScrollView>
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        {recording ? (
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 8,
+              paddingHorizontal: 14,
+              paddingVertical: 8,
+              backgroundColor: theme.colors.danger + "22",
+              borderTopWidth: 1,
+              borderTopColor: theme.colors.danger,
+            }}
+          >
+            <View
+              style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: theme.colors.danger }}
+            />
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.ink }}>
+              Идёт запись… ➤ отправить · ✕ отмена
+            </Text>
+          </View>
+        ) : null}
         {attachOpen ? (
           <View
             style={{
@@ -427,20 +528,65 @@ export function ChatScreen({ navigation, route }: Props) {
               }}
             />
           </View>
-          <Pressable
-            onPress={send}
-            disabled={!draft.trim()}
-            style={{
-              width: 40,
-              height: 40,
-              borderRadius: theme.radius.md,
-              backgroundColor: draft.trim() ? theme.colors.accent : theme.colors.bgElev,
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <SendIcon color={draft.trim() ? theme.colors.accentText : theme.colors.inkMuted} />
-          </Pressable>
+          {recording ? (
+            <>
+              <Pressable
+                onPress={() => stopRecording(false)}
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: theme.radius.md,
+                  backgroundColor: theme.colors.bgElev,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Text style={{ color: theme.colors.danger, fontSize: 18, fontWeight: "700" }}>×</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => stopRecording(true)}
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: theme.radius.md,
+                  backgroundColor: theme.colors.accent,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <SendIcon color={theme.colors.accentText} />
+              </Pressable>
+            </>
+          ) : draft.trim() ? (
+            <Pressable
+              onPress={send}
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: theme.radius.md,
+                backgroundColor: theme.colors.accent,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <SendIcon color={theme.colors.accentText} />
+            </Pressable>
+          ) : (
+            <Pressable
+              onPress={startRecording}
+              disabled={starting}
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: theme.radius.md,
+                backgroundColor: theme.colors.bgElev,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Text style={{ fontSize: 18 }}>🎤</Text>
+            </Pressable>
+          )}
         </View>
       </KeyboardAvoidingView>
     </ScreenContainer>
@@ -523,15 +669,20 @@ function ReactionPicker({
   mine,
   theme,
   onPick,
+  canCopy,
+  onCopy,
 }: {
   mine: boolean;
   theme: ThemeT;
   onPick: (emoji: string) => void;
+  canCopy?: boolean;
+  onCopy?: () => void;
 }) {
   return (
     <View
       style={{
         flexDirection: "row",
+        alignItems: "center",
         gap: 6,
         alignSelf: mine ? "flex-end" : "flex-start",
         marginHorizontal: 14,
@@ -550,6 +701,22 @@ function ReactionPicker({
           <Text style={{ fontSize: 22 }}>{e}</Text>
         </Pressable>
       ))}
+      {canCopy && onCopy ? (
+        <Pressable
+          onPress={onCopy}
+          hitSlop={6}
+          style={{
+            marginLeft: 4,
+            paddingLeft: 8,
+            borderLeftWidth: 1,
+            borderLeftColor: theme.colors.border,
+          }}
+        >
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.accent }}>
+            копир.
+          </Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
