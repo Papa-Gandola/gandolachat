@@ -122,10 +122,18 @@ export function useChats(): ChatsState {
     };
   }, [token, refresh]);
 
-  // Transform raw API chats → flat rows the ChatRow component expects.
+  // Transform raw API chats → flat rows the ChatRow component expects,
+  // sorted by most recent activity (newest message first) so a chat you just
+  // wrote in jumps to the top.
   const chats = useMemo<ChatRowData[]>(() => {
     if (!user) return [];
-    return raw.map((c) => {
+    const activityTs = (c: ChatOut): number => {
+      const iso = c.last_message?.created_at;
+      const t = iso ? new Date(iso).getTime() : NaN;
+      return Number.isNaN(t) ? 0 : t;
+    };
+    const sorted = [...raw].sort((a, b) => activityTs(b) - activityTs(a));
+    return sorted.map((c) => {
       const isGroup = c.is_group;
       // For a DM the row should display the OTHER participant — not "Pavel ↔
       // Marina", just "Marina". For groups, show the group name.
