@@ -58,13 +58,13 @@ export function Avatar({ letter, size = 38, bg = "#3a3a3a", online = false, squa
         <View
           style={{
             position: "absolute",
-            right: -1,
-            bottom: -1,
-            width: 11,
-            height: 11,
-            backgroundColor: theme.colors.online,
-            borderRadius: square ? 2 : 6,
-            borderWidth: 2,
+            right: -2,
+            bottom: -2,
+            width: Math.min(16, Math.max(12, size * 0.3)),
+            height: Math.min(16, Math.max(12, size * 0.3)),
+            backgroundColor: "#3ba55d",
+            borderRadius: square ? 3 : size,
+            borderWidth: 2.5,
             borderColor: theme.colors.bg,
           }}
         />

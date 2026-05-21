@@ -27,6 +27,10 @@ export function ChatsListScreen({ navigation }: Props) {
     return true;
   });
 
+  // Count online friends (DMs only — groups don't have a single online state).
+  const dms = chats.filter((c) => !c.group);
+  const onlineFriends = dms.filter((c) => c.online).length;
+
   const toggleTheme = () => setThemeId(themeId === "neo" ? "discord" : "neo");
 
   return (
@@ -35,9 +39,7 @@ export function ChatsListScreen({ navigation }: Props) {
         title="GandolaChat"
         sub={
           chats.length
-            ? theme.decorate
-              ? `${chats.filter((c) => c.online).length} / ${chats.length} онлайн`
-              : `${chats.filter((c) => c.online).length} из ${chats.length} онлайн`
+            ? `${onlineFriends} / ${dms.length} онлайн`
             : theme.decorate
               ? "загрузка..."
               : "Загрузка..."

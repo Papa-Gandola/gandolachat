@@ -65,20 +65,18 @@ export function useChats(): ChatsState {
     if (!user) return;
     setLoading(true);
     setError(null);
-    try {
-      const [chatsRes, unreadRes, onlineRes] = await Promise.all([
-        chatApi.list(),
-        chatApi.getUnreadCounts(),
-        chatApi.getOnlineUsers(),
-      ]);
-      setRaw(chatsRes.data);
-      setUnread(unreadRes.data);
-      setOnline(new Set(onlineRes.data.online_user_ids));
-    } catch (err) {
-      setError(apiErrorMessage(err));
-    } finally {
-      setLoading(false);
-    }
+    // allSettled so one failing endpoint (e.g. unread counts) doesn't wipe out
+    // the chat list or online status.
+    const [chatsRes, unreadRes, onlineRes] = await Promise.allSettled([
+      chatApi.list(),
+      chatApi.getUnreadCounts(),
+      chatApi.getOnlineUsers(),
+    ]);
+    if (chatsRes.status === "fulfilled") setRaw(chatsRes.value.data);
+    else setError(apiErrorMessage(chatsRes.reason));
+    if (unreadRes.status === "fulfilled") setUnread(unreadRes.value.data);
+    if (onlineRes.status === "fulfilled") setOnline(new Set(onlineRes.value.data.online_user_ids));
+    setLoading(false);
   }, [user]);
 
   useEffect(() => {
@@ -106,12 +104,16 @@ export function useChats(): ChatsState {
           return next;
         });
     };
+    // On (re)connect, re-pull the online snapshot — WS-only tracking would
+    // miss friends who were already online before we connected.
+    const onWsOpen = () => refresh();
     wsService.on("new_chat", onNewChat);
     wsService.on("message", onMessage);
     wsService.on("chat_updated", onChatUpdated);
     wsService.on("chat_deleted", onChatDeleted);
     wsService.on("user_online", onUserOnline);
     wsService.on("user_offline", onUserOffline);
+    wsService.on("_ws_open", onWsOpen);
     return () => {
       wsService.off("new_chat", onNewChat);
       wsService.off("message", onMessage);
@@ -119,6 +121,7 @@ export function useChats(): ChatsState {
       wsService.off("chat_deleted", onChatDeleted);
       wsService.off("user_online", onUserOnline);
       wsService.off("user_offline", onUserOffline);
+      wsService.off("_ws_open", onWsOpen);
     };
   }, [token, refresh]);
 
