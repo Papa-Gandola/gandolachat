@@ -104,6 +104,10 @@ export const authApi = {
     getInstance().post<TokenResponse>("/api/auth/login", { username, password }),
   changePassword: (oldPassword: string, newPassword: string) =>
     getInstance().post("/api/auth/change-password", { old_password: oldPassword, new_password: newPassword }),
+  getPendingUsers: () =>
+    getInstance().get<{ id: number; username: string; created_at: string }[]>("/api/auth/pending-users"),
+  approveUser: (userId: number) => getInstance().post(`/api/auth/approve-user/${userId}`),
+  rejectUser: (userId: number) => getInstance().post(`/api/auth/reject-user/${userId}`),
 };
 
 export const userApi = {
@@ -155,6 +159,8 @@ export const chatApi = {
     getInstance().delete<ChatOut>(`/api/chats/${chatId}/members/${userId}`),
   leaveChat: (chatId: number) => getInstance().post(`/api/chats/${chatId}/leave`),
   deleteChat: (chatId: number) => getInstance().delete(`/api/chats/${chatId}`),
+  adminDeleteOldMessages: (beforeDays: number) =>
+    getInstance().delete<{ deleted: number; before: string }>(`/api/chats/admin/messages/old?before_days=${beforeDays}`),
   stats: (chatId: number) => getInstance().get<ChatStats>(`/api/chats/${chatId}/stats`),
   uploadGroupAvatar: async (chatId: number, file: { uri: string; name: string; type: string }): Promise<ChatOut> => {
     const token = await SecureStore.getItemAsync(TOKEN_KEY);
