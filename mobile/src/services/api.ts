@@ -29,6 +29,7 @@ export interface MessageOut {
   reply_to_content?: string | null;
   created_at: string;
   media_group_id?: string | null;
+  reactions?: Array<{ emoji: string; user_id: number }>;
 }
 
 export interface ChatOut {
@@ -110,4 +111,25 @@ export const chatApi = {
   },
   getUnreadCounts: () => getInstance().get<Record<string, number>>("/api/chats/unread/counts"),
   getOnlineUsers: () => getInstance().get<{ online_user_ids: number[] }>("/api/chats/online/users"),
+  getReadStatus: (chatId: number) =>
+    getInstance().get<Array<{ user_id: number; last_read_message_id: number | null }>>(
+      `/api/chats/${chatId}/read-status`,
+    ),
+  uploadFile: (
+    chatId: number,
+    file: { uri: string; name: string; type: string },
+    caption = "",
+  ) => {
+    const form = new FormData();
+    // RN FormData takes a {uri,name,type} object for file parts.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    form.append("file", file as any);
+    if (caption) form.append("caption", caption);
+    // Do NOT set Content-Type manually — RN's XHR layer adds the multipart
+    // boundary automatically when the body is FormData. Setting it by hand
+    // produces a boundary-less header the server can't parse.
+    return getInstance().post<MessageOut>(`/api/chats/${chatId}/files`, form, {
+      timeout: 60000,
+    });
+  },
 };

@@ -1,5 +1,5 @@
 import { ReactNode } from "react";
-import { Text, View } from "react-native";
+import { Image, Pressable, Text, View } from "react-native";
 
 import { useTheme } from "../theme";
 import { ReadBar, ReadStatus } from "./ReadBar";
@@ -9,10 +9,12 @@ interface Props {
   text?: string;
   ts?: string;
   status?: ReadStatus;
+  imageUri?: string | null;
+  onPressImage?: () => void;
   children?: ReactNode;
 }
 
-export function Bubble({ mine = false, text, ts, status, children }: Props) {
+export function Bubble({ mine = false, text, ts, status, imageUri, onPressImage, children }: Props) {
   const theme = useTheme();
   return (
     <View
@@ -36,6 +38,21 @@ export function Bubble({ mine = false, text, ts, status, children }: Props) {
           borderTopRightRadius: mine ? 6 : theme.radius.bubble,
         }}
       >
+        {imageUri ? (
+          <Pressable onPress={onPressImage}>
+            <Image
+              source={{ uri: imageUri }}
+              style={{
+                width: 220,
+                height: 220,
+                borderRadius: 8,
+                marginBottom: text ? 6 : 0,
+                backgroundColor: "rgba(255,255,255,0.05)",
+              }}
+              resizeMode="cover"
+            />
+          </Pressable>
+        ) : null}
         {text ? (
           <Text
             style={{

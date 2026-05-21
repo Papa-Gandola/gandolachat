@@ -1,21 +1,18 @@
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { Pressable, Text, View } from "react-native";
+import { Image, Pressable, View } from "react-native";
 
 import { CloseIcon } from "../../components/icons";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import { ChatsStackParamList } from "../../navigation/types";
-import { useTheme } from "../../theme";
 
 type Props = NativeStackScreenProps<ChatsStackParamList, "MediaViewer">;
 
-export function MediaViewerScreen({ navigation }: Props) {
-  const theme = useTheme();
+export function MediaViewerScreen({ navigation, route }: Props) {
+  const { url } = route.params;
   return (
     <ScreenContainer edgeToEdge>
       <View style={{ flex: 1, backgroundColor: "#000", alignItems: "center", justifyContent: "center" }}>
-        <Text style={{ color: theme.colors.inkDim, fontFamily: theme.fonts.mono }}>
-          {theme.decorate ? "// МЕДИА_ПРОСМОТРЩИК" : "Медиа просмотрщик"}
-        </Text>
+        <Image source={{ uri: url }} style={{ width: "100%", height: "100%" }} resizeMode="contain" />
       </View>
       <Pressable
         onPress={() => navigation.goBack()}

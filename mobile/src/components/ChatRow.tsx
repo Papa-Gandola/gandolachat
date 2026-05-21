@@ -20,6 +20,7 @@ export interface ChatRowData {
   // For DMs: the other participant's user id, so the chat screen can deep-link
   // into their profile. Undefined for groups.
   peerId?: number;
+  avatarUrl?: string | null;
 }
 
 interface Props {
@@ -49,6 +50,7 @@ export function ChatRow({ chat, onPress }: Props) {
         bg={chat.color}
         online={chat.online}
         square={chat.group}
+        uri={chat.avatarUrl}
       />
       <View style={{ flex: 1, minWidth: 0 }}>
         <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
