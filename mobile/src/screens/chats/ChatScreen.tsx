@@ -423,8 +423,10 @@ export function ChatScreen({ navigation, route }: Props) {
         </IconBtn>
         <Pressable
           style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 10 }}
-          disabled={userId == null}
-          onPress={() => userId != null && navigation.navigate("OtherProfile", { userId })}
+          onPress={() => {
+            if (isGroup) navigation.navigate("ChatInfo", { chatId });
+            else if (userId != null) navigation.navigate("OtherProfile", { userId });
+          }}
         >
           <Avatar letter={(name[0] ?? "?").toUpperCase()} size={36} bg="#ef5350" uri={avatarUrl} />
           <View style={{ flex: 1 }}>

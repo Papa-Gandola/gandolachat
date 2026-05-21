@@ -51,6 +51,12 @@ export interface TokenResponse {
   user: UserOut;
 }
 
+export interface ChatStats {
+  media_count: number;
+  link_count: number;
+  file_count: number;
+}
+
 const TOKEN_KEY = "gandola.token";
 
 let instance: AxiosInstance | null = null;
@@ -141,6 +147,37 @@ export const chatApi = {
       member_ids: memberIds,
       allow_all_write: allowAllWrite,
     }),
+  update: (chatId: number, data: { name?: string; description?: string; admin_ids?: number[] }) =>
+    getInstance().patch<ChatOut>(`/api/chats/${chatId}`, data),
+  addMember: (chatId: number, userId: number) =>
+    getInstance().post(`/api/chats/${chatId}/members`, { user_id: userId }),
+  kickMember: (chatId: number, userId: number) =>
+    getInstance().delete<ChatOut>(`/api/chats/${chatId}/members/${userId}`),
+  leaveChat: (chatId: number) => getInstance().post(`/api/chats/${chatId}/leave`),
+  deleteChat: (chatId: number) => getInstance().delete(`/api/chats/${chatId}`),
+  stats: (chatId: number) => getInstance().get<ChatStats>(`/api/chats/${chatId}/stats`),
+  uploadGroupAvatar: async (chatId: number, file: { uri: string; name: string; type: string }): Promise<ChatOut> => {
+    const token = await SecureStore.getItemAsync(TOKEN_KEY);
+    const form = new FormData();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    form.append("file", file as any);
+    const res = await fetch(`${API_URL}/api/chats/${chatId}/avatar`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      body: form,
+    });
+    if (!res.ok) {
+      let detail = `Ошибка ${res.status}`;
+      try {
+        const body = (await res.json()) as { detail?: string };
+        if (body.detail) detail = body.detail;
+      } catch {
+        // non-JSON error body
+      }
+      throw new Error(detail);
+    }
+    return (await res.json()) as ChatOut;
+  },
   getMessages: (chatId: number, limit = 50, beforeId?: number) => {
     const params = new URLSearchParams({ limit: String(limit) });
     if (beforeId) params.append("before_id", String(beforeId));
