@@ -48,6 +48,11 @@ function fileUrl(url: string | null | undefined): string | null {
   return `${API_URL}${url.startsWith("/") ? "" : "/"}${url}`;
 }
 
+// Module-level handle to the most recent recording. expo-av allows only one
+// prepared recording globally, so if one leaks (component re-render, fast
+// taps) we can force-unload it before starting the next.
+let lastRecording: Audio.Recording | null = null;
+
 type Props = NativeStackScreenProps<ChatsStackParamList, "Chat">;
 
 export function ChatScreen({ navigation, route }: Props) {
@@ -214,12 +219,30 @@ export function ChatScreen({ navigation, route }: Props) {
         setRecError("Нет доступа к микрофону — разреши его в настройках Android.");
         return;
       }
+      // Force-release any recorder leaked from a previous attempt (ref cleared
+      // but native object not unloaded) — otherwise prepare throws "Only one
+      // recording object can be prepared at a given time".
+      if (lastRecording) {
+        try {
+          await lastRecording.stopAndUnloadAsync();
+        } catch {
+          // already gone
+        }
+        lastRecording = null;
+      }
       await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      // Manual prepare → start (proven reliable; createAsync misbehaved on some
-      // devices: the mic turned on but the recording object was lost). Hold the
-      // ref BEFORE start so it can never be garbage-collected mid-recording.
+      // Manual prepare → start (createAsync misbehaved on some devices). Hold
+      // the ref BEFORE start so the object can't be garbage-collected.
       const rec = new Audio.Recording();
-      await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      try {
+        await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      } catch {
+        // Stuck global recorder — nudge the audio session and retry once.
+        await Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => {});
+        await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+        await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      }
+      lastRecording = rec;
       recordingRef.current = rec;
       await rec.startAsync();
       recStartRef.current = Date.now();
@@ -227,6 +250,7 @@ export function ChatScreen({ navigation, route }: Props) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     } catch (err) {
       recordingRef.current = null;
+      lastRecording = null;
       setRecError(err instanceof Error ? err.message : String(err));
     } finally {
       recBusyRef.current = false;
@@ -251,6 +275,7 @@ export function ChatScreen({ navigation, route }: Props) {
     } catch (err) {
       setRecError(err instanceof Error ? err.message : String(err));
     } finally {
+      lastRecording = null;
       recBusyRef.current = false;
     }
     if (send && !tooShort && uri) {
