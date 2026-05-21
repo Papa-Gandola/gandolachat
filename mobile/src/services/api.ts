@@ -96,12 +96,39 @@ export const authApi = {
     }),
   login: (username: string, password: string) =>
     getInstance().post<TokenResponse>("/api/auth/login", { username, password }),
+  changePassword: (oldPassword: string, newPassword: string) =>
+    getInstance().post("/api/auth/change-password", { old_password: oldPassword, new_password: newPassword }),
 };
 
 export const userApi = {
   me: () => getInstance().get<TokenResponse>("/api/users/me"),
   getUser: (userId: number) => getInstance().get<UserOut>(`/api/users/${userId}`),
   search: (q: string) => getInstance().get<UserOut[]>(`/api/users/search?q=${encodeURIComponent(q)}`),
+  updateProfile: (data: { username?: string; status?: string; about?: string }) =>
+    getInstance().patch<UserOut>("/api/users/me", data),
+  uploadAvatar: async (file: { uri: string; name: string; type: string }): Promise<UserOut> => {
+    // Multipart via fetch (RN's fetch builds the boundary correctly for file parts).
+    const token = await SecureStore.getItemAsync(TOKEN_KEY);
+    const form = new FormData();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    form.append("file", file as any);
+    const res = await fetch(`${API_URL}/api/users/avatar`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      body: form,
+    });
+    if (!res.ok) {
+      let detail = `Ошибка ${res.status}`;
+      try {
+        const body = (await res.json()) as { detail?: string };
+        if (body.detail) detail = body.detail;
+      } catch {
+        // non-JSON error body
+      }
+      throw new Error(detail);
+    }
+    return (await res.json()) as UserOut;
+  },
 };
 
 export const chatApi = {

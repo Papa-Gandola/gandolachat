@@ -14,6 +14,7 @@ interface AuthState {
   signOut: () => void;
   register: (username: string, password: string) => Promise<{ pending: boolean; message?: string }>;
   clearError: () => void;
+  updateUser: (user: UserOut) => void;
 }
 
 const TOKEN_KEY = "gandola.token";
@@ -28,6 +29,7 @@ const AuthContext = createContext<AuthState>({
   signOut: () => {},
   register: async () => ({ pending: false }),
   clearError: () => {},
+  updateUser: () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -77,6 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loading,
       error,
       clearError: () => setError(null),
+      updateUser: (u: UserOut) => setUser(u),
       signIn: async (username, password) => {
         setLoading(true);
         setError(null);
