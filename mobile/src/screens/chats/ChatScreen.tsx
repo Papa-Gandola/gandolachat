@@ -65,6 +65,7 @@ export function ChatScreen({ navigation, route }: Props) {
   // one prepared recording at a time, so block a new start until teardown ends.
   const recBusyRef = useRef(false);
   const [recording, setRecording] = useState(false);
+  const [recError, setRecError] = useState<string | null>(null);
   const recStartRef = useRef(0);
   // Highest message id the OTHER side has read — drives the ✓✓ indicator on
   // my own bubbles.
@@ -206,23 +207,27 @@ export function ChatScreen({ navigation, route }: Props) {
   const startRecording = async () => {
     if (recBusyRef.current || recordingRef.current) return;
     recBusyRef.current = true;
+    setRecError(null);
     try {
       const perm = await Audio.requestPermissionsAsync();
       if (!perm.granted) {
-        Alert.alert("Нет доступа к микрофону", "Разреши доступ к микрофону в настройках Android.");
+        setRecError("Нет доступа к микрофону — разреши его в настройках Android.");
         return;
       }
       await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      const { recording: rec } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY,
-      );
+      // Manual prepare → start (proven reliable; createAsync misbehaved on some
+      // devices: the mic turned on but the recording object was lost). Hold the
+      // ref BEFORE start so it can never be garbage-collected mid-recording.
+      const rec = new Audio.Recording();
+      await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
       recordingRef.current = rec;
+      await rec.startAsync();
       recStartRef.current = Date.now();
       setRecording(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     } catch (err) {
       recordingRef.current = null;
-      Alert.alert("Не удалось записать", err instanceof Error ? err.message : String(err));
+      setRecError(err instanceof Error ? err.message : String(err));
     } finally {
       recBusyRef.current = false;
     }
@@ -244,7 +249,7 @@ export function ChatScreen({ navigation, route }: Props) {
       uri = rec.getURI();
       tooShort = Date.now() - recStartRef.current < 800;
     } catch (err) {
-      Alert.alert("Ошибка записи", err instanceof Error ? err.message : String(err));
+      setRecError(err instanceof Error ? err.message : String(err));
     } finally {
       recBusyRef.current = false;
     }
@@ -426,6 +431,22 @@ export function ChatScreen({ navigation, route }: Props) {
       </ScrollView>
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        {recError ? (
+          <Pressable
+            onPress={() => setRecError(null)}
+            style={{
+              paddingHorizontal: 14,
+              paddingVertical: 8,
+              backgroundColor: theme.colors.danger + "22",
+              borderTopWidth: 1,
+              borderTopColor: theme.colors.danger,
+            }}
+          >
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.danger }}>
+              микрофон: {recError} (нажми чтобы скрыть)
+            </Text>
+          </Pressable>
+        ) : null}
         {recording ? (
           <View
             style={{
