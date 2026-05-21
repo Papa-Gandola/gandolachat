@@ -17,6 +17,7 @@ import { ChevronLeftIcon, PhoneIcon, SendIcon } from "../../components/icons";
 import { IconBtn } from "../../components/IconBtn";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import { ChatsStackParamList } from "../../navigation/types";
+import { chatApi } from "../../services/api";
 import { useAuth } from "../../services/AuthContext";
 import { useMessages } from "../../services/useMessages";
 import { wsService } from "../../services/ws";
@@ -27,10 +28,13 @@ type Props = NativeStackScreenProps<ChatsStackParamList, "Chat">;
 export function ChatScreen({ navigation, route }: Props) {
   const theme = useTheme();
   const { user } = useAuth();
-  const { chatId, name, userId } = route.params;
+  const { chatId, name, userId, avatarUrl } = route.params;
   const { messages, loading, error } = useMessages(chatId);
   const scrollRef = useRef<ScrollView | null>(null);
   const [draft, setDraft] = useState("");
+  // Highest message id the OTHER side has read — drives the ✓✓ indicator on
+  // my own bubbles.
+  const [peerLastRead, setPeerLastRead] = useState(0);
 
   // Auto-scroll to bottom when new messages arrive — simple "messenger feel"
   // and matches the desktop behaviour. setTimeout(0) lets layout settle.
@@ -38,6 +42,36 @@ export function ChatScreen({ navigation, route }: Props) {
     const t = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 0);
     return () => clearTimeout(t);
   }, [messages.length]);
+
+  // Read receipts: fetch who's read what, then keep it live via WS.
+  useEffect(() => {
+    const numericId = Number(chatId);
+    chatApi
+      .getReadStatus(numericId)
+      .then((res) => {
+        const maxRead = res.data
+          .filter((r) => r.user_id !== user?.id)
+          .reduce((mx, r) => Math.max(mx, r.last_read_message_id ?? 0), 0);
+        setPeerLastRead(maxRead);
+      })
+      .catch(() => {});
+    const onRead = (d: Record<string, unknown>) => {
+      if ((d.chat_id as number) !== numericId) return;
+      if ((d.user_id as number) === user?.id) return;
+      const last = d.last_read_message_id as number | undefined;
+      if (typeof last === "number") setPeerLastRead((prev) => Math.max(prev, last));
+    };
+    wsService.on("message_read", onRead);
+    return () => wsService.off("message_read", onRead);
+  }, [chatId, user?.id]);
+
+  // Mark the newest message as read so the peer sees our ✓✓ and our unread
+  // badge clears. Fires whenever the latest message changes.
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const latest = messages[messages.length - 1];
+    wsService.send({ type: "mark_read", chat_id: Number(chatId), message_id: latest.id });
+  }, [chatId, messages]);
 
   const send = () => {
     const content = draft.trim();
@@ -76,7 +110,7 @@ export function ChatScreen({ navigation, route }: Props) {
           disabled={userId == null}
           onPress={() => userId != null && navigation.navigate("OtherProfile", { userId })}
         >
-          <Avatar letter={(name[0] ?? "?").toUpperCase()} size={36} bg="#ef5350" />
+          <Avatar letter={(name[0] ?? "?").toUpperCase()} size={36} bg="#ef5350" uri={avatarUrl} />
           <View style={{ flex: 1 }}>
             <Text
               style={{
@@ -132,14 +166,18 @@ export function ChatScreen({ navigation, route }: Props) {
             </Text>
           </View>
         ) : null}
-        {messages.map((m) => (
-          <Bubble
-            key={m.id}
-            mine={m.sender_id === user?.id}
-            text={m.content ?? (m.file_name ? `📎 ${m.file_name}` : "")}
-            ts={formatTs(m.created_at)}
-          />
-        ))}
+        {messages.map((m) => {
+          const mine = m.sender_id === user?.id;
+          return (
+            <Bubble
+              key={m.id}
+              mine={mine}
+              text={m.content ?? (m.file_name ? `📎 ${m.file_name}` : "")}
+              ts={formatTs(m.created_at)}
+              status={mine ? (peerLastRead >= m.id ? "read" : "delivered") : undefined}
+            />
+          );
+        })}
       </ScrollView>
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>

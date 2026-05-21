@@ -110,4 +110,8 @@ export const chatApi = {
   },
   getUnreadCounts: () => getInstance().get<Record<string, number>>("/api/chats/unread/counts"),
   getOnlineUsers: () => getInstance().get<{ online_user_ids: number[] }>("/api/chats/online/users"),
+  getReadStatus: (chatId: number) =>
+    getInstance().get<Array<{ user_id: number; last_read_message_id: number | null }>>(
+      `/api/chats/${chatId}/read-status`,
+    ),
 };

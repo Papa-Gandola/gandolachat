@@ -43,7 +43,7 @@ export function MyProfileScreen({ navigation }: Props) {
               borderColor: theme.colors.accent,
             }}
           >
-            <Avatar letter={initial} size={104} bg="#ff7f3d" />
+            <Avatar letter={initial} size={104} bg="#ff7f3d" uri={u?.avatar_url} />
           </View>
           <Text
             style={{

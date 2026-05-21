@@ -137,6 +137,7 @@ export function ChatsListScreen({ navigation }: Props) {
                 chatId: c.id,
                 name: c.name,
                 userId: c.peerId,
+                avatarUrl: c.avatarUrl,
               })
             }
           />

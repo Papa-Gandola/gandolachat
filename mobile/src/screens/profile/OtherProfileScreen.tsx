@@ -84,7 +84,7 @@ export function OtherProfileScreen({ navigation, route }: Props) {
               borderBottomColor: theme.colors.border,
             }}
           >
-            <Avatar letter={(user.username[0] ?? "?").toUpperCase()} size={104} bg="#ef5350" />
+            <Avatar letter={(user.username[0] ?? "?").toUpperCase()} size={104} bg="#ef5350" uri={user.avatar_url} />
             <Text
               style={{
                 fontFamily: theme.fonts.mono,

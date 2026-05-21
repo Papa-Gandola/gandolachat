@@ -140,6 +140,7 @@ export function useChats(): ChatsState {
       const counterpart = isGroup ? null : c.members.find((m) => m.id !== user.id) ?? c.members[0];
       const displayName = isGroup ? c.name ?? "Группа" : counterpart?.username ?? "Без имени";
       const isOnline = !isGroup && counterpart ? online.has(counterpart.id) : false;
+      const avatarUrl = isGroup ? c.avatar_url ?? null : counterpart?.avatar_url ?? null;
       const last = c.last_message;
       const lastText = last?.content
         ? last.content
@@ -161,6 +162,7 @@ export function useChats(): ChatsState {
         online: isOnline,
         group: isGroup,
         peerId: counterpart?.id,
+        avatarUrl,
       };
     });
   }, [raw, user, unread, online]);
