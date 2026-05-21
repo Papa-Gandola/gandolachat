@@ -84,6 +84,7 @@ export function apiErrorMessage(err: unknown): string {
     if (!ax.response) return "Нет связи с сервером";
     return `Ошибка ${ax.response.status}`;
   }
+  if (err instanceof Error && err.message) return err.message;
   return "Неизвестная ошибка";
 }
 
@@ -115,21 +116,35 @@ export const chatApi = {
     getInstance().get<Array<{ user_id: number; last_read_message_id: number | null }>>(
       `/api/chats/${chatId}/read-status`,
     ),
-  uploadFile: (
+  uploadFile: async (
     chatId: number,
     file: { uri: string; name: string; type: string },
     caption = "",
-  ) => {
+  ): Promise<MessageOut> => {
+    // Use fetch (not axios) for multipart — RN's fetch builds the multipart
+    // boundary correctly for { uri, name, type } file parts, where axios
+    // routinely fails and surfaces as a network error.
+    const token = await SecureStore.getItemAsync(TOKEN_KEY);
     const form = new FormData();
-    // RN FormData takes a {uri,name,type} object for file parts.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     form.append("file", file as any);
     if (caption) form.append("caption", caption);
-    // Do NOT set Content-Type manually — RN's XHR layer adds the multipart
-    // boundary automatically when the body is FormData. Setting it by hand
-    // produces a boundary-less header the server can't parse.
-    return getInstance().post<MessageOut>(`/api/chats/${chatId}/files`, form, {
-      timeout: 60000,
+    const qs = caption ? `?caption=${encodeURIComponent(caption)}` : "";
+    const res = await fetch(`${API_URL}/api/chats/${chatId}/files${qs}`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      body: form,
     });
+    if (!res.ok) {
+      let detail = `Ошибка ${res.status}`;
+      try {
+        const body = (await res.json()) as { detail?: string };
+        if (body.detail) detail = body.detail;
+      } catch {
+        // non-JSON error body
+      }
+      throw new Error(detail);
+    }
+    return (await res.json()) as MessageOut;
   },
 };
