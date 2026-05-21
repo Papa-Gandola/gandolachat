@@ -62,6 +62,7 @@ export function ChatScreen({ navigation, route }: Props) {
   const [reactionFor, setReactionFor] = useState<number | null>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const [recording, setRecording] = useState(false);
+  const [starting, setStarting] = useState(false);
   const recStartRef = useRef(0);
   // Highest message id the OTHER side has read — drives the ✓✓ indicator on
   // my own bubbles.
@@ -76,6 +77,14 @@ export function ChatScreen({ navigation, route }: Props) {
     const t = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 0);
     return () => clearTimeout(t);
   }, [messages.length]);
+
+  // Discard any in-progress recording if the screen unmounts mid-record.
+  useEffect(() => {
+    return () => {
+      recordingRef.current?.stopAndUnloadAsync().catch(() => {});
+      recordingRef.current = null;
+    };
+  }, []);
 
   // Read receipts: fetch who's read what, then keep it live via WS.
   useEffect(() => {
@@ -211,6 +220,8 @@ export function ChatScreen({ navigation, route }: Props) {
   };
 
   const startRecording = async () => {
+    if (recordingRef.current || starting) return; // guard against double-start
+    setStarting(true);
     try {
       const perm = await Audio.requestPermissionsAsync();
       if (!perm.granted) {
@@ -227,6 +238,8 @@ export function ChatScreen({ navigation, route }: Props) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     } catch (err) {
       Alert.alert("Не удалось записать", apiErrorMessage(err));
+    } finally {
+      setStarting(false);
     }
   };
 
@@ -436,7 +449,7 @@ export function ChatScreen({ navigation, route }: Props) {
               style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: theme.colors.danger }}
             />
             <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.ink }}>
-              Запись… отпусти чтобы отправить
+              Идёт запись… ➤ отправить · ✕ отмена
             </Text>
           </View>
         ) : null}
@@ -515,7 +528,36 @@ export function ChatScreen({ navigation, route }: Props) {
               }}
             />
           </View>
-          {draft.trim() ? (
+          {recording ? (
+            <>
+              <Pressable
+                onPress={() => stopRecording(false)}
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: theme.radius.md,
+                  backgroundColor: theme.colors.bgElev,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Text style={{ color: theme.colors.danger, fontSize: 18, fontWeight: "700" }}>×</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => stopRecording(true)}
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: theme.radius.md,
+                  backgroundColor: theme.colors.accent,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <SendIcon color={theme.colors.accentText} />
+              </Pressable>
+            </>
+          ) : draft.trim() ? (
             <Pressable
               onPress={send}
               style={{
@@ -531,13 +573,13 @@ export function ChatScreen({ navigation, route }: Props) {
             </Pressable>
           ) : (
             <Pressable
-              onPressIn={startRecording}
-              onPressOut={() => stopRecording(true)}
+              onPress={startRecording}
+              disabled={starting}
               style={{
                 width: 40,
                 height: 40,
                 borderRadius: theme.radius.md,
-                backgroundColor: recording ? theme.colors.danger : theme.colors.bgElev,
+                backgroundColor: theme.colors.bgElev,
                 alignItems: "center",
                 justifyContent: "center",
               }}
