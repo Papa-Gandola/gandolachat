@@ -33,6 +33,7 @@ export type ChatsStackParamList = {
   MediaViewer: { url: string };
   StickerPicker: undefined;
   Camera: { chatId: string };
+  Poker: { chatId: string; chatName: string };
 };
 
 export type CallsStackParamList = {

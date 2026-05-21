@@ -202,3 +202,84 @@ export const chatApi = {
     throw lastErr;
   },
 };
+
+export interface PokerSeatOut {
+  id: number;
+  user_id: number;
+  username: string;
+  avatar_url: string | null;
+  seat_index: number;
+  stack: number;
+  is_active: boolean;
+}
+
+export interface PokerTableOut {
+  id: number;
+  chat_id: number;
+  created_by: number;
+  status: "lobby" | "playing" | "finished";
+  starting_stack: number;
+  starting_small_blind: number;
+  starting_big_blind: number;
+  blind_increase_minutes: number;
+  max_seats: number;
+  seats: PokerSeatOut[];
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+}
+
+export interface PokerPlayerView {
+  user_id: number;
+  seat_index: number;
+  stack: number;
+  bet: number;
+  has_folded: boolean;
+  is_all_in: boolean;
+  is_my_turn: boolean;
+  hole: string[];
+}
+
+export interface PokerHandView {
+  hand_no: number;
+  button_seat: number;
+  community: string[];
+  pot: number;
+  current_bet: number;
+  min_raise: number;
+  to_act_seat: number | null;
+  street: "preflop" | "flop" | "turn" | "river" | "showdown" | "done";
+  last_action: { user_id: number; action: string; amount: number } | null;
+}
+
+export interface PokerHandSummary {
+  winner_user_ids: number[];
+  winning_hand?: string | null;
+  pot: number;
+  reason: string;
+  community: string[];
+  showdown: { user_id: number; hole: string[]; hand: string }[];
+}
+
+export interface PokerGameView {
+  table_id: number;
+  small_blind: number;
+  big_blind: number;
+  blind_level: number;
+  next_blind_at: number;
+  finished: boolean;
+  winner_user_id: number | null;
+  last_summary: PokerHandSummary | null;
+  hand: PokerHandView | null;
+  players: PokerPlayerView[];
+}
+
+export const pokerApi = {
+  list: (chatId: number) => getInstance().get<PokerTableOut[]>(`/api/poker?chat_id=${chatId}`),
+  create: (chatId: number, maxSeats = 6) =>
+    getInstance().post<PokerTableOut>("/api/poker", { chat_id: chatId, max_seats: maxSeats }),
+  join: (tableId: number) => getInstance().post<PokerTableOut>(`/api/poker/${tableId}/join`),
+  leave: (tableId: number) => getInstance().post<PokerTableOut | null>(`/api/poker/${tableId}/leave`),
+  start: (tableId: number) => getInstance().post<PokerTableOut>(`/api/poker/${tableId}/start`),
+  close: (tableId: number) => getInstance().post<{ ok: boolean }>(`/api/poker/${tableId}/close`),
+};

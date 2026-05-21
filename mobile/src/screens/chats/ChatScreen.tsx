@@ -456,6 +456,9 @@ export function ChatScreen({ navigation, route }: Props) {
             ) : null}
           </View>
         </Pressable>
+        <IconBtn onPress={() => navigation.navigate("Poker", { chatId, chatName: name })}>
+          <Text style={{ fontSize: 18 }}>🎴</Text>
+        </IconBtn>
         <IconBtn>
           <PhoneIcon color={theme.colors.ink} />
         </IconBtn>
