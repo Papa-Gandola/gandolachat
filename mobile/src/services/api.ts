@@ -114,4 +114,21 @@ export const chatApi = {
     getInstance().get<Array<{ user_id: number; last_read_message_id: number | null }>>(
       `/api/chats/${chatId}/read-status`,
     ),
+  uploadFile: (
+    chatId: number,
+    file: { uri: string; name: string; type: string },
+    caption = "",
+  ) => {
+    const form = new FormData();
+    // RN FormData takes a {uri,name,type} object for file parts.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    form.append("file", file as any);
+    if (caption) form.append("caption", caption);
+    // Do NOT set Content-Type manually — RN's XHR layer adds the multipart
+    // boundary automatically when the body is FormData. Setting it by hand
+    // produces a boundary-less header the server can't parse.
+    return getInstance().post<MessageOut>(`/api/chats/${chatId}/files`, form, {
+      timeout: 60000,
+    });
+  },
 };

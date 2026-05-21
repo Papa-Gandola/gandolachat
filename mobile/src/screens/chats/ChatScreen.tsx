@@ -1,7 +1,10 @@
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
+import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -17,11 +20,24 @@ import { ChevronLeftIcon, PhoneIcon, SendIcon } from "../../components/icons";
 import { IconBtn } from "../../components/IconBtn";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import { ChatsStackParamList } from "../../navigation/types";
-import { chatApi } from "../../services/api";
+import { apiErrorMessage, chatApi } from "../../services/api";
+import { API_URL } from "../../services/config";
 import { useAuth } from "../../services/AuthContext";
 import { useMessages } from "../../services/useMessages";
 import { wsService } from "../../services/ws";
 import { useTheme } from "../../theme";
+
+const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp|heic)$/i;
+
+function isImage(url: string | null | undefined): boolean {
+  return !!url && IMAGE_EXT.test(url);
+}
+
+function fileUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  if (url.startsWith("http")) return url;
+  return `${API_URL}${url.startsWith("/") ? "" : "/"}${url}`;
+}
 
 type Props = NativeStackScreenProps<ChatsStackParamList, "Chat">;
 
@@ -32,6 +48,8 @@ export function ChatScreen({ navigation, route }: Props) {
   const { messages, loading, error } = useMessages(chatId);
   const scrollRef = useRef<ScrollView | null>(null);
   const [draft, setDraft] = useState("");
+  const [attachOpen, setAttachOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
   // Highest message id the OTHER side has read — drives the ✓✓ indicator on
   // my own bubbles.
   const [peerLastRead, setPeerLastRead] = useState(0);
@@ -86,6 +104,67 @@ export function ChatScreen({ navigation, route }: Props) {
     // Server will echo the message back via WebSocket and useMessages will
     // pick it up. No optimistic insert in this iteration — keeps the code
     // small and the latency is already <100ms for the round-trip.
+  };
+
+  const doUpload = async (file: { uri: string; name: string; type: string }) => {
+    setAttachOpen(false);
+    setUploading(true);
+    try {
+      // The server broadcasts the resulting message over WS, so useMessages
+      // appends it — no need to use the response here.
+      await chatApi.uploadFile(Number(chatId), file, draft.trim());
+      setDraft("");
+    } catch (err) {
+      Alert.alert("Не удалось отправить", apiErrorMessage(err));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const pickPhoto = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      setAttachOpen(false);
+      return;
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.8,
+    });
+    if (res.canceled || !res.assets[0]) return;
+    const a = res.assets[0];
+    await doUpload({
+      uri: a.uri,
+      name: a.fileName ?? `photo_${Date.now()}.jpg`,
+      type: a.mimeType ?? "image/jpeg",
+    });
+  };
+
+  const takePhoto = async () => {
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      setAttachOpen(false);
+      return;
+    }
+    const res = await ImagePicker.launchCameraAsync({ quality: 0.8 });
+    if (res.canceled || !res.assets[0]) return;
+    const a = res.assets[0];
+    await doUpload({
+      uri: a.uri,
+      name: a.fileName ?? `camera_${Date.now()}.jpg`,
+      type: a.mimeType ?? "image/jpeg",
+    });
+  };
+
+  const pickFile = async () => {
+    const res = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
+    if (res.canceled || !res.assets[0]) return;
+    const a = res.assets[0];
+    await doUpload({
+      uri: a.uri,
+      name: a.name ?? `file_${Date.now()}`,
+      type: a.mimeType ?? "application/octet-stream",
+    });
   };
 
   return (
@@ -168,11 +247,15 @@ export function ChatScreen({ navigation, route }: Props) {
         ) : null}
         {messages.map((m) => {
           const mine = m.sender_id === user?.id;
+          const img = isImage(m.file_url) ? fileUrl(m.file_url) : null;
+          const text = m.content ?? (m.file_url && !img ? `📎 ${m.file_name ?? "файл"}` : "");
           return (
             <Bubble
               key={m.id}
               mine={mine}
-              text={m.content ?? (m.file_name ? `📎 ${m.file_name}` : "")}
+              text={text}
+              imageUri={img}
+              onPressImage={() => img && navigation.navigate("MediaViewer", { url: img })}
               ts={formatTs(m.created_at)}
               status={mine ? (peerLastRead >= m.id ? "read" : "delivered") : undefined}
             />
@@ -181,6 +264,23 @@ export function ChatScreen({ navigation, route }: Props) {
       </ScrollView>
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        {attachOpen ? (
+          <View
+            style={{
+              flexDirection: "row",
+              gap: 10,
+              paddingHorizontal: 12,
+              paddingVertical: 10,
+              borderTopWidth: 1,
+              borderTopColor: theme.colors.border,
+              backgroundColor: theme.colors.bgElev,
+            }}
+          >
+            <AttachOption label="Фото" onPress={pickPhoto} theme={theme} />
+            <AttachOption label="Камера" onPress={takePhoto} theme={theme} />
+            <AttachOption label="Файл" onPress={pickFile} theme={theme} />
+          </View>
+        ) : null}
         <View
           style={{
             flexDirection: "row",
@@ -194,6 +294,8 @@ export function ChatScreen({ navigation, route }: Props) {
           }}
         >
           <Pressable
+            onPress={() => setAttachOpen((v) => !v)}
+            disabled={uploading}
             style={{
               width: 36,
               height: 36,
@@ -203,7 +305,13 @@ export function ChatScreen({ navigation, route }: Props) {
               backgroundColor: theme.colors.bgElev,
             }}
           >
-            <Text style={{ color: theme.colors.accent, fontSize: 20, fontWeight: "700" }}>+</Text>
+            {uploading ? (
+              <ActivityIndicator size="small" color={theme.colors.accent} />
+            ) : (
+              <Text style={{ color: theme.colors.accent, fontSize: 20, fontWeight: "700" }}>
+                {attachOpen ? "×" : "+"}
+              </Text>
+            )}
           </Pressable>
           <View
             style={{
@@ -255,4 +363,33 @@ function formatTs(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
+}
+
+function AttachOption({
+  label,
+  onPress,
+  theme,
+}: {
+  label: string;
+  onPress: () => void;
+  theme: ReturnType<typeof useTheme>;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={{
+        flex: 1,
+        paddingVertical: 12,
+        borderRadius: theme.radius.md,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.bg,
+        alignItems: "center",
+      }}
+    >
+      <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.ink, fontWeight: "600" }}>
+        {label}
+      </Text>
+    </Pressable>
+  );
 }
