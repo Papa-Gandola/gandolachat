@@ -62,7 +62,6 @@ export function ChatScreen({ navigation, route }: Props) {
   const [reactionFor, setReactionFor] = useState<number | null>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const [recording, setRecording] = useState(false);
-  const [starting, setStarting] = useState(false);
   const [cameraLaunching, setCameraLaunching] = useState(false);
   const recStartRef = useRef(0);
   // Highest message id the OTHER side has read — drives the ✓✓ indicator on
@@ -207,12 +206,25 @@ export function ChatScreen({ navigation, route }: Props) {
       // Camera cold-start can take several seconds on some devices — show a
       // hint so it's clear the tap registered.
       setCameraLaunching(true);
+      const launchedAt = Date.now();
       const res = await ImagePicker.launchCameraAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         quality: 0.8,
       });
       setCameraLaunching(false);
-      if (res.canceled || !res.assets[0]) return;
+      const elapsed = Date.now() - launchedAt;
+      if (res.canceled || !res.assets[0]) {
+        // If it "returned" almost instantly it never actually opened the
+        // camera (Android package-visibility / no camera activity). A real
+        // user cancel takes much longer.
+        if (elapsed < 1200) {
+          Alert.alert(
+            "Камера не открылась",
+            "Система не запустила приложение камеры. Похоже на ограничение устройства/эмулятора. Можно отправить фото из галереи.",
+          );
+        }
+        return;
+      }
       const a = res.assets[0];
       await doUpload({
         uri: a.uri,
@@ -221,31 +233,40 @@ export function ChatScreen({ navigation, route }: Props) {
       });
     } catch (err) {
       setCameraLaunching(false);
-      Alert.alert("Камера недоступна", apiErrorMessage(err));
+      Alert.alert("Камера недоступна", err instanceof Error ? err.message : String(err));
     }
   };
 
   const startRecording = async () => {
-    if (recordingRef.current || starting) return; // guard against double-start
-    setStarting(true);
     try {
+      // Clean up any stale recording object first (defensive — a half-torn-down
+      // recording from a previous attempt would otherwise block a new one).
+      if (recordingRef.current) {
+        try {
+          await recordingRef.current.stopAndUnloadAsync();
+        } catch {
+          // already stopped
+        }
+        recordingRef.current = null;
+      }
       const perm = await Audio.requestPermissionsAsync();
       if (!perm.granted) {
         Alert.alert("Нет доступа к микрофону", "Разреши доступ к микрофону в настройках Android.");
         return;
       }
       await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      const rec = new Audio.Recording();
-      await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      await rec.startAsync();
+      // High-level one-shot API — prepares + starts atomically; the manual
+      // new Recording()/prepare/start dance is more prone to native races.
+      const { recording: rec } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY,
+      );
       recordingRef.current = rec;
       recStartRef.current = Date.now();
       setRecording(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     } catch (err) {
-      Alert.alert("Не удалось записать", apiErrorMessage(err));
-    } finally {
-      setStarting(false);
+      // Surface the real reason instead of failing silently.
+      Alert.alert("Не удалось записать", err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -256,12 +277,16 @@ export function ChatScreen({ navigation, route }: Props) {
     if (!rec) return;
     try {
       await rec.stopAndUnloadAsync();
+      // Reset audio mode so the next recording / playback starts clean.
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true }).catch(
+        () => {},
+      );
       const uri = rec.getURI();
       const tooShort = Date.now() - recStartRef.current < 800;
       if (!send || tooShort || !uri) return;
       await doUpload({ uri, name: `voice_${Date.now()}.m4a`, type: "audio/m4a" });
-    } catch {
-      // ignore — recording discarded
+    } catch (err) {
+      Alert.alert("Не удалось отправить голосовое", err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -580,7 +605,6 @@ export function ChatScreen({ navigation, route }: Props) {
           ) : (
             <Pressable
               onPress={startRecording}
-              disabled={starting}
               style={{
                 width: 40,
                 height: 40,
