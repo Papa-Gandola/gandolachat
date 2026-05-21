@@ -123,38 +123,45 @@ export function ChatScreen({ navigation, route }: Props) {
   };
 
   const pickPhoto = async () => {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      setAttachOpen(false);
-      return;
+    setAttachOpen(false);
+    try {
+      // No permission gate here — the system photo picker doesn't need
+      // READ_MEDIA on Android 13+, and requesting it can silently deny.
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.8,
+      });
+      if (res.canceled || !res.assets[0]) return;
+      const a = res.assets[0];
+      await doUpload({
+        uri: a.uri,
+        name: a.fileName ?? `photo_${Date.now()}.jpg`,
+        type: a.mimeType ?? "image/jpeg",
+      });
+    } catch (err) {
+      Alert.alert("Галерея недоступна", apiErrorMessage(err));
     }
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.8,
-    });
-    if (res.canceled || !res.assets[0]) return;
-    const a = res.assets[0];
-    await doUpload({
-      uri: a.uri,
-      name: a.fileName ?? `photo_${Date.now()}.jpg`,
-      type: a.mimeType ?? "image/jpeg",
-    });
   };
 
   const takePhoto = async () => {
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) {
-      setAttachOpen(false);
-      return;
+    setAttachOpen(false);
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert("Нет доступа к камере", "Разреши доступ к камере в настройках Android.");
+        return;
+      }
+      const res = await ImagePicker.launchCameraAsync({ quality: 0.8 });
+      if (res.canceled || !res.assets[0]) return;
+      const a = res.assets[0];
+      await doUpload({
+        uri: a.uri,
+        name: a.fileName ?? `camera_${Date.now()}.jpg`,
+        type: a.mimeType ?? "image/jpeg",
+      });
+    } catch (err) {
+      Alert.alert("Камера недоступна", apiErrorMessage(err));
     }
-    const res = await ImagePicker.launchCameraAsync({ quality: 0.8 });
-    if (res.canceled || !res.assets[0]) return;
-    const a = res.assets[0];
-    await doUpload({
-      uri: a.uri,
-      name: a.fileName ?? `camera_${Date.now()}.jpg`,
-      type: a.mimeType ?? "image/jpeg",
-    });
   };
 
   // Toggle my reaction: if I already reacted with this emoji, remove it; else add.
