@@ -17,6 +17,9 @@ export interface ChatRowData {
   typing?: boolean;
   muted?: boolean;
   lastStatus?: string;
+  // For DMs: the other participant's user id, so the chat screen can deep-link
+  // into their profile. Undefined for groups.
+  peerId?: number;
 }
 
 interface Props {

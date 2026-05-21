@@ -1,5 +1,6 @@
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { ActivityIndicator, RefreshControl, ScrollView, Text, View } from "react-native";
+import { useState } from "react";
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 
 import { AppBar } from "../../components/AppBar";
 import { ChatRow } from "../../components/ChatRow";
@@ -9,16 +10,24 @@ import { PlusIcon, SearchIcon, SettingsIcon } from "../../components/icons";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import { ChatsStackParamList } from "../../navigation/types";
 import { useChats } from "../../services/useChats";
-import { useTheme } from "../../theme";
+import { useTheme, useThemeControls } from "../../theme";
 
 type Props = NativeStackScreenProps<ChatsStackParamList, "ChatsList">;
+type Filter = "all" | "groups" | "dms";
 
 export function ChatsListScreen({ navigation }: Props) {
   const theme = useTheme();
+  const { themeId, setThemeId } = useThemeControls();
   const { chats, loading, error, refresh } = useChats();
+  const [filter, setFilter] = useState<Filter>("all");
 
-  const totalUnread = chats.reduce((sum, c) => sum + (c.unread ?? 0), 0);
-  const groupsCount = chats.filter((c) => c.group).length;
+  const visible = chats.filter((c) => {
+    if (filter === "groups") return c.group;
+    if (filter === "dms") return !c.group;
+    return true;
+  });
+
+  const toggleTheme = () => setThemeId(themeId === "neo" ? "discord" : "neo");
 
   return (
     <ScreenContainer>
@@ -38,8 +47,9 @@ export function ChatsListScreen({ navigation }: Props) {
             <IconBtn onPress={() => navigation.navigate("Search")}>
               <SearchIcon color={theme.colors.ink} />
             </IconBtn>
-            <IconBtn>
-              <SettingsIcon color={theme.colors.ink} />
+            {/* The "sun" toggles between Neo and Discord themes */}
+            <IconBtn onPress={toggleTheme}>
+              <SettingsIcon color={theme.colors.accent} />
             </IconBtn>
           </View>
         }
@@ -57,12 +67,21 @@ export function ChatsListScreen({ navigation }: Props) {
             alignItems: "center",
           }}
         >
-          <Chip on>{theme.decorate ? "● ВСЕ" : "Все"}</Chip>
-          <Chip>
-            {theme.decorate ? `НЕПРОЧИТАННЫЕ · ${totalUnread}` : `Непрочитанные · ${totalUnread}`}
-          </Chip>
-          <Chip>{theme.decorate ? `ГРУППЫ · ${groupsCount}` : `Группы · ${groupsCount}`}</Chip>
-          <Chip>{theme.decorate ? "АРХИВ" : "Архив"}</Chip>
+          <FilterChip
+            label={theme.decorate ? "● ВСЕ" : "Все"}
+            active={filter === "all"}
+            onPress={() => setFilter("all")}
+          />
+          <FilterChip
+            label={theme.decorate ? "ГРУППЫ" : "Группы"}
+            active={filter === "groups"}
+            onPress={() => setFilter("groups")}
+          />
+          <FilterChip
+            label={theme.decorate ? "ЛИЧНЫЕ" : "Личные"}
+            active={filter === "dms"}
+            onPress={() => setFilter("dms")}
+          />
         </ScrollView>
       </View>
 
@@ -95,7 +114,7 @@ export function ChatsListScreen({ navigation }: Props) {
             <ActivityIndicator color={theme.colors.accent} />
           </View>
         ) : null}
-        {chats.length === 0 && !loading && !error ? (
+        {visible.length === 0 && !loading && !error ? (
           <View style={{ padding: 40, alignItems: "center" }}>
             <Text
               style={{
@@ -105,23 +124,11 @@ export function ChatsListScreen({ navigation }: Props) {
                 textAlign: "center",
               }}
             >
-              {theme.decorate ? "// пока пусто" : "Пока пусто"}
-            </Text>
-            <Text
-              style={{
-                marginTop: 8,
-                fontFamily: theme.fonts.body,
-                color: theme.colors.inkDim,
-                fontSize: 12.5,
-                textAlign: "center",
-                maxWidth: 240,
-              }}
-            >
-              Начни первый чат — кнопка справа внизу.
+              {theme.decorate ? "// пусто" : "Пусто"}
             </Text>
           </View>
         ) : null}
-        {chats.map((c) => (
+        {visible.map((c) => (
           <ChatRow
             key={c.id}
             chat={c}
@@ -129,6 +136,7 @@ export function ChatsListScreen({ navigation }: Props) {
               navigation.navigate(c.group ? "GroupChat" : "Chat", {
                 chatId: c.id,
                 name: c.name,
+                userId: c.peerId,
               })
             }
           />
@@ -152,5 +160,13 @@ export function ChatsListScreen({ navigation }: Props) {
         </IconBtn>
       </View>
     </ScreenContainer>
+  );
+}
+
+function FilterChip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress}>
+      <Chip on={active}>{label}</Chip>
+    </Pressable>
   );
 }

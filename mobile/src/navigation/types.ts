@@ -10,10 +10,10 @@ export type ChatsStackParamList = {
   Search: undefined;
   NewChat: undefined;
   NewGroup: undefined;
-  Chat: { chatId: string; name: string };
-  GroupChat: { chatId: string; name: string };
+  Chat: { chatId: string; name: string; userId?: number };
+  GroupChat: { chatId: string; name: string; userId?: number };
   ChatInfo: { chatId: string };
-  OtherProfile: { userId: string };
+  OtherProfile: { userId: number };
   MediaViewer: { url: string };
   StickerPicker: undefined;
 };

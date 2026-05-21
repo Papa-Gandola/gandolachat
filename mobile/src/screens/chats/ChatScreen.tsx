@@ -27,7 +27,7 @@ type Props = NativeStackScreenProps<ChatsStackParamList, "Chat">;
 export function ChatScreen({ navigation, route }: Props) {
   const theme = useTheme();
   const { user } = useAuth();
-  const { chatId, name } = route.params;
+  const { chatId, name, userId } = route.params;
   const { messages, loading, error } = useMessages(chatId);
   const scrollRef = useRef<ScrollView | null>(null);
   const [draft, setDraft] = useState("");
@@ -71,19 +71,25 @@ export function ChatScreen({ navigation, route }: Props) {
         <IconBtn onPress={() => navigation.goBack()}>
           <ChevronLeftIcon color={theme.colors.ink} />
         </IconBtn>
-        <Avatar letter={(name[0] ?? "?").toUpperCase()} size={36} bg="#ef5350" />
-        <View style={{ flex: 1 }}>
-          <Text
-            style={{
-              fontFamily: theme.fonts.mono,
-              fontWeight: "700",
-              fontSize: 14,
-              color: theme.colors.ink,
-            }}
-          >
-            {name}
-          </Text>
-        </View>
+        <Pressable
+          style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 10 }}
+          disabled={userId == null}
+          onPress={() => userId != null && navigation.navigate("OtherProfile", { userId })}
+        >
+          <Avatar letter={(name[0] ?? "?").toUpperCase()} size={36} bg="#ef5350" />
+          <View style={{ flex: 1 }}>
+            <Text
+              style={{
+                fontFamily: theme.fonts.mono,
+                fontWeight: "700",
+                fontSize: 14,
+                color: theme.colors.ink,
+              }}
+            >
+              {name}
+            </Text>
+          </View>
+        </Pressable>
         <IconBtn>
           <PhoneIcon color={theme.colors.ink} />
         </IconBtn>
