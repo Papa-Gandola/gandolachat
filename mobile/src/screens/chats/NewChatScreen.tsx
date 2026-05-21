@@ -85,6 +85,36 @@ export function NewChatScreen({ navigation }: Props) {
         }
       />
 
+      <Pressable
+        onPress={() => navigation.navigate("NewGroup")}
+        style={({ pressed }) => ({
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 12,
+          paddingHorizontal: 14,
+          paddingVertical: 12,
+          borderBottomWidth: 1,
+          borderBottomColor: theme.colors.border,
+          backgroundColor: pressed ? theme.colors.bgElev : "transparent",
+        })}
+      >
+        <View
+          style={{
+            width: 42,
+            height: 42,
+            borderRadius: theme.id === "neo" ? 8 : 21,
+            backgroundColor: theme.colors.accent,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Text style={{ color: theme.colors.accentText, fontSize: 22, fontWeight: "700" }}>+</Text>
+        </View>
+        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 14, fontWeight: "600", color: theme.colors.ink }}>
+          {theme.decorate ? "// новая группа" : "Новая группа"}
+        </Text>
+      </Pressable>
+
       <View style={{ paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6 }}>
         <View
           style={{

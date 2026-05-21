@@ -108,6 +108,12 @@ export const chatApi = {
   list: () => getInstance().get<ChatOut[]>("/api/chats"),
   createDm: (userId: number) =>
     getInstance().post<ChatOut>(`/api/chats/dm?target_user_id=${userId}`),
+  createGroup: (name: string, memberIds: number[], allowAllWrite = true) =>
+    getInstance().post<ChatOut>("/api/chats/group", {
+      name,
+      member_ids: memberIds,
+      allow_all_write: allowAllWrite,
+    }),
   getMessages: (chatId: number, limit = 50, beforeId?: number) => {
     const params = new URLSearchParams({ limit: String(limit) });
     if (beforeId) params.append("before_id", String(beforeId));
