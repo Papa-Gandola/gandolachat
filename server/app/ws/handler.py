@@ -29,14 +29,16 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
     chats = result.scalars().all()
     chat_ids = [c.id for c in chats]
 
-    await manager.connect(websocket, user_id, chat_ids)
+    is_first_connection = await manager.connect(websocket, user_id, chat_ids)
 
-    # Broadcast online status to all chats
-    for cid in chat_ids:
-        await manager.broadcast_to_chat(cid, {
-            "type": "user_online",
-            "user_id": user_id,
-        }, exclude_user=user_id)
+    # Broadcast online status only when this is the user's first device — avoids
+    # spurious "online" flaps when they open a second device.
+    if is_first_connection:
+        for cid in chat_ids:
+            await manager.broadcast_to_chat(cid, {
+                "type": "user_online",
+                "user_id": user_id,
+            }, exclude_user=user_id)
 
     try:
         while True:
@@ -309,28 +311,32 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
             user_obj.last_seen = datetime.now(timezone.utc)
             await db.commit()
 
-        manager.disconnect(user_id, chat_ids)
-        # Remove from any active calls + notify
-        active_call_chats = [cid for cid, users in manager.active_calls.items() if user_id in users]
-        for cid in active_call_chats:
-            manager.active_calls[cid].discard(user_id)
-            became_empty = not manager.active_calls.get(cid)
-            if became_empty:
-                manager.active_calls.pop(cid, None)
-                await _persist_call_record(cid, db, ended_by=user_id, declined=False)
-            await manager.broadcast_to_chat(cid, {
-                "type": "call_end",
-                "from_user_id": user_id,
-                "chat_id": cid,
-            }, exclude_user=user_id)
-        # Broadcast offline status
-        last_seen_iso = user_obj.last_seen.isoformat() if user_obj and user_obj.last_seen else None
-        for cid in chat_ids:
-            await manager.broadcast_to_chat(cid, {
-                "type": "user_offline",
-                "user_id": user_id,
-                "last_seen": last_seen_iso,
-            })
+        # Only this socket goes away; the user may still be connected from
+        # another device. fully_offline is True only when no sockets remain.
+        fully_offline = manager.disconnect(user_id, chat_ids, websocket)
+
+        if fully_offline:
+            # Remove from any active calls + notify
+            active_call_chats = [cid for cid, users in manager.active_calls.items() if user_id in users]
+            for cid in active_call_chats:
+                manager.active_calls[cid].discard(user_id)
+                became_empty = not manager.active_calls.get(cid)
+                if became_empty:
+                    manager.active_calls.pop(cid, None)
+                    await _persist_call_record(cid, db, ended_by=user_id, declined=False)
+                await manager.broadcast_to_chat(cid, {
+                    "type": "call_end",
+                    "from_user_id": user_id,
+                    "chat_id": cid,
+                }, exclude_user=user_id)
+            # Broadcast offline status
+            last_seen_iso = user_obj.last_seen.isoformat() if user_obj and user_obj.last_seen else None
+            for cid in chat_ids:
+                await manager.broadcast_to_chat(cid, {
+                    "type": "user_offline",
+                    "user_id": user_id,
+                    "last_seen": last_seen_iso,
+                })
 
 
 def count_grammar_errors(text: str) -> int:
