@@ -152,6 +152,7 @@ export function useChats(): ChatsState {
         unread: unread[String(c.id)] ?? 0,
         online: isOnline,
         group: isGroup,
+        peerId: counterpart?.id,
       };
     });
   }, [raw, user, unread, online]);
