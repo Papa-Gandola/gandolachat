@@ -53,6 +53,21 @@ function fileUrl(url: string | null | undefined): string | null {
 // taps) we can force-unload it before starting the next.
 let lastRecording: Audio.Recording | null = null;
 
+// Some Android devices never release expo-av's single global recorder after
+// stopAndUnloadAsync(), so the next prepareToRecordAsync rejects with "Only one
+// Recording object can be prepared at a given time" (after a long native stall)
+// and stays wedged until the app process is killed. Toggling the whole audio
+// subsystem off→on force-releases the stuck native recorder without a restart.
+async function resetAudioSubsystem() {
+  try {
+    await Audio.setIsEnabledAsync(false);
+    await new Promise((r) => setTimeout(r, 250));
+    await Audio.setIsEnabledAsync(true);
+  } catch {
+    // best-effort — nothing more we can do from JS
+  }
+}
+
 type Props = NativeStackScreenProps<ChatsStackParamList, "Chat">;
 
 export function ChatScreen({ navigation, route }: Props) {
@@ -237,8 +252,10 @@ export function ChatScreen({ navigation, route }: Props) {
       try {
         await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
       } catch {
-        // Stuck global recorder — nudge the audio session and retry once.
-        await Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => {});
+        // Previous recorder still held by the OS — force-release the whole audio
+        // subsystem (toggling the iOS audio-mode flag alone does nothing on
+        // Android) and retry once.
+        await resetAudioSubsystem();
         await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
         await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
       }
@@ -276,6 +293,10 @@ export function ChatScreen({ navigation, route }: Props) {
       setRecError(err instanceof Error ? err.message : String(err));
     } finally {
       lastRecording = null;
+      // Proactively release the native recorder so the NEXT recording starts
+      // from a clean audio session — without this, some Android devices let you
+      // record exactly once per app launch.
+      await resetAudioSubsystem();
       recBusyRef.current = false;
     }
     if (send && !tooShort && uri) {
