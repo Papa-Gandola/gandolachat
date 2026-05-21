@@ -20,7 +20,7 @@ import { ChevronLeftIcon, PhoneIcon, SendIcon } from "../../components/icons";
 import { IconBtn } from "../../components/IconBtn";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import { ChatsStackParamList } from "../../navigation/types";
-import { apiErrorMessage, chatApi } from "../../services/api";
+import { apiErrorMessage, chatApi, userApi } from "../../services/api";
 import { API_URL } from "../../services/config";
 import { useAuth } from "../../services/AuthContext";
 import { useMessages } from "../../services/useMessages";
@@ -54,6 +54,9 @@ export function ChatScreen({ navigation, route }: Props) {
   // Highest message id the OTHER side has read — drives the ✓✓ indicator on
   // my own bubbles.
   const [peerLastRead, setPeerLastRead] = useState(0);
+  // Peer presence for the header subtitle (DM only).
+  const [peerOnline, setPeerOnline] = useState(false);
+  const [peerLastSeen, setPeerLastSeen] = useState<string | null>(null);
 
   // Auto-scroll to bottom when new messages arrive — simple "messenger feel"
   // and matches the desktop behaviour. setTimeout(0) lets layout settle.
@@ -83,6 +86,34 @@ export function ChatScreen({ navigation, route }: Props) {
     wsService.on("message_read", onRead);
     return () => wsService.off("message_read", onRead);
   }, [chatId, user?.id]);
+
+  // Peer presence (DM only): seed from REST, then track live via WS.
+  useEffect(() => {
+    if (userId == null) return;
+    chatApi
+      .getOnlineUsers()
+      .then((res) => setPeerOnline(res.data.online_user_ids.includes(userId)))
+      .catch(() => {});
+    userApi
+      .getUser(userId)
+      .then((res) => setPeerLastSeen(res.data.last_seen ?? null))
+      .catch(() => {});
+    const onOnline = (d: Record<string, unknown>) => {
+      if ((d.user_id as number) === userId) setPeerOnline(true);
+    };
+    const onOffline = (d: Record<string, unknown>) => {
+      if ((d.user_id as number) === userId) {
+        setPeerOnline(false);
+        if (typeof d.last_seen === "string") setPeerLastSeen(d.last_seen);
+      }
+    };
+    wsService.on("user_online", onOnline);
+    wsService.on("user_offline", onOffline);
+    return () => {
+      wsService.off("user_online", onOnline);
+      wsService.off("user_offline", onOffline);
+    };
+  }, [userId]);
 
   // Mark the newest message as read so the peer sees our ✓✓ and our unread
   // badge clears. Fires whenever the latest message changes.
@@ -151,7 +182,10 @@ export function ChatScreen({ navigation, route }: Props) {
         Alert.alert("Нет доступа к камере", "Разреши доступ к камере в настройках Android.");
         return;
       }
-      const res = await ImagePicker.launchCameraAsync({ quality: 0.8 });
+      const res = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.8,
+      });
       if (res.canceled || !res.assets[0]) return;
       const a = res.assets[0];
       await doUpload({
@@ -221,6 +255,22 @@ export function ChatScreen({ navigation, route }: Props) {
             >
               {name}
             </Text>
+            {userId != null ? (
+              <Text
+                style={{
+                  fontFamily: theme.fonts.mono,
+                  fontSize: 10.5,
+                  color: peerOnline ? theme.colors.online : theme.colors.inkMuted,
+                  marginTop: 1,
+                }}
+              >
+                {peerOnline
+                  ? theme.decorate
+                    ? "● в сети"
+                    : "в сети"
+                  : `был(а) ${formatLastSeen(peerLastSeen)}`}
+              </Text>
+            ) : null}
           </View>
         </Pressable>
         <IconBtn>
@@ -401,6 +451,20 @@ function formatTs(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
+}
+
+function formatLastSeen(iso: string | null): string {
+  if (!iso) return "давно";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "давно";
+  const diffMin = Math.floor((Date.now() - d.getTime()) / 60000);
+  if (diffMin < 1) return "только что";
+  if (diffMin < 60) return `${diffMin} мин назад`;
+  const diffH = Math.floor(diffMin / 60);
+  if (diffH < 24) return `${diffH} ч назад`;
+  const diffD = Math.floor(diffH / 24);
+  if (diffD < 7) return `${diffD} дн назад`;
+  return `${d.getDate()}.${(d.getMonth() + 1).toString().padStart(2, "0")}`;
 }
 
 const QUICK_EMOJIS = ["👍", "❤️", "😂", "🔥", "😮", "😢"];
