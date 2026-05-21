@@ -74,7 +74,7 @@ export function ChatScreen({ navigation, route }: Props) {
   const theme = useTheme();
   const { user } = useAuth();
   const { chatId, name, userId, avatarUrl } = route.params;
-  const { messages, loading, error } = useMessages(chatId);
+  const { messages, loading, error, loadMore, hasMore } = useMessages(chatId);
   const scrollRef = useRef<ScrollView | null>(null);
   const [draft, setDraft] = useState("");
   const [attachOpen, setAttachOpen] = useState(false);
@@ -94,12 +94,18 @@ export function ChatScreen({ navigation, route }: Props) {
   const [peerOnline, setPeerOnline] = useState(false);
   const [peerLastSeen, setPeerLastSeen] = useState<string | null>(null);
 
-  // Auto-scroll to bottom when new messages arrive — simple "messenger feel"
-  // and matches the desktop behaviour. setTimeout(0) lets layout settle.
+  // Auto-scroll to bottom only when a NEW message lands at the bottom (or on the
+  // first load) — never when older history is prepended on top, which would
+  // otherwise yank the user back down. setTimeout(0) lets layout settle.
+  const lastMsgIdRef = useRef<number | null>(null);
   useEffect(() => {
+    if (messages.length === 0) return;
+    const lastId = messages[messages.length - 1].id;
+    if (lastMsgIdRef.current === lastId) return;
+    lastMsgIdRef.current = lastId;
     const t = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 0);
     return () => clearTimeout(t);
-  }, [messages.length]);
+  }, [messages]);
 
   // Discard any in-progress recording if the screen unmounts mid-record.
   useEffect(() => {
@@ -396,7 +402,21 @@ export function ChatScreen({ navigation, route }: Props) {
         ref={scrollRef}
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingVertical: 8 }}
+        scrollEventThrottle={16}
+        maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+        onScroll={(e) => {
+          // Near the top → page in older history. maintainVisibleContentPosition
+          // keeps the visible messages from jumping when we prepend.
+          if (e.nativeEvent.contentOffset.y <= 40 && hasMore && !loading) {
+            loadMore();
+          }
+        }}
       >
+        {loading && messages.length > 0 ? (
+          <View style={{ paddingVertical: 10, alignItems: "center" }}>
+            <ActivityIndicator size="small" color={theme.colors.accent} />
+          </View>
+        ) : null}
         {loading && messages.length === 0 ? (
           <View style={{ paddingVertical: 40, alignItems: "center" }}>
             <ActivityIndicator color={theme.colors.accent} />
