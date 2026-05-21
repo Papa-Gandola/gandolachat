@@ -61,6 +61,11 @@ export function ChatScreen({ navigation, route }: Props) {
   const [uploading, setUploading] = useState(false);
   const [reactionFor, setReactionFor] = useState<number | null>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
+  // True while a recording is being created OR torn down. expo-av allows only
+  // one prepared recording at a time, so we must not start a new one until the
+  // previous one has fully unloaded — otherwise: "Only one recording object
+  // can be prepared at a given time".
+  const recBusyRef = useRef(false);
   const [recording, setRecording] = useState(false);
   const [cameraLaunching, setCameraLaunching] = useState(false);
   const recStartRef = useRef(0);
@@ -238,25 +243,15 @@ export function ChatScreen({ navigation, route }: Props) {
   };
 
   const startRecording = async () => {
+    if (recBusyRef.current || recordingRef.current) return;
+    recBusyRef.current = true;
     try {
-      // Clean up any stale recording object first (defensive — a half-torn-down
-      // recording from a previous attempt would otherwise block a new one).
-      if (recordingRef.current) {
-        try {
-          await recordingRef.current.stopAndUnloadAsync();
-        } catch {
-          // already stopped
-        }
-        recordingRef.current = null;
-      }
       const perm = await Audio.requestPermissionsAsync();
       if (!perm.granted) {
         Alert.alert("Нет доступа к микрофону", "Разреши доступ к микрофону в настройках Android.");
         return;
       }
       await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      // High-level one-shot API — prepares + starts atomically; the manual
-      // new Recording()/prepare/start dance is more prone to native races.
       const { recording: rec } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY,
       );
@@ -265,28 +260,36 @@ export function ChatScreen({ navigation, route }: Props) {
       setRecording(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     } catch (err) {
-      // Surface the real reason instead of failing silently.
+      recordingRef.current = null;
       Alert.alert("Не удалось записать", err instanceof Error ? err.message : String(err));
+    } finally {
+      recBusyRef.current = false;
     }
   };
 
   const stopRecording = async (send: boolean) => {
     const rec = recordingRef.current;
+    if (!rec || recBusyRef.current) return;
+    // Block any new start until this recording is fully unloaded.
+    recBusyRef.current = true;
     recordingRef.current = null;
     setRecording(false);
-    if (!rec) return;
+    let uri: string | null = null;
+    let tooShort = true;
     try {
       await rec.stopAndUnloadAsync();
-      // Reset audio mode so the next recording / playback starts clean.
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true }).catch(
-        () => {},
-      );
-      const uri = rec.getURI();
-      const tooShort = Date.now() - recStartRef.current < 800;
-      if (!send || tooShort || !uri) return;
-      await doUpload({ uri, name: `voice_${Date.now()}.m4a`, type: "audio/m4a" });
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
+      uri = rec.getURI();
+      tooShort = Date.now() - recStartRef.current < 800;
     } catch (err) {
-      Alert.alert("Не удалось отправить голосовое", err instanceof Error ? err.message : String(err));
+      Alert.alert("Ошибка записи", err instanceof Error ? err.message : String(err));
+    } finally {
+      // Native recorder is free now → allow a new recording even while the
+      // upload below is still in flight.
+      recBusyRef.current = false;
+    }
+    if (send && !tooShort && uri) {
+      await doUpload({ uri, name: `voice_${Date.now()}.m4a`, type: "audio/m4a" });
     }
   };
 
