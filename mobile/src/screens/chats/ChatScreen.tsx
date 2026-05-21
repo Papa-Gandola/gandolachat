@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -24,7 +25,7 @@ import { IconBtn } from "../../components/IconBtn";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import { VoiceMessage } from "../../components/VoiceMessage";
 import { ChatsStackParamList } from "../../navigation/types";
-import { apiErrorMessage, chatApi, MessageOut, userApi } from "../../services/api";
+import { apiErrorMessage, chatApi, ChatOut, MessageOut, userApi } from "../../services/api";
 import { API_URL } from "../../services/config";
 import { useAuth } from "../../services/AuthContext";
 import { useMessages } from "../../services/useMessages";
@@ -68,6 +69,9 @@ async function resetAudioSubsystem() {
   }
 }
 
+const FWD_PALETTE = ["#ef5350", "#7c4dff", "#ffa726", "#26a69a", "#ec407a", "#5c6bc0", "#ff7043", "#3949ab", "#66bb6a"];
+const fwdColorFor = (id: number) => FWD_PALETTE[id % FWD_PALETTE.length];
+
 type Props = NativeStackScreenProps<ChatsStackParamList, "Chat">;
 
 export function ChatScreen({ navigation, route }: Props) {
@@ -82,6 +86,8 @@ export function ChatScreen({ navigation, route }: Props) {
   const [reactionFor, setReactionFor] = useState<number | null>(null);
   const [replyTo, setReplyTo] = useState<MessageOut | null>(null);
   const [editing, setEditing] = useState<MessageOut | null>(null);
+  const [forwardMsg, setForwardMsg] = useState<MessageOut | null>(null);
+  const [forwardChats, setForwardChats] = useState<ChatOut[]>([]);
   const recordingRef = useRef<Audio.Recording | null>(null);
   // True while a recording is being created or torn down — expo-av allows only
   // one prepared recording at a time, so block a new start until teardown ends.
@@ -220,6 +226,25 @@ export function ChatScreen({ navigation, route }: Props) {
     if (editing) setDraft("");
     setEditing(null);
     setReplyTo(null);
+  };
+
+  const beginForward = (m: MessageOut) => {
+    setReactionFor(null);
+    setForwardMsg(m);
+    chatApi.list().then((res) => setForwardChats(res.data)).catch(() => {});
+  };
+
+  const doForward = (c: ChatOut) => {
+    if (!forwardMsg) return;
+    wsService.send({
+      type: "forward_message",
+      target_chat_id: Number(c.id),
+      content: forwardMsg.content || (forwardMsg.file_url ? `[Файл: ${forwardMsg.file_name ?? "файл"}]` : ""),
+      original_author: forwardMsg.sender_username,
+      file_url: forwardMsg.file_url,
+      file_name: forwardMsg.file_name,
+    });
+    setForwardMsg(null);
   };
 
   const doUpload = async (file: { uri: string; name: string; type: string }) => {
@@ -527,6 +552,7 @@ export function ChatScreen({ navigation, route }: Props) {
                   canEdit={mine && !!m.content}
                   onCopy={() => copyMessage(m.content ?? "")}
                   onReply={() => beginReply(m)}
+                  onForward={() => beginForward(m)}
                   onEdit={() => beginEdit(m)}
                   onDelete={() => deleteMessage(m.id)}
                   onPick={(emoji) => {
@@ -749,6 +775,94 @@ export function ChatScreen({ navigation, route }: Props) {
           )}
         </View>
       </KeyboardAvoidingView>
+
+      <Modal
+        visible={!!forwardMsg}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setForwardMsg(null)}
+      >
+        <Pressable
+          onPress={() => setForwardMsg(null)}
+          style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", padding: 24 }}
+        >
+          <Pressable
+            onPress={() => {}}
+            style={{
+              backgroundColor: theme.colors.bg,
+              borderRadius: theme.radius.lg,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              maxHeight: "70%",
+              overflow: "hidden",
+            }}
+          >
+            <Text
+              style={{
+                fontFamily: theme.fonts.mono,
+                fontSize: 14,
+                fontWeight: "700",
+                color: theme.colors.ink,
+                padding: 14,
+                paddingBottom: forwardMsg?.content ? 4 : 10,
+              }}
+            >
+              {theme.decorate ? "// переслать" : "Переслать"}
+            </Text>
+            {forwardMsg?.content ? (
+              <Text
+                numberOfLines={1}
+                style={{
+                  fontFamily: theme.fonts.body,
+                  fontSize: 12,
+                  color: theme.colors.inkMuted,
+                  paddingHorizontal: 14,
+                  paddingBottom: 8,
+                }}
+              >
+                «{forwardMsg.content}»
+              </Text>
+            ) : null}
+            <ScrollView>
+              {forwardChats
+                .filter((c) => String(c.id) !== chatId)
+                .map((c) => {
+                  const other = c.is_group ? null : c.members.find((mm) => mm.id !== user?.id);
+                  const fname = c.is_group ? c.name ?? "Группа" : other?.username ?? "Личка";
+                  const favatar = c.is_group ? c.avatar_url ?? null : other?.avatar_url ?? null;
+                  return (
+                    <Pressable
+                      key={c.id}
+                      onPress={() => doForward(c)}
+                      style={({ pressed }) => ({
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 12,
+                        paddingHorizontal: 14,
+                        paddingVertical: 10,
+                        backgroundColor: pressed ? theme.colors.bgElev : "transparent",
+                      })}
+                    >
+                      <Avatar
+                        letter={(fname[0] ?? "?").toUpperCase()}
+                        size={36}
+                        bg={fwdColorFor(c.id)}
+                        uri={favatar}
+                        square={c.is_group}
+                      />
+                      <Text
+                        numberOfLines={1}
+                        style={{ flex: 1, fontFamily: theme.fonts.mono, fontSize: 14, color: theme.colors.ink }}
+                      >
+                        {fname}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </ScreenContainer>
   );
 }
@@ -833,6 +947,7 @@ function ReactionPicker({
   canEdit,
   onCopy,
   onReply,
+  onForward,
   onEdit,
   onDelete,
 }: {
@@ -843,6 +958,7 @@ function ReactionPicker({
   canEdit?: boolean;
   onCopy?: () => void;
   onReply?: () => void;
+  onForward?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
 }) {
@@ -909,6 +1025,7 @@ function ReactionPicker({
         }}
       >
         {chip(theme.decorate ? "ответить" : "Ответить", onReply)}
+        {chip(theme.decorate ? "переслать" : "Переслать", onForward)}
         {canCopy ? chip(theme.decorate ? "копир." : "Копир.", onCopy) : null}
         {canEdit ? chip(theme.decorate ? "изменить" : "Изменить", onEdit) : null}
         {mine ? chip(theme.decorate ? "удалить" : "Удалить", onDelete, true) : null}
