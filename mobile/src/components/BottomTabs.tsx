@@ -14,7 +14,7 @@ interface TabSpec {
 }
 
 const TABS: TabSpec[] = [
-  { routeName: "Chats", label: "ЧАТЫ", iconKey: "chats", badge: 12 },
+  { routeName: "Chats", label: "ЧАТЫ", iconKey: "chats" },
   { routeName: "Calls", label: "ЗВОНКИ", iconKey: "calls" },
   { routeName: "Profile", label: "Я", iconKey: "profile" },
 ];
