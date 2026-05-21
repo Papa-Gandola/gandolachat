@@ -125,26 +125,44 @@ export const chatApi = {
     // boundary correctly for { uri, name, type } file parts, where axios
     // routinely fails and surfaces as a network error.
     const token = await SecureStore.getItemAsync(TOKEN_KEY);
-    const form = new FormData();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    form.append("file", file as any);
-    if (caption) form.append("caption", caption);
     const qs = caption ? `?caption=${encodeURIComponent(caption)}` : "";
-    const res = await fetch(`${API_URL}/api/chats/${chatId}/files${qs}`, {
-      method: "POST",
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      body: form,
-    });
-    if (!res.ok) {
-      let detail = `Ошибка ${res.status}`;
+    const url = `${API_URL}/api/chats/${chatId}/files${qs}`;
+
+    // RN's multipart upload over cleartext HTTP is occasionally flaky and
+    // fails with "Network request failed" before the request completes —
+    // retry a couple of times with a short backoff. Each attempt rebuilds the
+    // FormData since a body can't be reused.
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const body = (await res.json()) as { detail?: string };
-        if (body.detail) detail = body.detail;
-      } catch {
-        // non-JSON error body
+        const form = new FormData();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        form.append("file", file as any);
+        if (caption) form.append("caption", caption);
+        const res = await fetch(url, {
+          method: "POST",
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          body: form,
+        });
+        if (!res.ok) {
+          let detail = `Ошибка ${res.status}`;
+          try {
+            const body = (await res.json()) as { detail?: string };
+            if (body.detail) detail = body.detail;
+          } catch {
+            // non-JSON error body
+          }
+          throw new Error(detail);
+        }
+        return (await res.json()) as MessageOut;
+      } catch (err) {
+        lastErr = err;
+        // Only retry transient network failures, not server-side rejections.
+        const msg = err instanceof Error ? err.message : "";
+        if (!/network request failed/i.test(msg)) throw err;
+        await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
       }
-      throw new Error(detail);
     }
-    return (await res.json()) as MessageOut;
+    throw lastErr;
   },
 };
