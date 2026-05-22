@@ -1,9 +1,12 @@
+import { Audio } from "expo-av";
 import { createContext, ReactNode, useContext, useEffect, useRef, useState } from "react";
-import { Modal, Pressable, Text, View } from "react-native";
+import { Animated, Dimensions, Modal, PanResponder, Pressable, StyleSheet, Text, Vibration, View } from "react-native";
 import { MediaStream, RTCView } from "react-native-webrtc";
 
+import { Avatar } from "../components/Avatar";
+import { HangupIcon, MicIcon, MicOffIcon, PhoneIcon, VideoIcon, VideoOffIcon } from "../components/icons";
 import { useTheme } from "../theme";
-import { userApi } from "./api";
+import { UserOut, userApi } from "./api";
 import { useAuth } from "./AuthContext";
 import { webrtcService } from "./webrtc";
 import { wsService } from "./ws";
@@ -17,18 +20,26 @@ interface Remote {
   userId: number;
   stream: MediaStream;
 }
+interface PeerInfo {
+  username: string;
+  avatarUrl: string | null;
+}
 
 interface CallState {
   inCall: boolean;
-  // Start a call. targetIds = the other participants (for a DM, just the peer).
   startCall: (chatId: number, name: string, targetIds: number[], video?: boolean) => Promise<void>;
 }
 
 const CallContext = createContext<CallState>({ inCall: false, startCall: async () => {} });
-
 export function useCall(): CallState {
   return useContext(CallContext);
 }
+
+const PALETTE = ["#ef5350", "#7c4dff", "#ffa726", "#26a69a", "#ec407a", "#5c6bc0", "#ff7043", "#3949ab", "#66bb6a"];
+const colorFor = (id: number) => PALETTE[Math.abs(id) % PALETTE.length];
+
+const PIP_W = 104;
+const PIP_H = 150;
 
 export function CallProvider({ children }: { children: ReactNode }) {
   const theme = useTheme();
@@ -40,13 +51,33 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const [remotes, setRemotes] = useState<Remote[]>([]);
   const [muted, setMuted] = useState(false);
   const [videoOff, setVideoOff] = useState(false);
+  const [peerInfo, setPeerInfo] = useState<Map<number, PeerInfo>>(new Map());
+  const [peerVideoOff, setPeerVideoOff] = useState<Set<number>>(new Set());
   const activeRef = useRef(false);
+  const ringRef = useRef<Audio.Sound | null>(null);
 
+  const sendVideoStatus = (off: boolean) => {
+    const chatId = webrtcService.getChatId();
+    if (chatId != null) wsService.send({ type: "video_status", chat_id: chatId, video_off: off });
+  };
+
+  // Wire webrtc callbacks once we know who we are.
   useEffect(() => {
     if (!user) return;
     webrtcService.init(user.id);
-    webrtcService.onStream = (uid, stream) =>
+    webrtcService.onStream = (uid, stream) => {
       setRemotes((prev) => [...prev.filter((r) => r.userId !== uid), { userId: uid, stream }]);
+      setPeerInfo((prev) => {
+        if (prev.has(uid)) return prev;
+        userApi
+          .getUser(uid)
+          .then((r: { data: UserOut }) =>
+            setPeerInfo((cur) => new Map(cur).set(uid, { username: r.data.username, avatarUrl: r.data.avatar_url })),
+          )
+          .catch(() => {});
+        return prev;
+      });
+    };
     webrtcService.onPeerLeft = (uid) => setRemotes((prev) => prev.filter((r) => r.userId !== uid));
     webrtcService.onCallEnded = () => {
       activeRef.current = false;
@@ -55,10 +86,12 @@ export function CallProvider({ children }: { children: ReactNode }) {
       setRemotes([]);
       setMuted(false);
       setVideoOff(false);
+      setPeerVideoOff(new Set());
+      setPeerInfo(new Map());
     };
   }, [user]);
 
-  // Detect incoming calls (a call_signal while we're not already in a call).
+  // Incoming-call detection + live peer video status.
   useEffect(() => {
     const onSignal = (d: Record<string, unknown>) => {
       if (activeRef.current || webrtcService.isInCall()) return;
@@ -68,7 +101,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
         if (prev) return prev;
         userApi
           .getUser(fromUserId)
-          .then((r) => setIncoming((cur) => (cur ? { ...cur, name: r.data.username } : cur)))
+          .then((r: { data: UserOut }) => setIncoming((cur) => (cur ? { ...cur, name: r.data.username } : cur)))
           .catch(() => {});
         return { chatId, fromUserId, name: "Входящий звонок" };
       });
@@ -77,13 +110,67 @@ export function CallProvider({ children }: { children: ReactNode }) {
       const chatId = d.chat_id as number;
       setIncoming((prev) => (prev && prev.chatId === chatId ? null : prev));
     };
+    const onVideoStatus = (d: Record<string, unknown>) => {
+      const uid = d.user_id as number;
+      const off = !!d.video_off;
+      setPeerVideoOff((prev) => {
+        const n = new Set(prev);
+        if (off) n.add(uid);
+        else n.delete(uid);
+        return n;
+      });
+    };
     wsService.on("call_signal", onSignal);
     wsService.on("call_end", onEnd);
+    wsService.on("video_status", onVideoStatus);
     return () => {
       wsService.off("call_signal", onSignal);
       wsService.off("call_end", onEnd);
+      wsService.off("video_status", onVideoStatus);
     };
   }, []);
+
+  // Ringtone + vibration while a call is incoming.
+  useEffect(() => {
+    const ringing = !!incoming && !inCall;
+    if (!ringing) return;
+    Vibration.vibrate([0, 700, 700], true);
+    let cancelled = false;
+    (async () => {
+      try {
+        await Audio.setAudioModeAsync({ playsInSilentModeIOS: true, shouldDuckAndroid: true });
+        const { sound } = await Audio.Sound.createAsync(
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          require("../../assets/ring.wav"),
+          { shouldPlay: true, isLooping: true, volume: 1.0 },
+        );
+        if (cancelled) {
+          sound.unloadAsync().catch(() => {});
+          return;
+        }
+        ringRef.current = sound;
+      } catch {
+        // ignore — vibration still rings
+      }
+    })();
+    return () => {
+      cancelled = true;
+      Vibration.cancel();
+      const s = ringRef.current;
+      ringRef.current = null;
+      if (s) s.stopAsync().then(() => s.unloadAsync()).catch(() => {});
+    };
+  }, [incoming, inCall]);
+
+  const afterMedia = (ls: MediaStream) => {
+    setLocalStream(ls);
+    setInCall(true);
+    // If the camera couldn't be acquired, reflect that locally and tell the peer.
+    if (ls.getVideoTracks().length === 0) {
+      setVideoOff(true);
+      sendVideoStatus(true);
+    }
+  };
 
   const startCall = async (chatId: number, name: string, targetIds: number[], video = true) => {
     activeRef.current = true;
@@ -91,9 +178,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
     setVideoOff(!video);
     setMuted(false);
     try {
-      const ls = await webrtcService.startCall(chatId, targetIds, video);
-      setLocalStream(ls);
-      setInCall(true);
+      afterMedia(await webrtcService.startCall(chatId, targetIds, video));
     } catch {
       activeRef.current = false;
     }
@@ -108,9 +193,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
     setVideoOff(false);
     setMuted(false);
     try {
-      const ls = await webrtcService.joinCall(inc.chatId, inc.fromUserId, true);
-      setLocalStream(ls);
-      setInCall(true);
+      afterMedia(await webrtcService.joinCall(inc.chatId, inc.fromUserId, true));
     } catch {
       activeRef.current = false;
     }
@@ -132,7 +215,12 @@ export function CallProvider({ children }: { children: ReactNode }) {
     const v = !videoOff;
     setVideoOff(v);
     webrtcService.setVideoOff(v);
+    sendVideoStatus(v);
   };
+
+  const remote = remotes[0] ?? null;
+  const remoteInfo = remote ? peerInfo.get(remote.userId) : undefined;
+  const remoteVideoOff = remote ? peerVideoOff.has(remote.userId) : false;
 
   return (
     <CallContext.Provider value={{ inCall, startCall }}>
@@ -140,26 +228,31 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
       {/* Incoming-call prompt */}
       <Modal visible={!!incoming && !inCall} transparent animationType="fade" onRequestClose={reject}>
-        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.85)", alignItems: "center", justifyContent: "center", padding: 24 }}>
-          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 14, color: theme.colors.inkDim }}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.9)", alignItems: "center", justifyContent: "center", padding: 24 }}>
+          <Avatar
+            letter={(incoming?.name?.[0] ?? "?").toUpperCase()}
+            size={96}
+            bg={colorFor(incoming?.fromUserId ?? 0)}
+          />
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 13, color: theme.colors.inkDim, marginTop: 18 }}>
             {theme.decorate ? "// входящий звонок" : "Входящий звонок"}
           </Text>
-          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 24, fontWeight: "700", color: theme.colors.ink, marginTop: 10 }}>
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 22, fontWeight: "700", color: theme.colors.ink, marginTop: 6 }}>
             {incoming?.name ?? ""}
           </Text>
-          <View style={{ flexDirection: "row", gap: 40, marginTop: 48 }}>
-            <Pressable onPress={reject} style={{ alignItems: "center" }}>
-              <View style={{ width: 68, height: 68, borderRadius: 34, backgroundColor: theme.colors.danger, alignItems: "center", justifyContent: "center" }}>
-                <Text style={{ fontSize: 28 }}>✕</Text>
-              </View>
+          <View style={{ flexDirection: "row", gap: 56, marginTop: 52 }}>
+            <View style={{ alignItems: "center" }}>
+              <CircleBtn bg={theme.colors.danger} onPress={reject}>
+                <HangupIcon color="#fff" size={26} />
+              </CircleBtn>
               <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkDim, marginTop: 8 }}>отклонить</Text>
-            </Pressable>
-            <Pressable onPress={accept} style={{ alignItems: "center" }}>
-              <View style={{ width: 68, height: 68, borderRadius: 34, backgroundColor: theme.colors.online, alignItems: "center", justifyContent: "center" }}>
-                <Text style={{ fontSize: 28 }}>📞</Text>
-              </View>
+            </View>
+            <View style={{ alignItems: "center" }}>
+              <CircleBtn bg={theme.colors.online} onPress={accept}>
+                <PhoneIcon color="#fff" size={24} />
+              </CircleBtn>
               <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkDim, marginTop: 8 }}>принять</Text>
-            </Pressable>
+            </View>
           </View>
         </View>
       </Modal>
@@ -167,48 +260,54 @@ export function CallProvider({ children }: { children: ReactNode }) {
       {/* Active call */}
       <Modal visible={inCall} animationType="slide" onRequestClose={end}>
         <View style={{ flex: 1, backgroundColor: "#000" }}>
-          <View style={{ flex: 1, flexDirection: "row", flexWrap: "wrap" }}>
-            {remotes.length === 0 ? (
-              <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-                <Text style={{ fontFamily: theme.fonts.mono, fontSize: 16, color: theme.colors.inkDim }}>
-                  {theme.decorate ? `// звоним · ${callName}` : `Звоним · ${callName}`}
-                </Text>
-              </View>
-            ) : (
-              remotes.map((r) => (
-                <RTCView
-                  key={r.userId}
-                  streamURL={r.stream.toURL()}
-                  objectFit="cover"
-                  style={{ flex: 1, minWidth: "50%", minHeight: "50%", backgroundColor: "#111" }}
-                />
-              ))
-            )}
-          </View>
+          {/* Remote — full screen */}
+          {!remote ? (
+            <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 16, color: theme.colors.inkDim }}>
+                {theme.decorate ? `// звоним · ${callName}` : `Звоним · ${callName}`}
+              </Text>
+            </View>
+          ) : remoteVideoOff ? (
+            <View style={{ ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center", backgroundColor: "#111" }}>
+              <Avatar
+                letter={(remoteInfo?.username?.[0] ?? callName?.[0] ?? "?").toUpperCase()}
+                size={120}
+                bg={colorFor(remote.userId)}
+                uri={remoteInfo?.avatarUrl ?? null}
+              />
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 16, color: "#fff", marginTop: 16 }}>
+                {remoteInfo?.username ?? callName}
+              </Text>
+            </View>
+          ) : (
+            <RTCView streamURL={remote.stream.toURL()} objectFit="cover" style={StyleSheet.absoluteFill} />
+          )}
 
-          {/* Local PiP */}
-          {localStream && !videoOff ? (
-            <RTCView
-              streamURL={localStream.toURL()}
-              objectFit="cover"
-              mirror
-              zOrder={1}
-              style={{ position: "absolute", top: 48, right: 16, width: 96, height: 140, borderRadius: 8, backgroundColor: "#222" }}
-            />
-          ) : null}
+          {/* Local PiP (draggable) */}
+          <LocalPip
+            stream={localStream}
+            videoOff={videoOff}
+            meLetter={(user?.username?.[0] ?? "?").toUpperCase()}
+            meAvatar={user?.avatar_url ?? null}
+            meColor={colorFor(user?.id ?? 0)}
+          />
 
-          {/* Header */}
+          {/* Name */}
           <View style={{ position: "absolute", top: 48, left: 16 }}>
-            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 14, fontWeight: "700", color: "#fff" }}>{callName}</Text>
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 15, fontWeight: "700", color: "#fff" }}>{callName}</Text>
           </View>
 
           {/* Controls */}
-          <View style={{ position: "absolute", left: 0, right: 0, bottom: 40, flexDirection: "row", justifyContent: "center", gap: 22 }}>
-            <CallCtrl label="🎤" active={!muted} onPress={toggleMute} dim={muted} />
-            <CallCtrl label="📷" active={!videoOff} onPress={toggleVideo} dim={videoOff} />
-            <Pressable onPress={end} style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: theme.colors.danger, alignItems: "center", justifyContent: "center" }}>
-              <Text style={{ fontSize: 26 }}>📵</Text>
-            </Pressable>
+          <View style={{ position: "absolute", left: 0, right: 0, bottom: 44, flexDirection: "row", justifyContent: "center", gap: 20 }}>
+            <CircleBtn bg={muted ? theme.colors.danger : "rgba(255,255,255,0.16)"} onPress={toggleMute}>
+              {muted ? <MicOffIcon color="#fff" size={24} /> : <MicIcon color="#fff" size={24} />}
+            </CircleBtn>
+            <CircleBtn bg={videoOff ? theme.colors.danger : "rgba(255,255,255,0.16)"} onPress={toggleVideo}>
+              {videoOff ? <VideoOffIcon color="#fff" size={24} /> : <VideoIcon color="#fff" size={24} />}
+            </CircleBtn>
+            <CircleBtn bg={theme.colors.danger} size={64} onPress={end}>
+              <HangupIcon color="#fff" size={26} />
+            </CircleBtn>
           </View>
         </View>
       </Modal>
@@ -216,20 +315,84 @@ export function CallProvider({ children }: { children: ReactNode }) {
   );
 }
 
-function CallCtrl({ label, onPress, dim }: { label: string; active: boolean; onPress: () => void; dim: boolean }) {
+function CircleBtn({ children, onPress, bg, size = 56 }: { children: ReactNode; onPress: () => void; bg: string; size?: number }) {
   return (
     <Pressable
       onPress={onPress}
+      style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: bg, alignItems: "center", justifyContent: "center" }}
+    >
+      {children}
+    </Pressable>
+  );
+}
+
+function LocalPip({
+  stream,
+  videoOff,
+  meLetter,
+  meAvatar,
+  meColor,
+}: {
+  stream: MediaStream | null;
+  videoOff: boolean;
+  meLetter: string;
+  meAvatar: string | null;
+  meColor: string;
+}) {
+  const { width: SW, height: SH } = Dimensions.get("window");
+  const startX = SW - PIP_W - 14;
+  const startY = 90;
+  const pan = useRef(new Animated.ValueXY({ x: startX, y: startY })).current;
+  const value = useRef({ x: startX, y: startY });
+
+  useEffect(() => {
+    const id = pan.addListener((v) => (value.current = v));
+    return () => pan.removeListener(id);
+  }, [pan]);
+
+  const responder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_evt, g) => Math.abs(g.dx) > 4 || Math.abs(g.dy) > 4,
+      onPanResponderGrant: () => {
+        pan.setOffset({ x: value.current.x, y: value.current.y });
+        pan.setValue({ x: 0, y: 0 });
+      },
+      onPanResponderMove: Animated.event([null, { dx: pan.x, dy: pan.y }], { useNativeDriver: false }),
+      onPanResponderRelease: () => {
+        pan.flattenOffset();
+        const maxX = SW - PIP_W - 8;
+        const maxY = SH - PIP_H - 120;
+        const cx = Math.max(8, Math.min(maxX, value.current.x));
+        const cy = Math.max(44, Math.min(maxY, value.current.y));
+        Animated.spring(pan, { toValue: { x: cx, y: cy }, useNativeDriver: false, friction: 7 }).start();
+      },
+    }),
+  ).current;
+
+  return (
+    <Animated.View
+      {...responder.panHandlers}
       style={{
-        width: 64,
-        height: 64,
-        borderRadius: 32,
-        backgroundColor: dim ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.35)",
-        alignItems: "center",
-        justifyContent: "center",
+        position: "absolute",
+        left: 0,
+        top: 0,
+        width: PIP_W,
+        height: PIP_H,
+        borderRadius: 10,
+        overflow: "hidden",
+        backgroundColor: "#222",
+        borderWidth: 1,
+        borderColor: "rgba(255,255,255,0.2)",
+        transform: pan.getTranslateTransform(),
       }}
     >
-      <Text style={{ fontSize: 24, opacity: dim ? 0.5 : 1 }}>{label}</Text>
-    </Pressable>
+      {stream && !videoOff ? (
+        <RTCView streamURL={stream.toURL()} objectFit="cover" mirror zOrder={1} style={{ flex: 1 }} />
+      ) : (
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <Avatar letter={meLetter} size={56} bg={meColor} uri={meAvatar} />
+        </View>
+      )}
+    </Animated.View>
   );
 }

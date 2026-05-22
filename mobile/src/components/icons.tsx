@@ -1,4 +1,4 @@
-import { Circle, Path, Svg } from "react-native-svg";
+import { Circle, Line, Path, Rect, Svg } from "react-native-svg";
 
 interface IconProps {
   size?: number;
@@ -84,6 +84,57 @@ export function SendIcon({ size = 22, color = "currentColor", strokeWidth = 2 }:
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth}>
       <Path d="M3 12 L21 4 L15 21 L11 13 L3 12 Z" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
+export function MicIcon({ size = 24, color = "currentColor", strokeWidth = 1.8 }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <Rect x="9" y="2.5" width="6" height="11" rx="3" />
+      <Path d="M5.5 11a6.5 6.5 0 0 0 13 0" />
+      <Line x1="12" y1="17.5" x2="12" y2="21" />
+    </Svg>
+  );
+}
+
+export function MicOffIcon({ size = 24, color = "currentColor", strokeWidth = 1.8 }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <Rect x="9" y="2.5" width="6" height="11" rx="3" />
+      <Path d="M5.5 11a6.5 6.5 0 0 0 13 0" />
+      <Line x1="12" y1="17.5" x2="12" y2="21" />
+      <Line x1="3.5" y1="3" x2="20.5" y2="21" />
+    </Svg>
+  );
+}
+
+export function VideoIcon({ size = 24, color = "currentColor", strokeWidth = 1.8 }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <Rect x="2.5" y="6.5" width="12" height="11" rx="2.5" />
+      <Path d="M14.5 10.5 L20.5 7.3 V16.7 L14.5 13.5 Z" />
+    </Svg>
+  );
+}
+
+export function VideoOffIcon({ size = 24, color = "currentColor", strokeWidth = 1.8 }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <Rect x="2.5" y="6.5" width="12" height="11" rx="2.5" />
+      <Path d="M14.5 10.5 L20.5 7.3 V16.7 L14.5 13.5 Z" />
+      <Line x1="3.5" y1="3" x2="20.5" y2="21" />
+    </Svg>
+  );
+}
+
+export function HangupIcon({ size = 24, color = "#ffffff" }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+      <Path
+        d="M12 9c-1.66 0-3 1.34-3 3v2H5c-1.1 0-2-.9-2-2v-1c0-3.87 3.13-7 7-7h4c3.87 0 7 3.13 7 7v1c0 1.1-.9 2-2 2h-4v-2c0-1.66-1.34-3-3-3z"
+        transform="rotate(135 12 12)"
+      />
     </Svg>
   );
 }
