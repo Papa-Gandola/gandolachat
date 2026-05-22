@@ -28,6 +28,7 @@ import { ChatsStackParamList } from "../../navigation/types";
 import { apiErrorMessage, chatApi, ChatOut, MessageOut, userApi } from "../../services/api";
 import { API_URL } from "../../services/config";
 import { useAuth } from "../../services/AuthContext";
+import { useCall } from "../../services/CallContext";
 import { useMessages } from "../../services/useMessages";
 import { wsService } from "../../services/ws";
 import { useTheme } from "../../theme";
@@ -77,6 +78,7 @@ type Props = NativeStackScreenProps<ChatsStackParamList, "Chat">;
 export function ChatScreen({ navigation, route }: Props) {
   const theme = useTheme();
   const { user } = useAuth();
+  const call = useCall();
   const { chatId, name, userId, avatarUrl, allowAllWrite, createdBy } = route.params;
   // Group when there's no single DM peer. A channel (allow_all_write === false)
   // is read-only for everyone except its creator.
@@ -461,8 +463,13 @@ export function ChatScreen({ navigation, route }: Props) {
         <IconBtn onPress={() => navigation.navigate("Poker", { chatId, chatName: name })}>
           <Text style={{ fontSize: 18 }}>🎴</Text>
         </IconBtn>
-        <IconBtn>
-          <PhoneIcon color={theme.colors.ink} />
+        <IconBtn
+          disabled={userId == null}
+          onPress={() => {
+            if (userId != null) call.startCall(Number(chatId), name, [userId]);
+          }}
+        >
+          <PhoneIcon color={userId == null ? theme.colors.inkMuted : theme.colors.ink} />
         </IconBtn>
       </View>
 
