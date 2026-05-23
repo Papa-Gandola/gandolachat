@@ -289,7 +289,7 @@ export default function Main({ token, user, onLogout }: Props) {
               </div>
             </>
           )}
-          <span style={{ ...s.titleText, fontSize: 10, opacity: 0.6 }}>v2.1.5</span>
+          <span style={{ ...s.titleText, fontSize: 10, opacity: 0.6 }}>v2.1.6</span>
           <span
             style={{
               width: 8, height: 8, borderRadius: "50%", marginLeft: 4,
