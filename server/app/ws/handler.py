@@ -299,6 +299,13 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                             "chat_id": chat_id,
                             "participants": list(manager.active_calls[chat_id]),
                         })
+                    # Surface what kind of signal we're forwarding + whether
+                    # the target actually has any active sockets — invaluable
+                    # for debugging "ICE stuck on checking" reports.
+                    sig = data.get("signal") or {}
+                    sig_kind = sig.get("type") if isinstance(sig, dict) else "?"
+                    target_sockets = len(manager.active.get(target_id, set()))
+                    print(f"[ws][call_signal] forward from={user_id} target={target_id} (sockets={target_sockets}) chat={chat_id} sig={sig_kind}")
                     await manager.send_to_user(target_id, {
                         "type": "call_signal",
                         "from_user_id": user_id,
