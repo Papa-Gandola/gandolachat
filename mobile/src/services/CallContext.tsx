@@ -352,6 +352,9 @@ function LocalPip({
 
   const responder = useRef(
     PanResponder.create({
+      // Claim the gesture on touch-down so the native RTCView inside (which
+      // would otherwise swallow it) doesn't block the drag.
+      onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: (_evt, g) => Math.abs(g.dx) > 4 || Math.abs(g.dy) > 4,
       onPanResponderGrant: () => {
         pan.setOffset({ x: value.current.x, y: value.current.y });
@@ -386,13 +389,21 @@ function LocalPip({
         transform: pan.getTranslateTransform(),
       }}
     >
-      {stream && !videoOff ? (
-        <RTCView streamURL={stream.toURL()} objectFit="cover" mirror zOrder={1} style={{ flex: 1 }} />
-      ) : (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <Avatar letter={meLetter} size={56} bg={meColor} uri={meAvatar} />
-        </View>
-      )}
+      {/* pointerEvents="none" lets touches fall through to the PanResponder on
+          the parent Animated.View. Without it, RTCView (a native SurfaceView)
+          eats the gesture and the PiP becomes undraggable. */}
+      <View pointerEvents="none" style={{ flex: 1 }}>
+        {stream && !videoOff ? (
+          // No zOrder — with positive zOrder the SurfaceView can outlive its
+          // React unmount on Android, sticking the camera frame over the avatar
+          // when the user turns video off.
+          <RTCView streamURL={stream.toURL()} objectFit="cover" mirror style={{ flex: 1 }} />
+        ) : (
+          <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+            <Avatar letter={meLetter} size={56} bg={meColor} uri={meAvatar} />
+          </View>
+        )}
+      </View>
     </Animated.View>
   );
 }
