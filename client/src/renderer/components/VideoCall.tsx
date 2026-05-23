@@ -1023,7 +1023,11 @@ function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, peerVideoOff,
     >
       <video ref={ref} autoPlay playsInline style={{
         ...(freeMode ? { width: "100%", height: "100%", objectFit: (peerScreenSharing ? "contain" : "cover") as const, display: "block" } : (enlarged ? s.videoEnlarged : s.video)),
-        display: peerVideoOff && !peerScreenSharing ? "none" : "block",
+        // Don't use display:none when peer turns video off — Chromium stops
+        // decoding the whole element, audio included, and the call goes silent
+        // until the next visibility flip. The avatar overlay below already
+        // covers the (empty) video frame visually.
+        display: "block",
       }} />
       {isNeo && <NeoCorners />}
       {freeMode && <div style={s.resizeCorner} onMouseDown={(e) => { e.stopPropagation(); onStartDrag?.(e, "resize"); }} />}

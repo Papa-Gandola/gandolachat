@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime, timedelta, timezone
 import asyncio
-from app.models import Chat, Message, User, Reaction, read_receipts
+from app.models import Chat, Message, User, Reaction, read_receipts, chat_members
 from app.ws.manager import manager
 from app.config import settings
 
@@ -219,13 +219,28 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                 target_id = data.get("target_user_id")
                 chat_id = data.get("chat_id")
                 if target_id and chat_id:
-                    # Verify target is a member of the chat
+                    # Verify target is a member of the chat.
+                    # chat_users is an in-memory cache populated at connect-time
+                    # and on join/add_member. It can drift in corner cases —
+                    # rapid mobile reconnects, partial multi-device disconnect,
+                    # a member added while their other socket holds an older
+                    # chat_ids snapshot. When the cache says "not subscribed",
+                    # consult the DB before giving up — if they really are a
+                    # member, repair the cache and pass the signal through.
                     if target_id not in manager.chat_users.get(chat_id, set()):
-                        # Surfaces silent-drop bugs: target hasn't subscribed
-                        # via WS yet (membership query at connect-time missed
-                        # this chat, or target disconnected mid-call).
-                        print(f"[ws][call_signal] dropped: target={target_id} not subscribed to chat={chat_id} (sender={user_id})")
-                        continue
+                        membership = await db.execute(
+                            select(chat_members.c.user_id).where(
+                                chat_members.c.chat_id == chat_id,
+                                chat_members.c.user_id == target_id,
+                            ).limit(1)
+                        )
+                        if not membership.first():
+                            print(f"[ws][call_signal] dropped: target={target_id} NOT a member of chat={chat_id} (sender={user_id})")
+                            continue
+                        # Cache was stale — heal it. send_to_user is a no-op if
+                        # the target has no active sockets, which is fine.
+                        manager.chat_users[chat_id].add(target_id)
+                        print(f"[ws][call_signal] healed stale chat_users for target={target_id} chat={chat_id}")
                     # Check DM call limit (max 2 participants)
                     chat_result = await db.execute(
                         select(Chat).where(Chat.id == chat_id)
