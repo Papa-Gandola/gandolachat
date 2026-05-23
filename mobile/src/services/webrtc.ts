@@ -51,6 +51,9 @@ class WebRTCService {
   // Signals that arrive before we've acquired a local stream (i.e. before the
   // user accepts) are queued per remote user and flushed on joinCall().
   private pending = new Map<number, unknown[]>();
+  // ICE candidates that arrived before setRemoteDescription completed for that
+  // peer. Held here until the SDP lands, then drained.
+  private earlyCandidates = new Map<number, unknown[]>();
   private inited = false;
 
   onStream: StreamCb | null = null;
@@ -89,9 +92,19 @@ class WebRTCService {
     this.localStream = await this._getMedia(video);
     if (!this.peers.has(initiatorId)) this._createPeer(initiatorId, false);
     // Flush every queued signal now that we have a peer + local media.
+    // Order matters: SDP (offer/answer) MUST land before any ICE candidate,
+    // otherwise addIceCandidate throws because remoteDescription is null and
+    // the candidate is lost — ICE never completes and the call sticks on
+    // "waiting for participant". Sort SDP-first and await each apply to keep
+    // them strictly sequential.
     for (const [uid, sigs] of Array.from(this.pending.entries())) {
       if (!this.peers.has(uid)) this._createPeer(uid, false);
-      for (const s of sigs) this._applySignal(uid, s);
+      const ordered = [...sigs].sort((a, b) => {
+        const aSdp = (a as { sdp?: string } | null)?.sdp ? 0 : 1;
+        const bSdp = (b as { sdp?: string } | null)?.sdp ? 0 : 1;
+        return aSdp - bSdp;
+      });
+      for (const s of ordered) await this._applySignal(uid, s);
     }
     this.pending.clear();
     return this.localStream;
@@ -200,7 +213,29 @@ class WebRTCService {
           await pc.setLocalDescription(answer);
           this._send(uid, { type: pc.localDescription?.type, sdp: pc.localDescription?.sdp });
         }
+        // Now that the remote description is set, drain any candidates that
+        // arrived before the SDP.
+        const queued = this.earlyCandidates.get(uid);
+        if (queued && queued.length) {
+          this.earlyCandidates.delete(uid);
+          for (const c of queued) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate((c as { candidate: unknown }).candidate as never));
+            } catch (err) {
+              console.warn("[webrtc] drained candidate failed", err);
+            }
+          }
+        }
       } else if (signal.candidate) {
+        // Defer if remoteDescription isn't ready yet — otherwise the candidate
+        // is silently dropped and ICE never completes.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (!(pc as any).remoteDescription) {
+          const q = this.earlyCandidates.get(uid) ?? [];
+          q.push(signal);
+          this.earlyCandidates.set(uid, q);
+          return;
+        }
         await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
       }
     } catch (err) {
@@ -212,6 +247,7 @@ class WebRTCService {
   private _onEnd = (data: any) => {
     const fromId = data.from_user_id as number;
     this.pending.delete(fromId);
+    this.earlyCandidates.delete(fromId);
     const pc = this.peers.get(fromId);
     if (pc) {
       try {
@@ -247,6 +283,7 @@ class WebRTCService {
     });
     this.peers.clear();
     this.pending.clear();
+    this.earlyCandidates.clear();
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.localStream = null;
     this.chatId = null;

@@ -221,6 +221,10 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                 if target_id and chat_id:
                     # Verify target is a member of the chat
                     if target_id not in manager.chat_users.get(chat_id, set()):
+                        # Surfaces silent-drop bugs: target hasn't subscribed
+                        # via WS yet (membership query at connect-time missed
+                        # this chat, or target disconnected mid-call).
+                        print(f"[ws][call_signal] dropped: target={target_id} not subscribed to chat={chat_id} (sender={user_id})")
                         continue
                     # Check DM call limit (max 2 participants)
                     chat_result = await db.execute(

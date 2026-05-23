@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ChatOut, UserOut, chatApi } from "../services/api";
 import { wsService } from "../services/ws";
 import { webrtcService } from "../services/webrtc";
@@ -27,6 +27,12 @@ export default function Main({ token, user, onLogout }: Props) {
   const [incomingCalls, setIncomingCalls] = useState<Array<{ chatId: number; fromUserId: number }>>([]);
   const [callChat, setCallChat] = useState<ChatOut | null>(null);
   const [callInitiator, setCallInitiator] = useState(false);
+  // Mirror of callChat for sync access from the WS handler. Without this the
+  // call_signal listener captures a stale `callChat` and re-adds the incoming
+  // banner for every ICE candidate that arrives between Accept and the moment
+  // webrtcService.isInCall() flips true (getUserMedia takes a beat).
+  const callChatRef = useRef<ChatOut | null>(null);
+  useEffect(() => { callChatRef.current = callChat; }, [callChat]);
   const [viewingProfile, setViewingProfile] = useState<UserOut | null>(null);
   const [viewingGroupInfo, setViewingGroupInfo] = useState<ChatOut | null>(null);
   const [pendingChatSearch, setPendingChatSearch] = useState<number | null>(null);
@@ -86,7 +92,10 @@ export default function Main({ token, user, onLogout }: Props) {
     });
 
     wsService.on("call_signal", (data) => {
-      if (webrtcService.isInCall()) return;
+      // Skip if we're already in a call OR already accepting one for this chat
+      // (callChatRef is set the moment Accept is clicked, before getUserMedia
+      // resolves and isInCall() flips true).
+      if (webrtcService.isInCall() || callChatRef.current?.id === data.chat_id) return;
       setIncomingCalls((prev) => {
         if (prev.some((c) => c.chatId === data.chat_id)) return prev;
         return [...prev, { chatId: data.chat_id, fromUserId: data.from_user_id }];
