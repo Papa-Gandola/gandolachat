@@ -1,5 +1,6 @@
 import json
 from fastapi import WebSocket
+from starlette.websockets import WebSocketState
 from collections import defaultdict
 
 
@@ -44,14 +45,35 @@ class ConnectionManager:
                 self.chat_users[chat_id].discard(user_id)
         return now_offline
 
+    def _drop_dead_socket(self, user_id: int, ws: WebSocket):
+        """Remove a dead/failed socket from active state — keeps stale sends
+        from happening over and over for the same broken connection."""
+        sockets = self.active.get(user_id)
+        if sockets is None:
+            return
+        sockets.discard(ws)
+        if not sockets:
+            self.active.pop(user_id, None)
+
     def join_chat(self, user_id: int, chat_id: int):
         self.chat_users[chat_id].add(user_id)
 
-    async def _send(self, ws: WebSocket, message: dict):
+    async def _send(self, ws: WebSocket, message: dict, user_id: int | None = None):
+        # Fast-path: skip if the socket is already known-dead. Without this we
+        # silently swallow the failure inside send_json and keep the dead WS
+        # in `active`, which is how stale sends keep producing "sockets=1 but
+        # client receives nothing" repros.
+        if ws.application_state != WebSocketState.CONNECTED:
+            print(f"[ws] _send skipped: state={ws.application_state.name} user_id={user_id}")
+            if user_id is not None:
+                self._drop_dead_socket(user_id, ws)
+            return
         try:
             await ws.send_json(message)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[ws] send_json failed user_id={user_id}: {type(e).__name__}: {e}")
+            if user_id is not None:
+                self._drop_dead_socket(user_id, ws)
 
     async def broadcast_to_chat(self, chat_id: int, message: dict, exclude_user: int | None = None):
         user_ids = self.chat_users.get(chat_id, set())
@@ -59,11 +81,11 @@ class ConnectionManager:
             if uid == exclude_user:
                 continue
             for ws in list(self.active.get(uid, set())):
-                await self._send(ws, message)
+                await self._send(ws, message, uid)
 
     async def send_to_user(self, user_id: int, message: dict):
         for ws in list(self.active.get(user_id, set())):
-            await self._send(ws, message)
+            await self._send(ws, message, user_id)
 
     def is_online(self, user_id: int) -> bool:
         return len(self.active.get(user_id, set())) > 0
