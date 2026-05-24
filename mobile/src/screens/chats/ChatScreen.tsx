@@ -20,7 +20,7 @@ import {
 
 import { Avatar } from "../../components/Avatar";
 import { Bubble } from "../../components/Bubble";
-import { ChevronLeftIcon, PhoneIcon, SendIcon } from "../../components/icons";
+import { ChevronLeftIcon, PhoneIcon, SearchIcon, SendIcon } from "../../components/icons";
 import { IconBtn } from "../../components/IconBtn";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import { VoiceMessage } from "../../components/VoiceMessage";
@@ -107,6 +107,48 @@ export function ChatScreen({ navigation, route }: Props) {
   // Peer presence for the header subtitle (DM only).
   const [peerOnline, setPeerOnline] = useState(false);
   const [peerLastSeen, setPeerLastSeen] = useState<string | null>(null);
+
+  // When user taps a search result, we get `scrollToMessageId` + a fresh
+  // `scrollToTick` in params. The effect below looks up the message, paging
+  // older history if needed, then scrolls to it and shows a highlight pulse.
+  const [highlightMsgId, setHighlightMsgId] = useState<number | null>(null);
+  const messageOffsets = useRef<Map<number, number>>(new Map());
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollToMessageId = (route.params as { scrollToMessageId?: number }).scrollToMessageId;
+  const scrollToTick = (route.params as { scrollToTick?: number }).scrollToTick;
+  useEffect(() => {
+    if (!scrollToMessageId || !scrollToTick) return;
+    let cancelled = false;
+    (async () => {
+      let attempts = 0;
+      // Page older history until the message is loaded or we give up.
+      while (!cancelled && !messages.some((m) => m.id === scrollToMessageId) && hasMore && attempts < 5) {
+        await loadMore();
+        attempts++;
+      }
+      if (cancelled) return;
+      // Defer the scroll one frame so any newly-prepended messages have
+      // measured their layout and registered their y-offset.
+      requestAnimationFrame(() => {
+        if (cancelled) return;
+        const y = messageOffsets.current.get(scrollToMessageId);
+        if (y != null) {
+          scrollRef.current?.scrollTo({ y: Math.max(0, y - 60), animated: true });
+        }
+        setHighlightMsgId(scrollToMessageId);
+        if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+        highlightTimerRef.current = setTimeout(() => setHighlightMsgId(null), 1800);
+      });
+    })();
+    return () => {
+      cancelled = true;
+      if (highlightTimerRef.current) {
+        clearTimeout(highlightTimerRef.current);
+        highlightTimerRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollToTick]);
 
   // Auto-scroll to bottom only when a NEW message lands at the bottom (or on the
   // first load) — never when older history is prepended on top, which would
@@ -253,16 +295,46 @@ export function ChatScreen({ navigation, route }: Props) {
     setForwardMsg(null);
   };
 
-  const doUpload = async (file: { uri: string; name: string; type: string }) => {
+  const doUpload = async (
+    file: { uri: string; name: string; type: string },
+    mediaGroupId?: string,
+  ) => {
     setAttachOpen(false);
     setUploading(true);
     try {
       // The server broadcasts the resulting message over WS, so useMessages
       // appends it — no need to use the response here.
-      await chatApi.uploadFile(Number(chatId), file, draft.trim());
+      await chatApi.uploadFile(Number(chatId), file, draft.trim(), mediaGroupId);
       setDraft("");
     } catch (err) {
       Alert.alert("Не удалось отправить", apiErrorMessage(err));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // Send several files as one media group. Caption (if any) is attached only
+  // to the first file — matches the desktop client. Uploads sequentially so
+  // the server preserves order under the same media_group_id.
+  const doUploadPack = async (files: { uri: string; name: string; type: string }[]) => {
+    setAttachOpen(false);
+    if (files.length === 0) return;
+    if (files.length === 1) {
+      await doUpload(files[0]);
+      return;
+    }
+    const mgid = `mg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const caption = draft.trim();
+    setUploading(true);
+    try {
+      for (let i = 0; i < files.length; i++) {
+        // Only the first file in the pack carries the caption — desktop does
+        // the same and groups them visually as one mosaic.
+        await chatApi.uploadFile(Number(chatId), files[i], i === 0 ? caption : "", mgid);
+      }
+      setDraft("");
+    } catch (err) {
+      Alert.alert("Не удалось отправить пакет", apiErrorMessage(err));
     } finally {
       setUploading(false);
     }
@@ -276,14 +348,16 @@ export function ChatScreen({ navigation, route }: Props) {
       const res = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         quality: 0.8,
+        allowsMultipleSelection: true,
+        selectionLimit: 10,
       });
-      if (res.canceled || !res.assets[0]) return;
-      const a = res.assets[0];
-      await doUpload({
+      if (res.canceled || res.assets.length === 0) return;
+      const files = res.assets.map((a, i) => ({
         uri: a.uri,
-        name: a.fileName ?? `photo_${Date.now()}.jpg`,
+        name: a.fileName ?? `photo_${Date.now()}_${i}.jpg`,
         type: a.mimeType ?? "image/jpeg",
-      });
+      }));
+      await doUploadPack(files);
     } catch (err) {
       Alert.alert("Галерея недоступна", apiErrorMessage(err));
     }
@@ -396,14 +470,17 @@ export function ChatScreen({ navigation, route }: Props) {
   };
 
   const pickFile = async () => {
-    const res = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
-    if (res.canceled || !res.assets[0]) return;
-    const a = res.assets[0];
-    await doUpload({
-      uri: a.uri,
-      name: a.name ?? `file_${Date.now()}`,
-      type: a.mimeType ?? "application/octet-stream",
+    const res = await DocumentPicker.getDocumentAsync({
+      copyToCacheDirectory: true,
+      multiple: true,
     });
+    if (res.canceled || res.assets.length === 0) return;
+    const files = res.assets.map((a, i) => ({
+      uri: a.uri,
+      name: a.name ?? `file_${Date.now()}_${i}`,
+      type: a.mimeType ?? "application/octet-stream",
+    }));
+    await doUploadPack(files);
   };
 
   return (
@@ -460,6 +537,9 @@ export function ChatScreen({ navigation, route }: Props) {
             ) : null}
           </View>
         </Pressable>
+        <IconBtn onPress={() => navigation.navigate("MessageSearch", { chatId, chatName: name })}>
+          <SearchIcon color={theme.colors.ink} />
+        </IconBtn>
         <IconBtn onPress={() => navigation.navigate("Poker", { chatId, chatName: name })}>
           <Text style={{ fontSize: 18 }}>🎴</Text>
         </IconBtn>
@@ -557,14 +637,21 @@ export function ChatScreen({ navigation, route }: Props) {
           const audio = isAudio(m.file_url) ? fileUrl(m.file_url) : null;
           const img = !audio && isImage(m.file_url) ? fileUrl(m.file_url) : null;
           const text = m.content ?? (m.file_url && !img && !audio ? `📎 ${m.file_name ?? "файл"}` : "");
+          const isHighlighted = highlightMsgId === m.id;
           return (
             <Pressable
               key={m.id}
+              onLayout={(e) => messageOffsets.current.set(m.id, e.nativeEvent.layout.y)}
               onLongPress={() => {
                 Haptics.selectionAsync().catch(() => {});
                 setReactionFor(m.id);
               }}
               delayLongPress={250}
+              style={
+                isHighlighted
+                  ? { backgroundColor: theme.colors.accent + "22", borderRadius: theme.radius.md }
+                  : undefined
+              }
             >
               <Bubble
                 mine={mine}

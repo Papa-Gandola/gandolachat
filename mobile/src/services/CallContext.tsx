@@ -130,11 +130,18 @@ export function CallProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Ringtone + vibration while a call is incoming.
+  // Ringtone + vibration while a call is incoming OR while an outgoing call
+  // hasn't been picked up yet (matches desktop: ringback tone for the caller).
   useEffect(() => {
-    const ringing = !!incoming && !inCall;
+    const isIncoming = !!incoming && !inCall;
+    const isOutgoingWaiting = inCall && remotes.length === 0;
+    const ringing = isIncoming || isOutgoingWaiting;
     if (!ringing) return;
-    Vibration.vibrate([0, 700, 700], true);
+    if (isIncoming) {
+      // Vibrate only for incoming — outgoing caller doesn't need to feel their
+      // own phone buzz.
+      Vibration.vibrate([0, 700, 700], true);
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -150,7 +157,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
         }
         ringRef.current = sound;
       } catch {
-        // ignore — vibration still rings
+        // ignore — vibration still rings (incoming only)
       }
     })();
     return () => {
@@ -160,7 +167,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       ringRef.current = null;
       if (s) s.stopAsync().then(() => s.unloadAsync()).catch(() => {});
     };
-  }, [incoming, inCall]);
+  }, [incoming, inCall, remotes.length]);
 
   const afterMedia = (ls: MediaStream) => {
     setLocalStream(ls);
