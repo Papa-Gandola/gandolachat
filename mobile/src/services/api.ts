@@ -116,6 +116,10 @@ export const userApi = {
   search: (q: string) => getInstance().get<UserOut[]>(`/api/users/search?q=${encodeURIComponent(q)}`),
   updateProfile: (data: { username?: string; status?: string; about?: string }) =>
     getInstance().patch<UserOut>("/api/users/me", data),
+  registerPushToken: (token: string, platform = "android") =>
+    getInstance().post("/api/users/push-token", { token, platform }),
+  unregisterPushToken: (token: string) =>
+    getInstance().delete("/api/users/push-token", { data: { token } }),
   uploadAvatar: async (file: { uri: string; name: string; type: string }): Promise<UserOut> => {
     // Multipart via fetch (RN's fetch builds the boundary correctly for file parts).
     const token = await SecureStore.getItemAsync(TOKEN_KEY);

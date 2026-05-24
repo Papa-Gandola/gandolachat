@@ -2,10 +2,12 @@ from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pathlib import Path
+from datetime import datetime, timezone
 import aiofiles
 import uuid
+from pydantic import BaseModel
 from app.database import get_db
-from app.models import User
+from app.models import User, PushToken
 from app.schemas import UserOut
 from app.auth import get_current_user, create_access_token
 from app.schemas import Token, MeOut
@@ -140,3 +142,55 @@ async def upload_avatar(
         await manager.broadcast_to_chat(row.chat_id, payload)
 
     return current_user
+
+
+class PushTokenIn(BaseModel):
+    token: str
+    platform: str = "android"
+
+
+@router.post("/push-token")
+async def register_push_token(
+    data: PushTokenIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Register or re-bind a mobile push token to the current user. Same
+    token coming back for a different user (account switch on the device)
+    just gets re-pointed — no duplicates."""
+    if not data.token or not data.token.strip():
+        raise HTTPException(400, "Empty token")
+    tok = data.token.strip()
+    existing = await db.execute(select(PushToken).where(PushToken.token == tok))
+    row = existing.scalar_one_or_none()
+    now = datetime.now(timezone.utc)
+    if row is None:
+        db.add(PushToken(user_id=current_user.id, token=tok, platform=data.platform[:16] or "android"))
+    else:
+        row.user_id = current_user.id
+        row.platform = data.platform[:16] or row.platform
+        row.updated_at = now
+    await db.commit()
+    return {"ok": True}
+
+
+@router.delete("/push-token")
+async def unregister_push_token(
+    data: PushTokenIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Drop a push token (called on logout). Only removes if it belongs to
+    the current user — defence against accidentally clearing someone
+    else's token if the same string ended up registered elsewhere."""
+    tok = data.token.strip()
+    if not tok:
+        return {"ok": True}
+    existing = await db.execute(
+        select(PushToken).where(PushToken.token == tok, PushToken.user_id == current_user.id)
+    )
+    row = existing.scalar_one_or_none()
+    if row is not None:
+        await db.delete(row)
+        await db.commit()
+    return {"ok": True}
