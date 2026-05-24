@@ -1,6 +1,6 @@
 import { Audio } from "expo-av";
 import { createContext, ReactNode, useContext, useEffect, useRef, useState } from "react";
-import { Animated, Dimensions, Modal, PanResponder, Pressable, StyleSheet, Text, Vibration, View } from "react-native";
+import { Animated, Dimensions, Modal, PanResponder, Pressable, StyleSheet, Text, Vibration, View, ViewStyle } from "react-native";
 import { MediaStream, RTCView } from "react-native-webrtc";
 
 import { Avatar } from "../components/Avatar";
@@ -130,11 +130,18 @@ export function CallProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Ringtone + vibration while a call is incoming.
+  // Ringtone + vibration while a call is incoming OR while an outgoing call
+  // hasn't been picked up yet (matches desktop: ringback tone for the caller).
   useEffect(() => {
-    const ringing = !!incoming && !inCall;
+    const isIncoming = !!incoming && !inCall;
+    const isOutgoingWaiting = inCall && remotes.length === 0;
+    const ringing = isIncoming || isOutgoingWaiting;
     if (!ringing) return;
-    Vibration.vibrate([0, 700, 700], true);
+    if (isIncoming) {
+      // Vibrate only for incoming — outgoing caller doesn't need to feel their
+      // own phone buzz.
+      Vibration.vibrate([0, 700, 700], true);
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -150,7 +157,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
         }
         ringRef.current = sound;
       } catch {
-        // ignore — vibration still rings
+        // ignore — vibration still rings (incoming only)
       }
     })();
     return () => {
@@ -160,7 +167,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       ringRef.current = null;
       if (s) s.stopAsync().then(() => s.unloadAsync()).catch(() => {});
     };
-  }, [incoming, inCall]);
+  }, [incoming, inCall, remotes.length]);
 
   const afterMedia = (ls: MediaStream) => {
     setLocalStream(ls);
@@ -218,9 +225,13 @@ export function CallProvider({ children }: { children: ReactNode }) {
     sendVideoStatus(v);
   };
 
-  const remote = remotes[0] ?? null;
-  const remoteInfo = remote ? peerInfo.get(remote.userId) : undefined;
-  const remoteVideoOff = remote ? peerVideoOff.has(remote.userId) : false;
+  // Group-call grid data: tile per remote participant.
+  const remoteTiles = remotes.map((r) => ({
+    userId: r.userId,
+    stream: r.stream,
+    info: peerInfo.get(r.userId),
+    videoOff: peerVideoOff.has(r.userId),
+  }));
 
   return (
     <CallContext.Provider value={{ inCall, startCall }}>
@@ -260,27 +271,15 @@ export function CallProvider({ children }: { children: ReactNode }) {
       {/* Active call */}
       <Modal visible={inCall} animationType="slide" onRequestClose={end}>
         <View style={{ flex: 1, backgroundColor: "#000" }}>
-          {/* Remote — full screen */}
-          {!remote ? (
+          {/* Remote — full screen for 1:1, grid for groups */}
+          {remoteTiles.length === 0 ? (
             <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
               <Text style={{ fontFamily: theme.fonts.mono, fontSize: 16, color: theme.colors.inkDim }}>
                 {theme.decorate ? `// звоним · ${callName}` : `Звоним · ${callName}`}
               </Text>
             </View>
-          ) : remoteVideoOff ? (
-            <View style={{ ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center", backgroundColor: "#111" }}>
-              <Avatar
-                letter={(remoteInfo?.username?.[0] ?? callName?.[0] ?? "?").toUpperCase()}
-                size={120}
-                bg={colorFor(remote.userId)}
-                uri={remoteInfo?.avatarUrl ?? null}
-              />
-              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 16, color: "#fff", marginTop: 16 }}>
-                {remoteInfo?.username ?? callName}
-              </Text>
-            </View>
           ) : (
-            <RTCView streamURL={remote.stream.toURL()} objectFit="cover" style={StyleSheet.absoluteFill} />
+            <RemoteGrid tiles={remoteTiles} fallbackName={callName} />
           )}
 
           {/* Local PiP (draggable) */}
@@ -323,6 +322,82 @@ function CircleBtn({ children, onPress, bg, size = 56 }: { children: ReactNode; 
     >
       {children}
     </Pressable>
+  );
+}
+
+interface RemoteTileData {
+  userId: number;
+  stream: MediaStream;
+  info: PeerInfo | undefined;
+  videoOff: boolean;
+}
+
+// Adaptive grid of remote video tiles for group calls. Layout depends on
+// the number of participants; single-remote falls through to a full-screen
+// tile so 1:1 calls look the same as before.
+function RemoteGrid({ tiles, fallbackName }: { tiles: RemoteTileData[]; fallbackName: string }) {
+  return (
+    <View style={{ ...StyleSheet.absoluteFillObject, flexDirection: "row", flexWrap: "wrap" }}>
+      {tiles.map((t, i) => (
+        <View key={t.userId} style={[{ padding: tiles.length > 1 ? 1 : 0 }, tileSize(tiles.length, i)]}>
+          <RemoteTile tile={t} fallbackName={fallbackName} />
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function tileSize(count: number, idx: number): { width: ViewStyle["width"]; height: ViewStyle["height"] } {
+  if (count <= 1) return { width: "100%", height: "100%" };
+  if (count === 2) return { width: "100%", height: "50%" };
+  if (count === 3) {
+    return idx === 0
+      ? { width: "100%", height: "50%" }
+      : { width: "50%", height: "50%" };
+  }
+  if (count === 4) return { width: "50%", height: "50%" };
+  // 5-6: 3 columns x 2 rows
+  return { width: "33.3333%", height: "50%" };
+}
+
+function RemoteTile({ tile, fallbackName }: { tile: RemoteTileData; fallbackName: string }) {
+  const theme = useTheme();
+  const { stream, info, videoOff, userId } = tile;
+  const name = info?.username ?? fallbackName;
+  const showVideo = !videoOff && stream.getVideoTracks().length > 0;
+  return (
+    <View style={{ flex: 1, backgroundColor: "#111", overflow: "hidden" }}>
+      {showVideo ? (
+        <RTCView streamURL={stream.toURL()} objectFit="cover" style={StyleSheet.absoluteFill} />
+      ) : (
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <Avatar
+            letter={(name?.[0] ?? "?").toUpperCase()}
+            size={80}
+            bg={colorFor(userId)}
+            uri={info?.avatarUrl ?? null}
+          />
+        </View>
+      )}
+      {/* Tile label — only shows in group calls (2+ remotes) since a single
+          full-screen tile already has the call header above. */}
+      <View
+        pointerEvents="none"
+        style={{
+          position: "absolute",
+          left: 6,
+          bottom: 6,
+          paddingHorizontal: 6,
+          paddingVertical: 2,
+          backgroundColor: "rgba(0,0,0,0.55)",
+          borderRadius: 4,
+        }}
+      >
+        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: "#fff" }} numberOfLines={1}>
+          {name}
+        </Text>
+      </View>
+    </View>
   );
 }
 
