@@ -1,4 +1,5 @@
 import { Audio } from "expo-av";
+import * as KeepAwake from "expo-keep-awake";
 import { createContext, ReactNode, useContext, useEffect, useRef, useState } from "react";
 import { Animated, Dimensions, Modal, PanResponder, Pressable, StyleSheet, Text, Vibration, View } from "react-native";
 import { MediaStream, RTCView } from "react-native-webrtc";
@@ -60,6 +61,19 @@ export function CallProvider({ children }: { children: ReactNode }) {
     const chatId = webrtcService.getChatId();
     if (chatId != null) wsService.send({ type: "video_status", chat_id: chatId, video_off: off });
   };
+
+  // Keep the screen on + hold a wake lock for the duration of an active call.
+  // Without this Android can suspend the JS thread when the user backgrounds
+  // the app, which freezes the WebRTC render loop and effectively pauses the
+  // call. expo-keep-awake calls into the Android WakeLock + KEEP_SCREEN_ON
+  // window flag; cheap, automatically released when we deactivate.
+  useEffect(() => {
+    if (!inCall) return;
+    KeepAwake.activateKeepAwakeAsync("gandola-call").catch(() => {});
+    return () => {
+      KeepAwake.deactivateKeepAwake("gandola-call").catch(() => {});
+    };
+  }, [inCall]);
 
   // Wire webrtc callbacks once we know who we are.
   useEffect(() => {
