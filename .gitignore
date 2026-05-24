@@ -24,3 +24,9 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Firebase / EAS — do not commit. Upload to EAS Credentials instead so
+# cloud builds pick it up at build time; for local dev the file can live
+# untracked in mobile/google-services.json.
+mobile/google-services.json
+mobile/google-services.plist

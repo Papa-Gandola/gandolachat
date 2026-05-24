@@ -116,6 +116,24 @@ class PokerTable(Base):
     seats: Mapped[list["PokerSeat"]] = relationship(back_populates="table", cascade="all, delete-orphan")
 
 
+class PushToken(Base):
+    """Expo push token registered by a mobile client. Multiple tokens per
+    user are allowed (multi-device). Same token can only belong to one user
+    at a time — re-registration moves it via the endpoint."""
+    __tablename__ = "push_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token: Mapped[str] = mapped_column(String(255), unique=True)
+    platform: Mapped[str] = mapped_column(String(16), default="android")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
 class PokerSeat(Base):
     __tablename__ = "poker_seats"
 

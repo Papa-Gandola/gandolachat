@@ -268,6 +268,28 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                             "all_participants": {user_id},
                             "answered": False,
                         }
+                        # First signal of the call — wake the callee(s) with a
+                        # high-priority push so a backgrounded/killed app rings.
+                        from app.push import send_push
+                        from sqlalchemy.orm import selectinload
+                        chat_res = await db.execute(
+                            select(Chat).options(selectinload(Chat.members)).where(Chat.id == chat_id)
+                        )
+                        chat_full = chat_res.scalar_one_or_none()
+                        if chat_full:
+                            caller_res = await db.execute(select(User).where(User.id == user_id))
+                            caller = caller_res.scalar_one_or_none()
+                            caller_name = caller.username if caller else "Кто-то"
+                            recipients = [m.id for m in chat_full.members if m.id != user_id]
+                            await send_push(
+                                db,
+                                recipients,
+                                title="Входящий звонок",
+                                body=f"{caller_name} звонит" + (f" в {chat_full.name}" if chat_full.is_group and chat_full.name else ""),
+                                data={"type": "call", "chat_id": chat_id, "from_user_id": user_id},
+                                channel_id="calls",
+                                priority="high",
+                            )
                     meta = manager.call_meta[chat_id]
                     meta["all_participants"].add(user_id)
                     if is_new_to_call and user_id != meta["initiator"]:
@@ -468,6 +490,28 @@ async def handle_message(data: dict, sender_id: int, db: AsyncSession):
         "_temp_id": temp_id,
     }
     await manager.broadcast_to_chat(chat_id, payload)
+
+    # Push notification to every chat member except the sender. Cuts long
+    # messages so the OS doesn't render an awkward ellipsis halfway.
+    from app.push import send_push
+    from sqlalchemy.orm import selectinload
+    chat_with_members = await db.execute(
+        select(Chat).options(selectinload(Chat.members)).where(Chat.id == chat_id)
+    )
+    chat_full = chat_with_members.scalar_one_or_none()
+    if chat_full:
+        recipients = [m.id for m in chat_full.members if m.id != sender_id]
+        body_text = (content[:140] + "…") if len(content) > 140 else content
+        title = chat_full.name if chat_full.is_group else sender.username
+        sub_body = f"{sender.username}: {body_text}" if chat_full.is_group else body_text
+        await send_push(
+            db,
+            recipients,
+            title=title,
+            body=sub_body,
+            data={"type": "message", "chat_id": chat_id, "message_id": msg.id},
+            channel_id="messages",
+        )
 
 
 async def handle_edit_message(data: dict, user_id: int, db: AsyncSession):
