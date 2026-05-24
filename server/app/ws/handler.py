@@ -284,12 +284,28 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                                 caller = caller_res.scalar_one_or_none()
                                 caller_name = caller.username if caller else "Кто-то"
                                 recipients = [m.id for m in chat_full.members if m.id != user_id]
+                                # For DM, give the mobile deeplink enough info
+                                # to land on the right Chat screen with userId
+                                # set (otherwise mobile treats it as a group).
+                                peer_user_id = None
+                                if not chat_full.is_group:
+                                    peers = [m.id for m in chat_full.members if m.id != user_id]
+                                    if peers:
+                                        peer_user_id = peers[0]
                                 await send_push(
                                     db,
                                     recipients,
                                     title="Входящий звонок",
                                     body=f"{caller_name} звонит" + (f" в {chat_full.name}" if chat_full.is_group and chat_full.name else ""),
-                                    data={"type": "call", "chat_id": chat_id, "from_user_id": user_id},
+                                    data={
+                                        "type": "call",
+                                        "chat_id": chat_id,
+                                        "from_user_id": user_id,
+                                        "is_group": chat_full.is_group,
+                                        "peer_user_id": peer_user_id,
+                                        "chat_name": chat_full.name,
+                                        "notification_tag": f"call-{chat_id}",
+                                    },
                                     channel_id="calls",
                                     priority="high",
                                 )
@@ -500,25 +516,51 @@ async def handle_message(data: dict, sender_id: int, db: AsyncSession):
     # messages so the OS doesn't render an awkward ellipsis halfway.
     # Wrapped: push is best-effort, must never break message sending.
     try:
-        from app.push import send_push
+        from app.push import send_push, should_throttle_message_push
         from sqlalchemy.orm import selectinload
         chat_with_members = await db.execute(
             select(Chat).options(selectinload(Chat.members)).where(Chat.id == chat_id)
         )
         chat_full = chat_with_members.scalar_one_or_none()
         if chat_full:
-            recipients = [m.id for m in chat_full.members if m.id != sender_id]
-            body_text = (content[:140] + "…") if len(content) > 140 else content
-            title = chat_full.name if chat_full.is_group else sender.username
-            sub_body = f"{sender.username}: {body_text}" if chat_full.is_group else body_text
-            await send_push(
-                db,
-                recipients,
-                title=title,
-                body=sub_body,
-                data={"type": "message", "chat_id": chat_id, "message_id": msg.id},
-                channel_id="messages",
-            )
+            # Anti-spam: if we already pushed for this chat within the last
+            # PUSH_THROTTLE_SEC seconds, skip — the user already has a
+            # notification card in the shade and will see new messages when
+            # they open the chat. Prevents the "ding ding ding" experience
+            # when someone fires 20 messages in a row.
+            if should_throttle_message_push(chat_id):
+                pass
+            else:
+                recipients = [m.id for m in chat_full.members if m.id != sender_id]
+                body_text = (content[:140] + "…") if len(content) > 140 else content
+                title = chat_full.name if chat_full.is_group else sender.username
+                sub_body = f"{sender.username}: {body_text}" if chat_full.is_group else body_text
+                # Compute peer for DM so the mobile deeplink can open the Chat
+                # screen with the right userId (otherwise mobile thinks it's a
+                # group). For groups peer_user_id stays None.
+                peer_user_id = None
+                if not chat_full.is_group:
+                    peers = [m.id for m in chat_full.members if m.id != sender_id]
+                    if peers:
+                        peer_user_id = peers[0]
+                await send_push(
+                    db,
+                    recipients,
+                    title=title,
+                    body=sub_body,
+                    data={
+                        "type": "message",
+                        "chat_id": chat_id,
+                        "message_id": msg.id,
+                        "is_group": chat_full.is_group,
+                        "peer_user_id": peer_user_id,
+                        "chat_name": chat_full.name,
+                        # Stable identifier so the mobile side can collapse
+                        # all notifications from the same chat into one.
+                        "notification_tag": f"chat-{chat_id}",
+                    },
+                    channel_id="messages",
+                )
     except Exception as _push_err:
         print(f"[push][message] failed: {type(_push_err).__name__}: {_push_err}")
 

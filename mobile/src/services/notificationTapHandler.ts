@@ -9,8 +9,8 @@
  *      `getLastNotificationResponseAsync`).
  *
  * Notification payload contract (set by the server in app/push.py):
- *   message → { type: "message", chat_id: number, message_id: number }
- *   call    → { type: "call",    chat_id: number, from_user_id: number }
+ *   message → { type, chat_id, message_id, is_group, peer_user_id, chat_name }
+ *   call    → { type, chat_id, from_user_id, is_group, peer_user_id, chat_name }
  *
  * Both kinds open the chat. For a call, the incoming-call prompt is already
  * driven by the WS `call_signal` event — once the user is back in the app
@@ -27,7 +27,20 @@ function handlePayload(data: Record<string, unknown> | undefined | null) {
   const chatIdRaw = data.chat_id;
   if (chatIdRaw == null) return;
   const chatId = String(chatIdRaw);
-  navigateToChat(chatId);
+  const isGroup = !!data.is_group;
+  const name =
+    typeof data.chat_name === "string" && data.chat_name.length > 0
+      ? (data.chat_name as string)
+      : "Чат";
+  // For DM the server includes peer_user_id; for groups it's null/undefined.
+  const peerRaw = data.peer_user_id;
+  const userId =
+    typeof peerRaw === "number"
+      ? peerRaw
+      : typeof peerRaw === "string" && peerRaw
+        ? Number(peerRaw)
+        : undefined;
+  navigateToChat({ chatId, name, isGroup, userId });
 }
 
 export function initNotificationTapHandler(): void {

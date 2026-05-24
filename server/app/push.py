@@ -21,6 +21,27 @@ EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 # Single shared client — connection pool is faster than reopening per call.
 _client: httpx.AsyncClient | None = None
 
+# Anti-spam: don't fire a message push for the same chat more than once
+# every PUSH_THROTTLE_SEC seconds. The chat still gets the WS message
+# (so the open app updates immediately) — only the OS-level notification
+# is suppressed, which is what stops the "ding ding ding" experience
+# when a friend sends 20 messages back-to-back.
+import time as _time
+PUSH_THROTTLE_SEC = 15
+_last_message_push_at: dict[int, float] = {}
+
+
+def should_throttle_message_push(chat_id: int) -> bool:
+    """Return True if the caller should SKIP pushing for this chat — we already
+    pushed within the throttle window. Updates the in-memory timestamp on a
+    pass so the next call sees fresh state."""
+    now = _time.time()
+    last = _last_message_push_at.get(chat_id, 0)
+    if now - last < PUSH_THROTTLE_SEC:
+        return True
+    _last_message_push_at[chat_id] = now
+    return False
+
 
 def _get_client() -> httpx.AsyncClient:
     global _client
