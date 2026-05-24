@@ -45,6 +45,12 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
             data = await websocket.receive_json()
             event = data.get("type")
 
+            # Per-message in-log so we can spot mobile WS going silent during a
+            # call (no pings, no signals → socket is wedged on the client side).
+            # Skip pings to avoid drowning the log; they're frequent and noisy.
+            if event != "ping":
+                print(f"[ws][in] user={user_id} event={event}")
+
             if event == "ping":
                 await websocket.send_json({"type": "pong", "t": data.get("t")})
 
