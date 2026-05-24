@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from sqlalchemy.orm import selectinload
@@ -564,8 +564,8 @@ async def get_messages(
 async def upload_file(
     chat_id: int,
     file: UploadFile = File(...),
-    caption: str = "",
-    media_group_id: str | None = None,
+    caption: str = Form(""),
+    media_group_id: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

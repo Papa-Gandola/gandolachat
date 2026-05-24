@@ -33,13 +33,12 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<MessageOut[] | null>(null);
   const [editingMsg, setEditingMsg] = useState<MessageOut | null>(null);
-  const [editText, setEditText] = useState("");
   const [replyTo, setReplyToState] = useState<MessageOut | null>(null);
   const setReplyTo = (msg: MessageOut | null) => {
     setReplyToState(msg);
     if (msg) setTimeout(() => textInputRef.current?.focus(), 0);
   };
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; msg: MessageOut } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; flipX: boolean; flipY: boolean; msg: MessageOut } | null>(null);
   const [showSearch, setShowSearch] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
@@ -85,6 +84,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const textInputRef = useRef<HTMLDivElement>(null);
+  const editInputRef = useRef<HTMLDivElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const atBottomRef = useRef(true);
 
@@ -114,7 +114,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   useEffect(() => {
     const handler = (data: any) => {
       if (data.chat_id !== chat.id) return;
-      setMessages((prev) => [...prev, data as MessageOut]);
+      setMessages((prev) => prev.some((m) => m.id === data.id) ? prev : [...prev, data as MessageOut]);
       // If it's our own echoed message, drop the matching pending placeholder.
       // Match strictly by _temp_id so two identical messages sent in quick succession
       // don't share the same pending entry.
@@ -205,7 +205,15 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
 
     const deleteHandler = (data: any) => {
       if (data.chat_id !== chat.id) return;
-      setMessages((prev) => prev.filter((m) => m.id !== data.message_id));
+      setMessages((prev) => {
+        const filtered = prev.filter((m) => m.id !== data.message_id);
+        if (prev.length > 0 && prev[prev.length - 1].id === data.message_id) {
+          window.dispatchEvent(new CustomEvent("chat-last-message-changed", {
+            detail: { chatId: chat.id, message: filtered[filtered.length - 1] ?? null },
+          }));
+        }
+        return filtered;
+      });
     };
 
     const reactionHandler = (data: any) => {
@@ -305,6 +313,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   const seenIdRef = useRef<number>(0);
   const prevScrollHeightRef = useRef<number>(0);
   const didLoadOlderRef = useRef(false);
+  const didInitialLoadRef = useRef(false);
 
   // Mark messages as read only when they actually become visible in the viewport.
   useEffect(() => {
@@ -360,19 +369,21 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
         }
       });
       setReactions(rMap);
-      // Don't mark-read blindly on load — IntersectionObserver will mark as
-      // messages actually scroll into view. Scroll to bottom on first open.
-      setTimeout(() => {
-        bottomRef.current?.scrollIntoView();
-        atBottomRef.current = true;
-        setAtBottom(true);
-      }, 100);
+      didInitialLoadRef.current = true;
     } finally {
       setLoading(false);
     }
   }
 
   useLayoutEffect(() => {
+    if (didInitialLoadRef.current) {
+      didInitialLoadRef.current = false;
+      const el = messagesRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+      atBottomRef.current = true;
+      setAtBottom(true);
+      return;
+    }
     if (!didLoadOlderRef.current) return;
     didLoadOlderRef.current = false;
     const el = messagesRef.current;
@@ -481,6 +492,52 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     }
     return result;
   }
+
+  // Convert markdown string → HTML for initializing the contenteditable edit area.
+  function markdownToHtml(text: string): string {
+    let out = "";
+    let i = 0;
+    const markers: [string, string][] = [
+      ["***", "bolditalic"], ["**", "b"], ["__", "u"], ["~~", "s"], ["||", "spoiler"], ["*", "i"],
+    ];
+    while (i < text.length) {
+      if (text[i] === "\n") { out += "<br>"; i++; continue; }
+      if (text[i] === "&") { out += "&amp;"; i++; continue; }
+      if (text[i] === "<") { out += "&lt;"; i++; continue; }
+      if (text[i] === ">") { out += "&gt;"; i++; continue; }
+      let matched = false;
+      for (const [marker, type] of markers) {
+        if (text.startsWith(marker, i)) {
+          const end = text.indexOf(marker, i + marker.length);
+          if (end > i + marker.length) {
+            const inner = markdownToHtml(text.slice(i + marker.length, end));
+            if (type === "bolditalic") out += `<b><i>${inner}</i></b>`;
+            else if (type === "spoiler") out += `<span data-format="spoiler" style="background:var(--bg-tertiary);color:var(--text-muted);border-radius:3px;padding:0 2px;cursor:default">${inner}</span>`;
+            else out += `<${type}>${inner}</${type}>`;
+            i = end + marker.length;
+            matched = true;
+            break;
+          }
+        }
+      }
+      if (!matched) { out += text[i]; i++; }
+    }
+    return out;
+  }
+
+  // Populate the edit contenteditable when a message is opened for editing.
+  useEffect(() => {
+    if (!editingMsg || !editInputRef.current) return;
+    editInputRef.current.innerHTML = markdownToHtml(editingMsg.content || "");
+    editInputRef.current.style.height = "auto";
+    editInputRef.current.style.height = Math.min(editInputRef.current.scrollHeight, 200) + "px";
+    editInputRef.current.focus();
+    const range = document.createRange();
+    range.selectNodeContents(editInputRef.current);
+    range.collapse(false);
+    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(range);
+  }, [editingMsg?.id]);
 
   function applyFormat(command: string) {
     const el = textInputRef.current;
@@ -668,10 +725,11 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   }
 
   function handleEditSave() {
-    if (!editingMsg || !editText.trim()) return;
-    wsService.send({ type: "edit_message", message_id: editingMsg.id, content: editText.trim() });
+    if (!editingMsg) return;
+    const content = editInputRef.current ? htmlToMarkdown(editInputRef.current).trim() : "";
+    if (!content) return;
+    wsService.send({ type: "edit_message", message_id: editingMsg.id, content });
     setEditingMsg(null);
-    setEditText("");
   }
 
   function handleDelete(msgId: number) {
@@ -914,14 +972,14 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                     marginTop: isGrouped ? 2 : 16,
                     justifyContent: isMine ? "flex-end" : "flex-start",
                   }}
-                  onDoubleClick={() => setReplyTo(msg)}
+                  onDoubleClick={() => { if (editingMsg?.id !== msg.id) setReplyTo(msg); }}
                   onContextMenu={(e) => {
                     e.preventDefault();
-                    const menuWidth = 220;
-                    const menuHeight = 280;
-                    const x = Math.min(e.clientX, window.innerWidth - menuWidth - 8);
-                    const y = Math.min(e.clientY, window.innerHeight - menuHeight - 8);
-                    setContextMenu({ x, y, msg });
+                    const MENU_W = 252;
+                    const MENU_H = msg.sender_id === currentUser.id ? 330 : 265;
+                    const flipX = e.clientX + MENU_W + 8 > window.innerWidth;
+                    const flipY = e.clientY + MENU_H + 8 > window.innerHeight;
+                    setContextMenu({ x: e.clientX, y: e.clientY, flipX, flipY, msg });
                   }}
                 >
                   {/* Avatar: hidden for own messages; for others show only on first of group */}
@@ -992,25 +1050,36 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                           title="Перейти к сообщению"
                         >
                           <span style={{ ...s.replyAuthor, ...authorOverride }}>{msg.reply_to_username}</span>
-                          <span style={{ ...s.replyText, ...textOverride }}>{msg.reply_to_content || "..."}</span>
+                          <span style={{ ...s.replyText, ...textOverride }}>{msg.reply_to_content ? <FormattedText text={msg.reply_to_content} staticSpoiler /> : "..."}</span>
                         </div>
                       );
                     })()}
                     {/* Editing */}
                     {editingMsg?.id === msg.id ? (
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <input
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
+                        <div
+                          ref={editInputRef}
+                          contentEditable
+                          suppressContentEditableWarning
                           style={s.editInput}
-                          value={editText}
-                          onChange={(e) => setEditText(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") handleEditSave();
-                            if (e.key === "Escape") setEditingMsg(null);
+                          onInput={(e) => {
+                            const div = e.currentTarget;
+                            div.style.height = "auto";
+                            div.style.height = Math.min(div.scrollHeight, 200) + "px";
                           }}
-                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !e.ctrlKey && !e.shiftKey) { e.preventDefault(); handleEditSave(); }
+                            if (e.key === "Escape") setEditingMsg(null);
+                            if (e.ctrlKey && !e.shiftKey && e.code === "KeyB") { e.preventDefault(); if (!e.repeat) document.execCommand("bold"); }
+                            if (e.ctrlKey && !e.shiftKey && e.code === "KeyI") { e.preventDefault(); if (!e.repeat) document.execCommand("italic"); }
+                            if (e.ctrlKey && !e.shiftKey && e.code === "KeyU") { e.preventDefault(); if (!e.repeat) document.execCommand("underline"); }
+                            if (e.ctrlKey && e.shiftKey && e.code === "KeyX") { e.preventDefault(); if (!e.repeat) document.execCommand("strikeThrough"); }
+                          }}
                         />
-                        <button style={s.editSaveBtn} onClick={handleEditSave}>✓</button>
-                        <button style={s.editCancelBtn} onClick={() => setEditingMsg(null)}>✕</button>
+                        <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                          <button style={s.editSaveBtn} onClick={handleEditSave}>✓</button>
+                          <button style={s.editCancelBtn} onClick={() => setEditingMsg(null)}>✕</button>
+                        </div>
                       </div>
                     ) : (
                       <>
@@ -1033,41 +1102,6 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                           }
                           return <p className="msg-content" style={{ ...s.msgText, ...(isNeo && isMine ? { color: "#0a0a0a" } : {}), ...(!isNeo && isMine ? { color: "#fff" } : {}) }}><FormattedText text={msg.content} /></p>;
                         })()}
-                        {/* Reactions display */}
-                        {reactions.get(msg.id)?.length ? (
-                          <div style={s.reactionsRow}>
-                            {Object.entries(
-                              reactions.get(msg.id)!.reduce((acc: Record<string, number>, r) => {
-                                acc[r.emoji] = (acc[r.emoji] || 0) + 1;
-                                return acc;
-                              }, {})
-                            ).map(([emoji, count]) => {
-                              const myReact = reactions.get(msg.id)!.some((r) => r.emoji === emoji && r.userId === currentUser.id);
-                              return (
-                                <span
-                                  key={emoji}
-                                  style={{
-                                    ...s.reactionBadge,
-                                    cursor: "pointer",
-                                    border: myReact ? "1px solid var(--accent)" : "1px solid transparent",
-                                    // Force readable colour for the number/emoji inside —
-                                    // the parent bubble may set color to var(--accent-text)
-                                    // (dark) which renders invisible on the dark badge bg.
-                                    color: "var(--text-primary)",
-                                  }}
-                                  onClick={() => {
-                                    if (myReact) {
-                                      wsService.send({ type: "remove_reaction", message_id: msg.id, chat_id: chat.id, emoji });
-                                    } else {
-                                      wsService.send({ type: "reaction", message_id: msg.id, chat_id: chat.id, emoji });
-                                    }
-                                  }}
-                                  title={myReact ? "Убрать реакцию" : "Добавить реакцию"}
-                                >{emoji} {count}</span>
-                              );
-                            })}
-                          </div>
-                        ) : null}
                       </>
                     )}
                     {msg.file_url && (
@@ -1084,6 +1118,38 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                         </a>
                       )
                     )}
+                    {/* Reactions display — always after media so they sit at the bottom */}
+                    {reactions.get(msg.id)?.length ? (
+                      <div style={s.reactionsRow}>
+                        {Object.entries(
+                          reactions.get(msg.id)!.reduce((acc: Record<string, number>, r) => {
+                            acc[r.emoji] = (acc[r.emoji] || 0) + 1;
+                            return acc;
+                          }, {})
+                        ).map(([emoji, count]) => {
+                          const myReact = reactions.get(msg.id)!.some((r) => r.emoji === emoji && r.userId === currentUser.id);
+                          return (
+                            <span
+                              key={emoji}
+                              style={{
+                                ...s.reactionBadge,
+                                cursor: "pointer",
+                                border: myReact ? "1px solid var(--accent)" : "1px solid transparent",
+                                color: "var(--text-primary)",
+                              }}
+                              onClick={() => {
+                                if (myReact) {
+                                  wsService.send({ type: "remove_reaction", message_id: msg.id, chat_id: chat.id, emoji });
+                                } else {
+                                  wsService.send({ type: "reaction", message_id: msg.id, chat_id: chat.id, emoji });
+                                }
+                              }}
+                              title={myReact ? "Убрать реакцию" : "Добавить реакцию"}
+                            >{emoji} {count}</span>
+                          );
+                        })}
+                      </div>
+                    ) : null}
                     {/* Per-message footer: edited marker + ReadBar — shown on every own/edited msg */}
                     {(msg.is_edited || isMine) && (
                       <div style={{
@@ -1177,7 +1243,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
 
       {/* Context menu */}
       {contextMenu && (
-        <div style={{ ...s.ctxMenu, left: contextMenu.x, top: contextMenu.y }}>
+        <div style={{ ...s.ctxMenu, left: contextMenu.x, top: contextMenu.y, transform: `translate(${contextMenu.flipX ? "-100%" : "0"}, ${contextMenu.flipY ? "-100%" : "0"})` }}>
           <button style={s.ctxItem} onClick={() => { setReplyTo(contextMenu.msg); setContextMenu(null); }}>↩ Ответить</button>
           <button style={s.ctxItem} onClick={() => { setForwardMsg(contextMenu.msg); setContextMenu(null); }}>➡ Переслать</button>
           <div style={s.ctxReactions}>
@@ -1190,7 +1256,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
           </div>
           {contextMenu.msg.sender_id === currentUser.id && (
             <>
-              <button style={s.ctxItem} onClick={() => { setEditingMsg(contextMenu.msg); setEditText(contextMenu.msg.content || ""); setContextMenu(null); }}>✏️ Редактировать</button>
+              <button style={s.ctxItem} onClick={() => { setEditingMsg(contextMenu.msg); setContextMenu(null); }}>✏️ Редактировать</button>
               <button style={{ ...s.ctxItem, color: "var(--danger)" }} onClick={() => { handleDelete(contextMenu.msg.id); setContextMenu(null); }}>🗑 Удалить</button>
             </>
           )}
@@ -1230,7 +1296,10 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
       {/* Reply preview bar */}
       {replyTo && (
         <div style={s.replyBar}>
-          <span>Ответ для <b>{replyTo.sender_username}</b>: {replyTo.content?.slice(0, 50)}</span>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
+            Ответ для <b>{replyTo.sender_username}</b>:{" "}
+            {replyTo.content ? <FormattedText text={replyTo.content} staticSpoiler /> : "..."}
+          </span>
           <button style={s.replyBarClose} onClick={() => setReplyTo(null)}>✕</button>
         </div>
       )}
@@ -1778,9 +1847,9 @@ const s: Record<string, React.CSSProperties> = {
   replyBar: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 16px", background: "var(--bg-secondary)", borderTop: "1px solid var(--border)", fontSize: 13, color: "var(--text-secondary)" },
   replyBarClose: { background: "none", color: "var(--text-muted)", fontSize: 16, padding: "2px 8px" },
   typingBar: { padding: "4px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" },
-  ctxMenu: { position: "fixed" as const, background: "var(--bg-tertiary)", borderRadius: 6, padding: 4, boxShadow: "0 4px 16px rgba(0,0,0,0.4)", zIndex: 200, minWidth: 160 },
+  ctxMenu: { position: "fixed" as const, background: "var(--bg-tertiary)", borderRadius: 6, padding: 4, boxShadow: "0 4px 16px rgba(0,0,0,0.4)", zIndex: 200, width: 252 },
   ctxItem: { display: "block", width: "100%", background: "none", color: "var(--text-primary)", padding: "8px 12px", fontSize: 13, textAlign: "left" as const, borderRadius: 4 },
-  editInput: { flex: 1, background: "var(--bg-input)", borderRadius: 4, padding: "4px 8px", fontSize: 13, color: "var(--text-primary)" },
+  editInput: { width: "100%", background: "var(--bg-input)", borderRadius: 4, padding: "6px 10px", fontSize: 13, color: "var(--text-primary)", outline: "none", whiteSpace: "pre-wrap" as const, wordBreak: "break-word" as const, minHeight: 32, maxHeight: 200, overflowY: "auto" as const, cursor: "text", userSelect: "text" as const },
   editSaveBtn: { background: "var(--accent)", color: "var(--accent-text)", borderRadius: 4, padding: "4px 10px", fontSize: 14 },
   editCancelBtn: { background: "var(--bg-tertiary)", color: "var(--text-muted)", borderRadius: 4, padding: "4px 10px", fontSize: 14 },
   dropOverlay: { position: "absolute" as const, inset: 0, background: "rgba(88,101,242,0.15)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)", fontSize: 18, fontWeight: 700, zIndex: 50, pointerEvents: "none" as const },

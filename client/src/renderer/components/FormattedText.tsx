@@ -88,25 +88,41 @@ function renderText(text: string, keyBase: string): React.ReactNode[] {
   return out;
 }
 
-function renderNodes(nodes: Node[], key = 0): React.ReactNode[] {
+function renderNodes(nodes: Node[], key = 0, noBold = false, staticSpoiler = false): React.ReactNode[] {
   return nodes.map((node, idx) => {
     const k = `${key}-${idx}`;
     if (node.type === "text") return <React.Fragment key={k}>{renderText(node.content as string, k)}</React.Fragment>;
-    const inner = renderNodes(node.content as Node[], idx);
-    if (node.type === "bolditalic") return <strong key={k}><em>{inner}</em></strong>;
-    if (node.type === "bold") return <strong key={k}>{inner}</strong>;
+    const inner = renderNodes(node.content as Node[], idx, noBold, staticSpoiler);
+    if (node.type === "bolditalic") return noBold ? <em key={k}>{inner}</em> : <strong key={k}><em>{inner}</em></strong>;
+    if (node.type === "bold") return noBold ? <React.Fragment key={k}>{inner}</React.Fragment> : <strong key={k}>{inner}</strong>;
     if (node.type === "italic") return <em key={k}>{inner}</em>;
     if (node.type === "strike") return <s key={k}>{inner}</s>;
     if (node.type === "underline") return <u key={k}>{inner}</u>;
-    if (node.type === "spoiler") return <Spoiler key={k}>{inner}</Spoiler>;
+    if (node.type === "spoiler") return <Spoiler key={k} staticMode={staticSpoiler}>{inner}</Spoiler>;
     return null;
   });
 }
 
-function Spoiler({ children }: { children: React.ReactNode }) {
+function Spoiler({ children, staticMode = false }: { children: React.ReactNode; staticMode?: boolean }) {
   const theme = useTheme();
   const isNeo = theme === "neo";
   const [revealed, setRevealed] = useState(false);
+
+  if (staticMode) {
+    return (
+      <span style={{
+        background: isNeo ? "#000" : "#1a1b1e",
+        color: "transparent",
+        borderRadius: isNeo ? 0 : 3,
+        border: isNeo ? "1px solid var(--accent)" : undefined,
+        padding: "0 3px",
+        userSelect: "none" as const,
+      }}>
+        {children}
+      </span>
+    );
+  }
+
   return (
     <span
       onClick={(e) => { e.stopPropagation(); setRevealed(!revealed); }}
@@ -128,7 +144,15 @@ function Spoiler({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function FormattedText({ text }: { text: string }) {
+export default function FormattedText({
+  text,
+  noBold = false,
+  staticSpoiler = false,
+}: {
+  text: string;
+  noBold?: boolean;
+  staticSpoiler?: boolean;
+}) {
   const nodes = parse(text);
-  return <>{renderNodes(nodes)}</>;
+  return <>{renderNodes(nodes, 0, noBold, staticSpoiler)}</>;
 }

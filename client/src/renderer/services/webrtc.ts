@@ -245,10 +245,18 @@ class WebRTCService {
     });
 
     map.set(targetUserId, peer);
-    // Store the video sender so disableVideo/enableVideo can replaceTrack without renegotiation
     if (purpose === "webcam" && pc2) {
       const vSender = pc2.getSenders().find((s: any) => s.track?.kind === "video");
-      if (vSender) this._videoSenders.set(targetUserId, vSender as RTCRtpSender);
+      if (vSender) {
+        this._videoSenders.set(targetUserId, vSender as RTCRtpSender);
+      } else {
+        // Started audio-only (camera-off pref): add a null video transceiver so
+        // enableVideo() can replaceTrack without full renegotiation later.
+        try {
+          const transceiver = pc2.addTransceiver("video", { direction: "sendrecv" });
+          this._videoSenders.set(targetUserId, transceiver.sender);
+        } catch {}
+      }
     }
   }
 
