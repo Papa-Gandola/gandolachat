@@ -18,4 +18,5 @@ contextBridge.exposeInMainWorld("electron", {
   focus: () => ipcRenderer.send("window:focus"),
   isDebInstall: () => ipcRenderer.invoke("app:isDebInstall"),
   openExternal: (url: string) => ipcRenderer.invoke("shell:openExternal", url),
+  saveFileAs: (buffer: ArrayBuffer, defaultName: string) => ipcRenderer.invoke("file:saveAs", buffer, defaultName),
 });

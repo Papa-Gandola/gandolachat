@@ -41,10 +41,12 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; flipX: boolean; flipY: boolean; msg: MessageOut } | null>(null);
   const [showSearch, setShowSearch] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const dragCounterRef = useRef(0);
   const [showEmoji, setShowEmoji] = useState(false);
   const [hoverEmoji, setHoverEmoji] = useState("😊");
   const RANDOM_EMOJI = ["😊", "😂", "🤣", "😍", "🥰", "😎", "🤔", "😭", "🥺", "🤡", "💀", "🗿", "🔥", "💯", "👻", "🤓", "🫠", "🤯", "😈", "🥴"];
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [imgCtxMenu, setImgCtxMenu] = useState<{ x: number; y: number; flipX: boolean; flipY: boolean; url: string; filename: string } | null>(null);
   const [onlineUserIds, setOnlineUserIds] = useState<Set<number>>(new Set());
   const [reactions, setReactions] = useState<Map<number, Array<{ emoji: string; userId: number }>>>(new Map());
   const [showReactionPicker, setShowReactionPicker] = useState<number | null>(null);
@@ -295,6 +297,26 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     return () => clearInterval(id);
   }, []);
 
+  // Blur + clear selection from text input when files are first queued
+  useEffect(() => {
+    if (pendingAttachments.length === 0) return;
+    textInputRef.current?.blur();
+    window.getSelection()?.removeAllRanges();
+  }, [pendingAttachments.length > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Global Enter → send attachments when files are queued (works regardless of focus)
+  useEffect(() => {
+    if (pendingAttachments.length === 0) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Enter" || e.ctrlKey || e.shiftKey) return;
+      if ((e.target as HTMLElement).tagName === "INPUT") return; // let caption inputs handle their own Enter
+      e.preventDefault();
+      sendAttachmentPack();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [pendingAttachments, uploadingPack]); // re-bind on every change so closure has fresh state
+
   // ESC closes image preview (capture phase, before global ESC handler)
   useEffect(() => {
     if (!previewImage) return;
@@ -307,6 +329,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
   }, [previewImage]);
+
 
   const [hasMore, setHasMore] = useState(true);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -683,7 +706,9 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
+    dragCounterRef.current = 0;
     setDragOver(false);
+    if (e.dataTransfer.types.includes("gandola/internal-image")) return;
     const files = Array.from(e.dataTransfer.files || []);
     queueFiles(files);
   }
@@ -800,6 +825,29 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     ? [...typingUsers.values()].join(", ") + " печатает..."
     : null;
 
+  async function downloadImage(url: string, filename: string) {
+    const res = await fetch(url);
+    const buf = await res.arrayBuffer();
+    (window as any).electron?.saveFileAs(buf, filename);
+  }
+
+  async function copyImage(url: string) {
+    const res = await fetch(url);
+    const blob = await res.blob();
+    const item = new ClipboardItem({ [blob.type]: blob });
+    await navigator.clipboard.write([item]);
+  }
+
+  function openImgCtxMenu(e: React.MouseEvent, url: string, filename: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    const MENU_W = 220;
+    const MENU_H = 80;
+    const flipX = e.clientX + MENU_W + 8 > window.innerWidth;
+    const flipY = e.clientY + MENU_H + 8 > window.innerHeight;
+    setImgCtxMenu({ x: e.clientX, y: e.clientY, flipX, flipY, url, filename });
+  }
+
   // Group messages by date (search results never include pending — they came from server)
   const displayMessages = searchResults ?? [...messages, ...pendingMsgs];
   const grouped: Array<{ date: string; messages: MessageOut[] }> = [];
@@ -813,8 +861,9 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   return (
     <div
       style={{ ...s.root, ...(dragOver ? { outline: "2px dashed var(--accent)" } : {}) }}
-      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-      onDragLeave={() => setDragOver(false)}
+      onDragEnter={(e) => { e.preventDefault(); if (e.dataTransfer.types.includes("gandola/internal-image")) return; dragCounterRef.current++; setDragOver(true); }}
+      onDragOver={(e) => e.preventDefault()}
+      onDragLeave={() => { dragCounterRef.current--; if (dragCounterRef.current <= 0) { dragCounterRef.current = 0; setDragOver(false); } }}
       onDrop={handleDrop}
       onPaste={(e) => {
         const files = Array.from(e.clipboardData?.files || []);
@@ -972,7 +1021,12 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                     marginTop: isGrouped ? 2 : 16,
                     justifyContent: isMine ? "flex-end" : "flex-start",
                   }}
-                  onDoubleClick={() => { if (editingMsg?.id !== msg.id) setReplyTo(msg); }}
+                  onDoubleClick={(e) => {
+                    if (editingMsg?.id === msg.id) return;
+                    // Don't intercept double-clicks on text content — let the browser select text
+                    if ((e.target as HTMLElement).closest(".msg-content")) return;
+                    setReplyTo(msg);
+                  }}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     const MENU_W = 252;
@@ -1110,6 +1164,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                           src={`${BASE_URL}${msg.file_url}`}
                           style={{ ...s.msgImage, cursor: "pointer" }}
                           alt={msg.file_name || "image"}
+                          onDragStart={(e) => e.dataTransfer.setData("gandola/internal-image", "1")}
                           onClick={() => setPreviewImage(`${BASE_URL}${msg.file_url}`)}
                         />
                       ) : (
@@ -1293,17 +1348,6 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
         </div>
       )}
 
-      {/* Reply preview bar */}
-      {replyTo && (
-        <div style={s.replyBar}>
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
-            Ответ для <b>{replyTo.sender_username}</b>:{" "}
-            {replyTo.content ? <FormattedText text={replyTo.content} staticSpoiler /> : "..."}
-          </span>
-          <button style={s.replyBarClose} onClick={() => setReplyTo(null)}>✕</button>
-        </div>
-      )}
-
       {/* Forward message modal */}
       {forwardMsg && (
         <div style={s.imageOverlay} onClick={() => setForwardMsg(null)}>
@@ -1334,9 +1378,51 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
 
       {/* Image preview modal */}
       {previewImage && (
-        <div style={s.imageOverlay} onClick={() => setPreviewImage(null)}>
-          <img src={previewImage} style={s.imagePreview} alt="preview" />
+        <div
+          style={s.imageOverlay}
+          onClick={() => { setPreviewImage(null); setImgCtxMenu(null); }}
+        >
+          <img
+            src={previewImage}
+            style={{ ...s.imagePreview, cursor: "default" }}
+            alt="preview"
+            onDragStart={(e) => e.dataTransfer.setData("gandola/internal-image", "1")}
+            onClick={(e) => { e.stopPropagation(); setImgCtxMenu(null); }}
+            onContextMenu={(e) => openImgCtxMenu(e, previewImage, previewImage.split("/").pop() || "image")}
+          />
         </div>
+      )}
+
+      {/* Image right-click context menu */}
+      {imgCtxMenu && (
+        <>
+          {/* Backdrop: closes menu on outside click. Not rendered when previewImage is open
+              because the overlay div already acts as the backdrop in that case. */}
+          {!previewImage && (
+            <div
+              style={{ position: "fixed", inset: 0, zIndex: 1998 }}
+              onClick={() => setImgCtxMenu(null)}
+              onContextMenu={(e) => { e.preventDefault(); setImgCtxMenu(null); }}
+            />
+          )}
+          <div
+            style={{ position: "fixed", left: imgCtxMenu.x, top: imgCtxMenu.y, zIndex: 1999, background: "var(--bg-secondary)", border: "1px solid var(--border)", borderRadius: "var(--radius)", boxShadow: "var(--shadow)", width: 220, overflow: "hidden", transform: `translate(${imgCtxMenu.flipX ? "-100%" : "0"}, ${imgCtxMenu.flipY ? "-100%" : "0"})` }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              style={{ ...s.ctxItem, width: "100%" }}
+              onClick={() => { downloadImage(imgCtxMenu.url, imgCtxMenu.filename); setImgCtxMenu(null); }}
+            >
+              💾 Сохранить как...
+            </button>
+            <button
+              style={{ ...s.ctxItem, width: "100%" }}
+              onClick={() => { copyImage(imgCtxMenu.url); setImgCtxMenu(null); }}
+            >
+              📋 Копировать изображение
+            </button>
+          </div>
+        </>
       )}
 
       {/* Emoji picker */}
@@ -1447,6 +1533,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                     type="text"
                     value={att.caption}
                     onChange={(e) => setPendingCaption(idx, e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && !e.ctrlKey && !e.shiftKey) { e.preventDefault(); sendAttachmentPack(); } }}
                     placeholder={isNeo ? "подпись..." : "Подпись (необязательно)"}
                     style={{
                       width: "100%",
@@ -1471,6 +1558,17 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Reply preview bar — sits between attachments and the input */}
+      {replyTo && (
+        <div style={s.replyBar}>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
+            Ответ для <b>{replyTo.sender_username}</b>:{" "}
+            {replyTo.content ? <FormattedText text={replyTo.content} staticSpoiler /> : "..."}
+          </span>
+          <button style={s.replyBarClose} onClick={() => setReplyTo(null)}>✕</button>
         </div>
       )}
 
@@ -1514,7 +1612,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
             ? `написать_${(chat.is_group ? chat.name : getChatTitle())?.toLowerCase().replace(/\s+/g, "_")}...`
             : `Написать ${chat.is_group ? "в группе" : getChatTitle()}...`}
           className="chat-input"
-          style={{ ...s.textInput, ...(isNeo ? mono : {}), overflowY: "auto" as const, outline: "none", whiteSpace: "pre-wrap" as const, wordBreak: "break-word" as const, cursor: "text" }}
+          style={{ ...s.textInput, ...(isNeo ? mono : {}), overflowY: "auto" as const, outline: "none", whiteSpace: "pre-wrap" as const, wordBreak: "break-word" as const, cursor: pendingAttachments.length > 0 ? "not-allowed" : "text", opacity: pendingAttachments.length > 0 ? 0.4 : 1, pointerEvents: pendingAttachments.length > 0 ? "none" as const : undefined }}
           onInput={(e) => {
             const div = e.currentTarget;
             setText(div.innerText.trim());
@@ -1525,6 +1623,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.ctrlKey && !e.shiftKey) {
               e.preventDefault();
+              if (pendingAttachments.length > 0) { sendAttachmentPack(); return; }
               sendMessage(e as any);
             } else if (e.key === "Enter" && (e.ctrlKey || e.shiftKey)) {
               e.preventDefault();
@@ -1559,8 +1658,9 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
           style={{
             ...s.sendBtn,
             ...(isNeo ? { ...mono, borderRadius: 0, width: "auto", padding: "9px 16px", fontSize: 12, fontWeight: 700, letterSpacing: 1 } : {}),
+            ...(pendingAttachments.length > 0 ? { opacity: 0.35, pointerEvents: "none" as const, transform: "none" } : {}),
           }}
-          disabled={!text.trim()}
+          disabled={pendingAttachments.length > 0 || !text.trim()}
         >{isNeo ? "SEND" : "➤"}</button>
       </form>
     </div>
@@ -1830,7 +1930,7 @@ const s: Record<string, React.CSSProperties> = {
   ctxReactionBtn: { background: "none", fontSize: 18, padding: 3, borderRadius: 4, cursor: "pointer" },
   msgText: { color: "var(--text-primary)", lineHeight: 1.5, wordBreak: "break-word" as const, whiteSpace: "pre-wrap" as const, margin: 0 },
   msgImage: { maxWidth: 360, maxHeight: 280, borderRadius: 4, marginTop: 4, display: "block" },
-  imageOverlay: { position: "fixed" as const, inset: 0, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, cursor: "pointer" },
+  imageOverlay: { position: "fixed" as const, inset: 0, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, cursor: "default" },
   imagePreview: { maxWidth: "90%", maxHeight: "90%", borderRadius: 8, objectFit: "contain" as const },
   forwardModal: { background: "var(--bg-primary)", borderRadius: 8, padding: 20, width: 320, maxHeight: "60%", overflowY: "auto" as const, cursor: "default" },
   forwardChatItem: { padding: "10px 12px", borderRadius: 4, cursor: "pointer", color: "var(--text-primary)", fontSize: 14, background: "var(--bg-secondary)", marginBottom: 4 },
