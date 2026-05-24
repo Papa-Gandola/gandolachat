@@ -370,7 +370,7 @@ export default function Main({ token, user, onLogout }: Props) {
           chats={chats}
           currentUser={currentUser}
           activeChatId={activeChat?.id ?? null}
-          onSelectChat={(c) => { setActiveChat(c); setViewingProfile(null); }}
+          onSelectChat={(c) => { setActiveChat(c); setViewingProfile(null); setViewingGroupInfo(null); }}
           onChatsUpdate={setChats}
           onLogout={handleLogout}
           onAvatarUpdate={setCurrentUser}
