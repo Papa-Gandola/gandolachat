@@ -116,6 +116,10 @@ export const userApi = {
   search: (q: string) => getInstance().get<UserOut[]>(`/api/users/search?q=${encodeURIComponent(q)}`),
   updateProfile: (data: { username?: string; status?: string; about?: string }) =>
     getInstance().patch<UserOut>("/api/users/me", data),
+  registerPushToken: (token: string, platform = "android") =>
+    getInstance().post("/api/users/push-token", { token, platform }),
+  unregisterPushToken: (token: string) =>
+    getInstance().delete("/api/users/push-token", { data: { token } }),
   uploadAvatar: async (file: { uri: string; name: string; type: string }): Promise<UserOut> => {
     // Multipart via fetch (RN's fetch builds the boundary correctly for file parts).
     const token = await SecureStore.getItemAsync(TOKEN_KEY);
@@ -199,12 +203,16 @@ export const chatApi = {
     chatId: number,
     file: { uri: string; name: string; type: string },
     caption = "",
+    mediaGroupId?: string,
   ): Promise<MessageOut> => {
     // Use fetch (not axios) for multipart — RN's fetch builds the multipart
     // boundary correctly for { uri, name, type } file parts, where axios
     // routinely fails and surfaces as a network error.
     const token = await SecureStore.getItemAsync(TOKEN_KEY);
-    const qs = caption ? `?caption=${encodeURIComponent(caption)}` : "";
+    const params: string[] = [];
+    if (caption) params.push(`caption=${encodeURIComponent(caption)}`);
+    if (mediaGroupId) params.push(`media_group_id=${encodeURIComponent(mediaGroupId)}`);
+    const qs = params.length ? `?${params.join("&")}` : "";
     const url = `${API_URL}/api/chats/${chatId}/files${qs}`;
 
     // RN's multipart upload over cleartext HTTP is occasionally flaky and
@@ -218,6 +226,7 @@ export const chatApi = {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         form.append("file", file as any);
         if (caption) form.append("caption", caption);
+        if (mediaGroupId) form.append("media_group_id", mediaGroupId);
         const res = await fetch(url, {
           method: "POST",
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,

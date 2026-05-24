@@ -4,6 +4,7 @@ import { ChatInfoScreen } from "../screens/chats/ChatInfoScreen";
 import { ChatScreen } from "../screens/chats/ChatScreen";
 import { ChatsListScreen } from "../screens/chats/ChatsListScreen";
 import { GroupChatScreen } from "../screens/chats/GroupChatScreen";
+import { MessageSearchScreen } from "../screens/chats/MessageSearchScreen";
 import { NewChatScreen } from "../screens/chats/NewChatScreen";
 import { NewGroupScreen } from "../screens/chats/NewGroupScreen";
 import { PokerScreen } from "../screens/chats/PokerScreen";
@@ -26,6 +27,7 @@ export function ChatsStack() {
       <Stack.Screen name="Chat" component={ChatScreen} />
       <Stack.Screen name="GroupChat" component={GroupChatScreen} />
       <Stack.Screen name="ChatInfo" component={ChatInfoScreen} />
+      <Stack.Screen name="MessageSearch" component={MessageSearchScreen} />
       <Stack.Screen name="OtherProfile" component={OtherProfileScreen} />
       <Stack.Screen name="Poker" component={PokerScreen} />
       <Stack.Screen

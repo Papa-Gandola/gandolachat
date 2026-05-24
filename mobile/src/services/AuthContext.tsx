@@ -2,6 +2,7 @@ import * as SecureStore from "expo-secure-store";
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 
 import { apiErrorMessage, authApi, UserOut, userApi } from "./api";
+import { registerForPushNotifications, unregisterCurrentPushToken } from "./notifications";
 import { wsService } from "./ws";
 
 interface AuthState {
@@ -58,6 +59,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setToken(fresh);
             setUser(me.data.user);
             wsService.connect(fresh);
+            // Re-register the push token after relog so the server has a
+            // fresh user_id↔token mapping (handles account switches too).
+            registerForPushNotifications().catch(() => {});
           } catch {
             // Saved token no longer valid — drop it.
             await SecureStore.deleteItemAsync(TOKEN_KEY);
@@ -90,6 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setToken(access_token);
           setUser(u);
           wsService.connect(access_token);
+          registerForPushNotifications().catch(() => {});
         } catch (err) {
           setError(apiErrorMessage(err));
           throw err;
@@ -120,6 +125,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       },
       signOut: () => {
+        // Drop the push token on the server BEFORE we wipe the local one,
+        // otherwise the next user on this device would inherit incoming
+        // notifications for the old account.
+        unregisterCurrentPushToken().catch(() => {});
         SecureStore.deleteItemAsync(TOKEN_KEY).catch(() => {});
         wsService.disconnect();
         setToken(null);
