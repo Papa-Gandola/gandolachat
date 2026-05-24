@@ -107,6 +107,23 @@ export function ChatScreen({ navigation, route }: Props) {
   // Peer presence for the header subtitle (DM only).
   const [peerOnline, setPeerOnline] = useState(false);
   const [peerLastSeen, setPeerLastSeen] = useState<string | null>(null);
+  // Per-chat mute. Read from SecureStore-backed cache; toggled by the bell
+  // icon in the header. Persists across restarts. Server keeps pushing, the
+  // notification handler in services/notifications.ts silently drops the
+  // alert for muted chats.
+  const [muted, setMuted] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    import("../../services/mutedChats").then((mod) => {
+      mod.isChatMuted(Number(chatId)).then((v) => { if (!cancelled) setMuted(v); }).catch(() => {});
+    });
+    return () => { cancelled = true; };
+  }, [chatId]);
+  const toggleMute = async () => {
+    const mod = await import("../../services/mutedChats");
+    const next = await mod.toggleChatMuted(Number(chatId));
+    setMuted(next);
+  };
 
   // When user taps a search result, we get `scrollToMessageId` + a fresh
   // `scrollToTick` in params. The effect below looks up the message, paging
@@ -222,11 +239,21 @@ export function ChatScreen({ navigation, route }: Props) {
   }, [userId]);
 
   // Mark the newest message as read so the peer sees our ✓✓ and our unread
-  // badge clears. Fires whenever the latest message changes.
+  // badge clears. Fires whenever the latest message changes. On cold start
+  // (notification tap → app launches → ChatScreen mounts) the WS may not be
+  // open yet — in that case wsService.send returns false and we re-arm on
+  // `_ws_open` so the mark_read still fires once the socket is ready.
   useEffect(() => {
     if (messages.length === 0) return;
     const latest = messages[messages.length - 1];
-    wsService.send({ type: "mark_read", chat_id: Number(chatId), message_id: latest.id });
+    const payload = { type: "mark_read" as const, chat_id: Number(chatId), message_id: latest.id };
+    if (wsService.send(payload)) return;
+    const onOpen = () => {
+      wsService.send(payload);
+      wsService.off("_ws_open", onOpen);
+    };
+    wsService.on("_ws_open", onOpen);
+    return () => wsService.off("_ws_open", onOpen);
   }, [chatId, messages]);
 
   const send = () => {
@@ -539,6 +566,9 @@ export function ChatScreen({ navigation, route }: Props) {
         </Pressable>
         <IconBtn onPress={() => navigation.navigate("MessageSearch", { chatId, chatName: name })}>
           <SearchIcon color={theme.colors.ink} />
+        </IconBtn>
+        <IconBtn onPress={toggleMute}>
+          <Text style={{ fontSize: 18, opacity: muted ? 0.55 : 1 }}>{muted ? "🔕" : "🔔"}</Text>
         </IconBtn>
         <IconBtn onPress={() => navigation.navigate("Poker", { chatId, chatName: name })}>
           <Text style={{ fontSize: 18 }}>🎴</Text>

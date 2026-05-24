@@ -1,22 +1,46 @@
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 
 import { userApi } from "./api";
+import { isChatMutedSync } from "./mutedChats";
 
-// In-foreground behaviour: still show a banner + play sound, otherwise the
-// system would suppress notifications when the app is open and the user
-// wouldn't know a message arrived from another chat.
+// Foreground notification policy:
+//   - app is "active" (user is interacting): swallow the notification — they
+//     already see new messages in-app; popping a banner over the same chat is
+//     annoying.
+//   - app is backgrounded/locked: show the banner + play the sound.
+//   - per-chat mute: never show.
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    // SDK 53+ split shouldShowAlert into banner/list; SDK 51 still accepts
-    // just shouldShowAlert. Both forms below are no-ops on the older SDK.
-    shouldShowBanner: true,
-    shouldShowList: true,
-  } as unknown as Notifications.NotificationBehavior),
+  handleNotification: async (notification) => {
+    const data = (notification.request?.content?.data ?? {}) as {
+      chat_id?: number;
+      type?: string;
+    };
+    const isMuted = typeof data.chat_id === "number" && isChatMutedSync(Number(data.chat_id));
+    // Always let incoming calls ring even when muted — calls are not "messages"
+    // and the call_signal WS event drives the modal anyway. Users mute chats
+    // to silence chatter, not to dodge phone calls.
+    const isCall = data.type === "call";
+    if (isMuted && !isCall) {
+      return {
+        shouldShowAlert: false,
+        shouldPlaySound: false,
+        shouldSetBadge: false,
+        shouldShowBanner: false,
+        shouldShowList: false,
+      } as unknown as Notifications.NotificationBehavior;
+    }
+    const isForeground = AppState.currentState === "active";
+    const visible = !isForeground;
+    return {
+      shouldShowAlert: visible,
+      shouldPlaySound: visible,
+      shouldSetBadge: false,
+      shouldShowBanner: visible,
+      shouldShowList: visible,
+    } as unknown as Notifications.NotificationBehavior;
+  },
 });
 
 let currentToken: string | null = null;
@@ -71,6 +95,10 @@ async function getExpoToken(): Promise<string | null> {
  */
 export async function registerForPushNotifications(): Promise<void> {
   try {
+    // Warm the muted-chats cache so the synchronous handler check above can
+    // see it on the very first notification after launch.
+    const { loadMutedChats } = await import("./mutedChats");
+    await loadMutedChats();
     await ensureAndroidChannels();
     const { status: existing } = await Notifications.getPermissionsAsync();
     let granted = existing === "granted";
