@@ -33,19 +33,20 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<MessageOut[] | null>(null);
   const [editingMsg, setEditingMsg] = useState<MessageOut | null>(null);
-  const [editText, setEditText] = useState("");
   const [replyTo, setReplyToState] = useState<MessageOut | null>(null);
   const setReplyTo = (msg: MessageOut | null) => {
     setReplyToState(msg);
     if (msg) setTimeout(() => textInputRef.current?.focus(), 0);
   };
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; msg: MessageOut } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; flipX: boolean; flipY: boolean; msg: MessageOut } | null>(null);
   const [showSearch, setShowSearch] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const dragCounterRef = useRef(0);
   const [showEmoji, setShowEmoji] = useState(false);
   const [hoverEmoji, setHoverEmoji] = useState("😊");
   const RANDOM_EMOJI = ["😊", "😂", "🤣", "😍", "🥰", "😎", "🤔", "😭", "🥺", "🤡", "💀", "🗿", "🔥", "💯", "👻", "🤓", "🫠", "🤯", "😈", "🥴"];
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [imgCtxMenu, setImgCtxMenu] = useState<{ x: number; y: number; flipX: boolean; flipY: boolean; url: string; filename: string } | null>(null);
   const [onlineUserIds, setOnlineUserIds] = useState<Set<number>>(new Set());
   const [reactions, setReactions] = useState<Map<number, Array<{ emoji: string; userId: number }>>>(new Map());
   const [showReactionPicker, setShowReactionPicker] = useState<number | null>(null);
@@ -85,6 +86,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const textInputRef = useRef<HTMLDivElement>(null);
+  const editInputRef = useRef<HTMLDivElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const atBottomRef = useRef(true);
 
@@ -114,7 +116,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   useEffect(() => {
     const handler = (data: any) => {
       if (data.chat_id !== chat.id) return;
-      setMessages((prev) => [...prev, data as MessageOut]);
+      setMessages((prev) => prev.some((m) => m.id === data.id) ? prev : [...prev, data as MessageOut]);
       // If it's our own echoed message, drop the matching pending placeholder.
       // Match strictly by _temp_id so two identical messages sent in quick succession
       // don't share the same pending entry.
@@ -205,7 +207,15 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
 
     const deleteHandler = (data: any) => {
       if (data.chat_id !== chat.id) return;
-      setMessages((prev) => prev.filter((m) => m.id !== data.message_id));
+      setMessages((prev) => {
+        const filtered = prev.filter((m) => m.id !== data.message_id);
+        if (prev.length > 0 && prev[prev.length - 1].id === data.message_id) {
+          window.dispatchEvent(new CustomEvent("chat-last-message-changed", {
+            detail: { chatId: chat.id, message: filtered[filtered.length - 1] ?? null },
+          }));
+        }
+        return filtered;
+      });
     };
 
     const reactionHandler = (data: any) => {
@@ -287,6 +297,26 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     return () => clearInterval(id);
   }, []);
 
+  // Blur + clear selection from text input when files are first queued
+  useEffect(() => {
+    if (pendingAttachments.length === 0) return;
+    textInputRef.current?.blur();
+    window.getSelection()?.removeAllRanges();
+  }, [pendingAttachments.length > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Global Enter → send attachments when files are queued (works regardless of focus)
+  useEffect(() => {
+    if (pendingAttachments.length === 0) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Enter" || e.ctrlKey || e.shiftKey) return;
+      if ((e.target as HTMLElement).tagName === "INPUT") return; // let caption inputs handle their own Enter
+      e.preventDefault();
+      sendAttachmentPack();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [pendingAttachments, uploadingPack]); // re-bind on every change so closure has fresh state
+
   // ESC closes image preview (capture phase, before global ESC handler)
   useEffect(() => {
     if (!previewImage) return;
@@ -300,11 +330,13 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     return () => window.removeEventListener("keydown", handler, true);
   }, [previewImage]);
 
+
   const [hasMore, setHasMore] = useState(true);
   const messagesRef = useRef<HTMLDivElement>(null);
   const seenIdRef = useRef<number>(0);
   const prevScrollHeightRef = useRef<number>(0);
   const didLoadOlderRef = useRef(false);
+  const didInitialLoadRef = useRef(false);
 
   // Mark messages as read only when they actually become visible in the viewport.
   useEffect(() => {
@@ -360,19 +392,21 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
         }
       });
       setReactions(rMap);
-      // Don't mark-read blindly on load — IntersectionObserver will mark as
-      // messages actually scroll into view. Scroll to bottom on first open.
-      setTimeout(() => {
-        bottomRef.current?.scrollIntoView();
-        atBottomRef.current = true;
-        setAtBottom(true);
-      }, 100);
+      didInitialLoadRef.current = true;
     } finally {
       setLoading(false);
     }
   }
 
   useLayoutEffect(() => {
+    if (didInitialLoadRef.current) {
+      didInitialLoadRef.current = false;
+      const el = messagesRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+      atBottomRef.current = true;
+      setAtBottom(true);
+      return;
+    }
     if (!didLoadOlderRef.current) return;
     didLoadOlderRef.current = false;
     const el = messagesRef.current;
@@ -481,6 +515,52 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     }
     return result;
   }
+
+  // Convert markdown string → HTML for initializing the contenteditable edit area.
+  function markdownToHtml(text: string): string {
+    let out = "";
+    let i = 0;
+    const markers: [string, string][] = [
+      ["***", "bolditalic"], ["**", "b"], ["__", "u"], ["~~", "s"], ["||", "spoiler"], ["*", "i"],
+    ];
+    while (i < text.length) {
+      if (text[i] === "\n") { out += "<br>"; i++; continue; }
+      if (text[i] === "&") { out += "&amp;"; i++; continue; }
+      if (text[i] === "<") { out += "&lt;"; i++; continue; }
+      if (text[i] === ">") { out += "&gt;"; i++; continue; }
+      let matched = false;
+      for (const [marker, type] of markers) {
+        if (text.startsWith(marker, i)) {
+          const end = text.indexOf(marker, i + marker.length);
+          if (end > i + marker.length) {
+            const inner = markdownToHtml(text.slice(i + marker.length, end));
+            if (type === "bolditalic") out += `<b><i>${inner}</i></b>`;
+            else if (type === "spoiler") out += `<span data-format="spoiler" style="background:var(--bg-tertiary);color:var(--text-muted);border-radius:3px;padding:0 2px;cursor:default">${inner}</span>`;
+            else out += `<${type}>${inner}</${type}>`;
+            i = end + marker.length;
+            matched = true;
+            break;
+          }
+        }
+      }
+      if (!matched) { out += text[i]; i++; }
+    }
+    return out;
+  }
+
+  // Populate the edit contenteditable when a message is opened for editing.
+  useEffect(() => {
+    if (!editingMsg || !editInputRef.current) return;
+    editInputRef.current.innerHTML = markdownToHtml(editingMsg.content || "");
+    editInputRef.current.style.height = "auto";
+    editInputRef.current.style.height = Math.min(editInputRef.current.scrollHeight, 200) + "px";
+    editInputRef.current.focus();
+    const range = document.createRange();
+    range.selectNodeContents(editInputRef.current);
+    range.collapse(false);
+    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(range);
+  }, [editingMsg?.id]);
 
   function applyFormat(command: string) {
     const el = textInputRef.current;
@@ -626,7 +706,9 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
+    dragCounterRef.current = 0;
     setDragOver(false);
+    if (e.dataTransfer.types.includes("gandola/internal-image")) return;
     const files = Array.from(e.dataTransfer.files || []);
     queueFiles(files);
   }
@@ -668,10 +750,11 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   }
 
   function handleEditSave() {
-    if (!editingMsg || !editText.trim()) return;
-    wsService.send({ type: "edit_message", message_id: editingMsg.id, content: editText.trim() });
+    if (!editingMsg) return;
+    const content = editInputRef.current ? htmlToMarkdown(editInputRef.current).trim() : "";
+    if (!content) return;
+    wsService.send({ type: "edit_message", message_id: editingMsg.id, content });
     setEditingMsg(null);
-    setEditText("");
   }
 
   function handleDelete(msgId: number) {
@@ -742,6 +825,29 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     ? [...typingUsers.values()].join(", ") + " печатает..."
     : null;
 
+  async function downloadImage(url: string, filename: string) {
+    const res = await fetch(url);
+    const buf = await res.arrayBuffer();
+    (window as any).electron?.saveFileAs(buf, filename);
+  }
+
+  async function copyImage(url: string) {
+    const res = await fetch(url);
+    const blob = await res.blob();
+    const item = new ClipboardItem({ [blob.type]: blob });
+    await navigator.clipboard.write([item]);
+  }
+
+  function openImgCtxMenu(e: React.MouseEvent, url: string, filename: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    const MENU_W = 220;
+    const MENU_H = 80;
+    const flipX = e.clientX + MENU_W + 8 > window.innerWidth;
+    const flipY = e.clientY + MENU_H + 8 > window.innerHeight;
+    setImgCtxMenu({ x: e.clientX, y: e.clientY, flipX, flipY, url, filename });
+  }
+
   // Group messages by date (search results never include pending — they came from server)
   const displayMessages = searchResults ?? [...messages, ...pendingMsgs];
   const grouped: Array<{ date: string; messages: MessageOut[] }> = [];
@@ -755,8 +861,9 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   return (
     <div
       style={{ ...s.root, ...(dragOver ? { outline: "2px dashed var(--accent)" } : {}) }}
-      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-      onDragLeave={() => setDragOver(false)}
+      onDragEnter={(e) => { e.preventDefault(); if (e.dataTransfer.types.includes("gandola/internal-image")) return; dragCounterRef.current++; setDragOver(true); }}
+      onDragOver={(e) => e.preventDefault()}
+      onDragLeave={() => { dragCounterRef.current--; if (dragCounterRef.current <= 0) { dragCounterRef.current = 0; setDragOver(false); } }}
       onDrop={handleDrop}
       onPaste={(e) => {
         const files = Array.from(e.clipboardData?.files || []);
@@ -914,14 +1021,19 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                     marginTop: isGrouped ? 2 : 16,
                     justifyContent: isMine ? "flex-end" : "flex-start",
                   }}
-                  onDoubleClick={() => setReplyTo(msg)}
+                  onDoubleClick={(e) => {
+                    if (editingMsg?.id === msg.id) return;
+                    // Don't intercept double-clicks on text content — let the browser select text
+                    if ((e.target as HTMLElement).closest(".msg-content")) return;
+                    setReplyTo(msg);
+                  }}
                   onContextMenu={(e) => {
                     e.preventDefault();
-                    const menuWidth = 220;
-                    const menuHeight = 280;
-                    const x = Math.min(e.clientX, window.innerWidth - menuWidth - 8);
-                    const y = Math.min(e.clientY, window.innerHeight - menuHeight - 8);
-                    setContextMenu({ x, y, msg });
+                    const MENU_W = 252;
+                    const MENU_H = msg.sender_id === currentUser.id ? 330 : 265;
+                    const flipX = e.clientX + MENU_W + 8 > window.innerWidth;
+                    const flipY = e.clientY + MENU_H + 8 > window.innerHeight;
+                    setContextMenu({ x: e.clientX, y: e.clientY, flipX, flipY, msg });
                   }}
                 >
                   {/* Avatar: hidden for own messages; for others show only on first of group */}
@@ -992,25 +1104,36 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                           title="Перейти к сообщению"
                         >
                           <span style={{ ...s.replyAuthor, ...authorOverride }}>{msg.reply_to_username}</span>
-                          <span style={{ ...s.replyText, ...textOverride }}>{msg.reply_to_content || "..."}</span>
+                          <span style={{ ...s.replyText, ...textOverride }}>{msg.reply_to_content ? <FormattedText text={msg.reply_to_content} staticSpoiler /> : "..."}</span>
                         </div>
                       );
                     })()}
                     {/* Editing */}
                     {editingMsg?.id === msg.id ? (
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <input
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
+                        <div
+                          ref={editInputRef}
+                          contentEditable
+                          suppressContentEditableWarning
                           style={s.editInput}
-                          value={editText}
-                          onChange={(e) => setEditText(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") handleEditSave();
-                            if (e.key === "Escape") setEditingMsg(null);
+                          onInput={(e) => {
+                            const div = e.currentTarget;
+                            div.style.height = "auto";
+                            div.style.height = Math.min(div.scrollHeight, 200) + "px";
                           }}
-                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !e.ctrlKey && !e.shiftKey) { e.preventDefault(); handleEditSave(); }
+                            if (e.key === "Escape") setEditingMsg(null);
+                            if (e.ctrlKey && !e.shiftKey && e.code === "KeyB") { e.preventDefault(); if (!e.repeat) document.execCommand("bold"); }
+                            if (e.ctrlKey && !e.shiftKey && e.code === "KeyI") { e.preventDefault(); if (!e.repeat) document.execCommand("italic"); }
+                            if (e.ctrlKey && !e.shiftKey && e.code === "KeyU") { e.preventDefault(); if (!e.repeat) document.execCommand("underline"); }
+                            if (e.ctrlKey && e.shiftKey && e.code === "KeyX") { e.preventDefault(); if (!e.repeat) document.execCommand("strikeThrough"); }
+                          }}
                         />
-                        <button style={s.editSaveBtn} onClick={handleEditSave}>✓</button>
-                        <button style={s.editCancelBtn} onClick={() => setEditingMsg(null)}>✕</button>
+                        <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                          <button style={s.editSaveBtn} onClick={handleEditSave}>✓</button>
+                          <button style={s.editCancelBtn} onClick={() => setEditingMsg(null)}>✕</button>
+                        </div>
                       </div>
                     ) : (
                       <>
@@ -1033,41 +1156,6 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                           }
                           return <p className="msg-content" style={{ ...s.msgText, ...(isNeo && isMine ? { color: "#0a0a0a" } : {}), ...(!isNeo && isMine ? { color: "#fff" } : {}) }}><FormattedText text={msg.content} /></p>;
                         })()}
-                        {/* Reactions display */}
-                        {reactions.get(msg.id)?.length ? (
-                          <div style={s.reactionsRow}>
-                            {Object.entries(
-                              reactions.get(msg.id)!.reduce((acc: Record<string, number>, r) => {
-                                acc[r.emoji] = (acc[r.emoji] || 0) + 1;
-                                return acc;
-                              }, {})
-                            ).map(([emoji, count]) => {
-                              const myReact = reactions.get(msg.id)!.some((r) => r.emoji === emoji && r.userId === currentUser.id);
-                              return (
-                                <span
-                                  key={emoji}
-                                  style={{
-                                    ...s.reactionBadge,
-                                    cursor: "pointer",
-                                    border: myReact ? "1px solid var(--accent)" : "1px solid transparent",
-                                    // Force readable colour for the number/emoji inside —
-                                    // the parent bubble may set color to var(--accent-text)
-                                    // (dark) which renders invisible on the dark badge bg.
-                                    color: "var(--text-primary)",
-                                  }}
-                                  onClick={() => {
-                                    if (myReact) {
-                                      wsService.send({ type: "remove_reaction", message_id: msg.id, chat_id: chat.id, emoji });
-                                    } else {
-                                      wsService.send({ type: "reaction", message_id: msg.id, chat_id: chat.id, emoji });
-                                    }
-                                  }}
-                                  title={myReact ? "Убрать реакцию" : "Добавить реакцию"}
-                                >{emoji} {count}</span>
-                              );
-                            })}
-                          </div>
-                        ) : null}
                       </>
                     )}
                     {msg.file_url && (
@@ -1076,6 +1164,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                           src={`${BASE_URL}${msg.file_url}`}
                           style={{ ...s.msgImage, cursor: "pointer" }}
                           alt={msg.file_name || "image"}
+                          onDragStart={(e) => e.dataTransfer.setData("gandola/internal-image", "1")}
                           onClick={() => setPreviewImage(`${BASE_URL}${msg.file_url}`)}
                         />
                       ) : (
@@ -1084,6 +1173,38 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                         </a>
                       )
                     )}
+                    {/* Reactions display — always after media so they sit at the bottom */}
+                    {reactions.get(msg.id)?.length ? (
+                      <div style={s.reactionsRow}>
+                        {Object.entries(
+                          reactions.get(msg.id)!.reduce((acc: Record<string, number>, r) => {
+                            acc[r.emoji] = (acc[r.emoji] || 0) + 1;
+                            return acc;
+                          }, {})
+                        ).map(([emoji, count]) => {
+                          const myReact = reactions.get(msg.id)!.some((r) => r.emoji === emoji && r.userId === currentUser.id);
+                          return (
+                            <span
+                              key={emoji}
+                              style={{
+                                ...s.reactionBadge,
+                                cursor: "pointer",
+                                border: myReact ? "1px solid var(--accent)" : "1px solid transparent",
+                                color: "var(--text-primary)",
+                              }}
+                              onClick={() => {
+                                if (myReact) {
+                                  wsService.send({ type: "remove_reaction", message_id: msg.id, chat_id: chat.id, emoji });
+                                } else {
+                                  wsService.send({ type: "reaction", message_id: msg.id, chat_id: chat.id, emoji });
+                                }
+                              }}
+                              title={myReact ? "Убрать реакцию" : "Добавить реакцию"}
+                            >{emoji} {count}</span>
+                          );
+                        })}
+                      </div>
+                    ) : null}
                     {/* Per-message footer: edited marker + ReadBar — shown on every own/edited msg */}
                     {(msg.is_edited || isMine) && (
                       <div style={{
@@ -1177,7 +1298,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
 
       {/* Context menu */}
       {contextMenu && (
-        <div style={{ ...s.ctxMenu, left: contextMenu.x, top: contextMenu.y }}>
+        <div style={{ ...s.ctxMenu, left: contextMenu.x, top: contextMenu.y, transform: `translate(${contextMenu.flipX ? "-100%" : "0"}, ${contextMenu.flipY ? "-100%" : "0"})` }}>
           <button style={s.ctxItem} onClick={() => { setReplyTo(contextMenu.msg); setContextMenu(null); }}>↩ Ответить</button>
           <button style={s.ctxItem} onClick={() => { setForwardMsg(contextMenu.msg); setContextMenu(null); }}>➡ Переслать</button>
           <div style={s.ctxReactions}>
@@ -1190,7 +1311,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
           </div>
           {contextMenu.msg.sender_id === currentUser.id && (
             <>
-              <button style={s.ctxItem} onClick={() => { setEditingMsg(contextMenu.msg); setEditText(contextMenu.msg.content || ""); setContextMenu(null); }}>✏️ Редактировать</button>
+              <button style={s.ctxItem} onClick={() => { setEditingMsg(contextMenu.msg); setContextMenu(null); }}>✏️ Редактировать</button>
               <button style={{ ...s.ctxItem, color: "var(--danger)" }} onClick={() => { handleDelete(contextMenu.msg.id); setContextMenu(null); }}>🗑 Удалить</button>
             </>
           )}
@@ -1227,14 +1348,6 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
         </div>
       )}
 
-      {/* Reply preview bar */}
-      {replyTo && (
-        <div style={s.replyBar}>
-          <span>Ответ для <b>{replyTo.sender_username}</b>: {replyTo.content?.slice(0, 50)}</span>
-          <button style={s.replyBarClose} onClick={() => setReplyTo(null)}>✕</button>
-        </div>
-      )}
-
       {/* Forward message modal */}
       {forwardMsg && (
         <div style={s.imageOverlay} onClick={() => setForwardMsg(null)}>
@@ -1265,9 +1378,51 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
 
       {/* Image preview modal */}
       {previewImage && (
-        <div style={s.imageOverlay} onClick={() => setPreviewImage(null)}>
-          <img src={previewImage} style={s.imagePreview} alt="preview" />
+        <div
+          style={s.imageOverlay}
+          onClick={() => { setPreviewImage(null); setImgCtxMenu(null); }}
+        >
+          <img
+            src={previewImage}
+            style={{ ...s.imagePreview, cursor: "default" }}
+            alt="preview"
+            onDragStart={(e) => e.dataTransfer.setData("gandola/internal-image", "1")}
+            onClick={(e) => { e.stopPropagation(); setImgCtxMenu(null); }}
+            onContextMenu={(e) => openImgCtxMenu(e, previewImage, previewImage.split("/").pop() || "image")}
+          />
         </div>
+      )}
+
+      {/* Image right-click context menu */}
+      {imgCtxMenu && (
+        <>
+          {/* Backdrop: closes menu on outside click. Not rendered when previewImage is open
+              because the overlay div already acts as the backdrop in that case. */}
+          {!previewImage && (
+            <div
+              style={{ position: "fixed", inset: 0, zIndex: 1998 }}
+              onClick={() => setImgCtxMenu(null)}
+              onContextMenu={(e) => { e.preventDefault(); setImgCtxMenu(null); }}
+            />
+          )}
+          <div
+            style={{ position: "fixed", left: imgCtxMenu.x, top: imgCtxMenu.y, zIndex: 1999, background: "var(--bg-secondary)", border: "1px solid var(--border)", borderRadius: "var(--radius)", boxShadow: "var(--shadow)", width: 220, overflow: "hidden", transform: `translate(${imgCtxMenu.flipX ? "-100%" : "0"}, ${imgCtxMenu.flipY ? "-100%" : "0"})` }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              style={{ ...s.ctxItem, width: "100%" }}
+              onClick={() => { downloadImage(imgCtxMenu.url, imgCtxMenu.filename); setImgCtxMenu(null); }}
+            >
+              💾 Сохранить как...
+            </button>
+            <button
+              style={{ ...s.ctxItem, width: "100%" }}
+              onClick={() => { copyImage(imgCtxMenu.url); setImgCtxMenu(null); }}
+            >
+              📋 Копировать изображение
+            </button>
+          </div>
+        </>
       )}
 
       {/* Emoji picker */}
@@ -1378,6 +1533,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                     type="text"
                     value={att.caption}
                     onChange={(e) => setPendingCaption(idx, e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && !e.ctrlKey && !e.shiftKey) { e.preventDefault(); sendAttachmentPack(); } }}
                     placeholder={isNeo ? "подпись..." : "Подпись (необязательно)"}
                     style={{
                       width: "100%",
@@ -1402,6 +1558,17 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Reply preview bar — sits between attachments and the input */}
+      {replyTo && (
+        <div style={s.replyBar}>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
+            Ответ для <b>{replyTo.sender_username}</b>:{" "}
+            {replyTo.content ? <FormattedText text={replyTo.content} staticSpoiler /> : "..."}
+          </span>
+          <button style={s.replyBarClose} onClick={() => setReplyTo(null)}>✕</button>
         </div>
       )}
 
@@ -1445,7 +1612,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
             ? `написать_${(chat.is_group ? chat.name : getChatTitle())?.toLowerCase().replace(/\s+/g, "_")}...`
             : `Написать ${chat.is_group ? "в группе" : getChatTitle()}...`}
           className="chat-input"
-          style={{ ...s.textInput, ...(isNeo ? mono : {}), overflowY: "auto" as const, outline: "none", whiteSpace: "pre-wrap" as const, wordBreak: "break-word" as const, cursor: "text" }}
+          style={{ ...s.textInput, ...(isNeo ? mono : {}), overflowY: "auto" as const, outline: "none", whiteSpace: "pre-wrap" as const, wordBreak: "break-word" as const, cursor: pendingAttachments.length > 0 ? "not-allowed" : "text", opacity: pendingAttachments.length > 0 ? 0.4 : 1, pointerEvents: pendingAttachments.length > 0 ? "none" as const : undefined }}
           onInput={(e) => {
             const div = e.currentTarget;
             setText(div.innerText.trim());
@@ -1456,6 +1623,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.ctrlKey && !e.shiftKey) {
               e.preventDefault();
+              if (pendingAttachments.length > 0) { sendAttachmentPack(); return; }
               sendMessage(e as any);
             } else if (e.key === "Enter" && (e.ctrlKey || e.shiftKey)) {
               e.preventDefault();
@@ -1490,8 +1658,9 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
           style={{
             ...s.sendBtn,
             ...(isNeo ? { ...mono, borderRadius: 0, width: "auto", padding: "9px 16px", fontSize: 12, fontWeight: 700, letterSpacing: 1 } : {}),
+            ...(pendingAttachments.length > 0 ? { opacity: 0.35, pointerEvents: "none" as const, transform: "none" } : {}),
           }}
-          disabled={!text.trim()}
+          disabled={pendingAttachments.length > 0 || !text.trim()}
         >{isNeo ? "SEND" : "➤"}</button>
       </form>
     </div>
@@ -1761,7 +1930,7 @@ const s: Record<string, React.CSSProperties> = {
   ctxReactionBtn: { background: "none", fontSize: 18, padding: 3, borderRadius: 4, cursor: "pointer" },
   msgText: { color: "var(--text-primary)", lineHeight: 1.5, wordBreak: "break-word" as const, whiteSpace: "pre-wrap" as const, margin: 0 },
   msgImage: { maxWidth: 360, maxHeight: 280, borderRadius: 4, marginTop: 4, display: "block" },
-  imageOverlay: { position: "fixed" as const, inset: 0, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, cursor: "pointer" },
+  imageOverlay: { position: "fixed" as const, inset: 0, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, cursor: "default" },
   imagePreview: { maxWidth: "90%", maxHeight: "90%", borderRadius: 8, objectFit: "contain" as const },
   forwardModal: { background: "var(--bg-primary)", borderRadius: 8, padding: 20, width: 320, maxHeight: "60%", overflowY: "auto" as const, cursor: "default" },
   forwardChatItem: { padding: "10px 12px", borderRadius: 4, cursor: "pointer", color: "var(--text-primary)", fontSize: 14, background: "var(--bg-secondary)", marginBottom: 4 },
@@ -1778,9 +1947,9 @@ const s: Record<string, React.CSSProperties> = {
   replyBar: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 16px", background: "var(--bg-secondary)", borderTop: "1px solid var(--border)", fontSize: 13, color: "var(--text-secondary)" },
   replyBarClose: { background: "none", color: "var(--text-muted)", fontSize: 16, padding: "2px 8px" },
   typingBar: { padding: "4px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" },
-  ctxMenu: { position: "fixed" as const, background: "var(--bg-tertiary)", borderRadius: 6, padding: 4, boxShadow: "0 4px 16px rgba(0,0,0,0.4)", zIndex: 200, minWidth: 160 },
+  ctxMenu: { position: "fixed" as const, background: "var(--bg-tertiary)", borderRadius: 6, padding: 4, boxShadow: "0 4px 16px rgba(0,0,0,0.4)", zIndex: 200, width: 252 },
   ctxItem: { display: "block", width: "100%", background: "none", color: "var(--text-primary)", padding: "8px 12px", fontSize: 13, textAlign: "left" as const, borderRadius: 4 },
-  editInput: { flex: 1, background: "var(--bg-input)", borderRadius: 4, padding: "4px 8px", fontSize: 13, color: "var(--text-primary)" },
+  editInput: { width: "100%", background: "var(--bg-input)", borderRadius: 4, padding: "6px 10px", fontSize: 13, color: "var(--text-primary)", outline: "none", whiteSpace: "pre-wrap" as const, wordBreak: "break-word" as const, minHeight: 32, maxHeight: 200, overflowY: "auto" as const, cursor: "text", userSelect: "text" as const },
   editSaveBtn: { background: "var(--accent)", color: "var(--accent-text)", borderRadius: 4, padding: "4px 10px", fontSize: 14 },
   editCancelBtn: { background: "var(--bg-tertiary)", color: "var(--text-muted)", borderRadius: 4, padding: "4px 10px", fontSize: 14 },
   dropOverlay: { position: "absolute" as const, inset: 0, background: "rgba(88,101,242,0.15)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)", fontSize: 18, fontWeight: 700, zIndex: 50, pointerEvents: "none" as const },

@@ -1,6 +1,6 @@
 from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func, update
 from datetime import datetime, timedelta, timezone
 import asyncio
 from app.models import Chat, Message, User, Reaction, read_receipts, chat_members
@@ -600,6 +600,20 @@ async def handle_delete_message(data: dict, user_id: int, db: AsyncSession):
 
     chat_id = msg.chat_id
     await db.delete(msg)
+    await db.commit()
+
+    # ondelete="SET NULL" may have NULLed read_receipts rows that pointed to
+    # the deleted message. Update them to the current last message in the chat
+    # so the user doesn't appear to have read nothing.
+    new_last_result = await db.execute(
+        select(func.max(Message.id)).where(Message.chat_id == chat_id)
+    )
+    new_last_id = new_last_result.scalar()
+    await db.execute(
+        update(read_receipts)
+        .where(read_receipts.c.chat_id == chat_id, read_receipts.c.last_read_message_id == None)
+        .values(last_read_message_id=new_last_id)
+    )
     await db.commit()
 
     await manager.broadcast_to_chat(chat_id, {

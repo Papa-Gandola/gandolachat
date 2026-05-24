@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, desktopCapturer, Tray, Menu, nativeImage } from "electron";
+import { app, BrowserWindow, ipcMain, shell, desktopCapturer, Tray, Menu, nativeImage, dialog } from "electron";
 import { autoUpdater } from "electron-updater";
 import path from "path";
 import fs from "fs";
@@ -111,6 +111,12 @@ const isDebInstall = process.platform === "linux" && !process.env.APPIMAGE;
 
 ipcMain.handle("app:isDebInstall", () => isDebInstall);
 ipcMain.handle("shell:openExternal", (_e, url: string) => shell.openExternal(url));
+ipcMain.handle("file:saveAs", async (_e, buffer: ArrayBuffer, defaultName: string) => {
+  const { filePath, canceled } = await dialog.showSaveDialog({ defaultPath: defaultName });
+  if (canceled || !filePath) return { canceled: true };
+  fs.writeFileSync(filePath, Buffer.from(buffer));
+  return { canceled: false, filePath };
+});
 
 // Auto-updater events
 autoUpdater.autoDownload = !isDebInstall;

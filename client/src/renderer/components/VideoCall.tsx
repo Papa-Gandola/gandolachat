@@ -242,17 +242,15 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
     (async () => {
       let localStream: MediaStream;
       if (initiator) {
-        localStream = await webrtcService.startCall(chat.id, memberIds, true);
+        localStream = await webrtcService.startCall(chat.id, memberIds, !videoOff);
       } else {
         const initiatorId = memberIds.find((id) => id !== currentUser.id)!;
-        localStream = await webrtcService.joinCall(chat.id, initiatorId, true);
+        localStream = await webrtcService.joinCall(chat.id, initiatorId, !videoOff);
       }
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = localStream;
       }
-      // Apply persisted camera preference immediately after peers are set up
       if (videoOff) {
-        webrtcService.disableVideo();
         wsService.send({ type: "video_status", chat_id: chat.id, video_off: true });
       }
     })();

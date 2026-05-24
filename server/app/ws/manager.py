@@ -76,6 +76,9 @@ class ConnectionManager:
                 self._drop_dead_socket(user_id, ws)
 
     async def broadcast_to_chat(self, chat_id: int, message: dict, exclude_user: int | None = None):
+        import uuid as _uuid
+        if "_eid" not in message:
+            message["_eid"] = _uuid.uuid4().hex
         user_ids = self.chat_users.get(chat_id, set())
         for uid in user_ids:
             if uid == exclude_user:

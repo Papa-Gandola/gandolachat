@@ -66,6 +66,18 @@ export default function Main({ token, user, onLogout }: Props) {
       );
     });
 
+    wsService.on("message_edited", (data) => {
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === data.chat_id && c.last_message?.id === data.message_id
+            ? { ...c, last_message: { ...c.last_message!, content: data.content, is_edited: true } }
+            : c
+        )
+      );
+    });
+
+    wsService.on("message_deleted", (_data) => { /* sidebar updated via chat-last-message-changed event from ChatArea */ });
+
     wsService.on("profile_updated", (data) => {
       setChats((prev) => prev.map((c) => ({
         ...c,
@@ -124,6 +136,16 @@ export default function Main({ token, user, onLogout }: Props) {
     window.addEventListener("switch-chat", handler as EventListener);
     return () => window.removeEventListener("switch-chat", handler as EventListener);
   }, [chats]);
+
+  // Update sidebar last_message when ChatArea reports a deletion changed the last message
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { chatId, message } = (e as CustomEvent<{ chatId: number; message: any }>).detail;
+      setChats((prev) => prev.map((c) => c.id === chatId ? { ...c, last_message: message } : c));
+    };
+    window.addEventListener("chat-last-message-changed", handler as EventListener);
+    return () => window.removeEventListener("chat-last-message-changed", handler as EventListener);
+  }, []);
 
   // Allow other components (e.g. PokerInviteCard) to switch app mode
   useEffect(() => {
@@ -229,7 +251,7 @@ export default function Main({ token, user, onLogout }: Props) {
     <div style={s.root}>
       {/* Title bar */}
       <div style={s.titleBar}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, position: "relative", WebkitAppRegion: "no-drag" as any }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, position: "relative", WebkitAppRegion: "no-drag" }}>
           <button
             onClick={() => setShowModeMenu((v) => !v)}
             style={{
@@ -348,7 +370,7 @@ export default function Main({ token, user, onLogout }: Props) {
           chats={chats}
           currentUser={currentUser}
           activeChatId={activeChat?.id ?? null}
-          onSelectChat={(c) => { setActiveChat(c); setViewingProfile(null); }}
+          onSelectChat={(c) => { setActiveChat(c); setViewingProfile(null); setViewingGroupInfo(null); }}
           onChatsUpdate={setChats}
           onLogout={handleLogout}
           onAvatarUpdate={setCurrentUser}
@@ -524,11 +546,11 @@ const s: Record<string, React.CSSProperties> = {
   titleBar: {
     height: 32, background: "var(--bg-tertiary)", display: "flex",
     alignItems: "center", justifyContent: "space-between",
-    padding: "0 8px", WebkitAppRegion: "drag" as any, flexShrink: 0,
+    padding: "0 8px", WebkitAppRegion: "drag", flexShrink: 0,
     borderBottom: "1px solid var(--border)",
   },
   titleText: { color: "var(--text-muted)", fontSize: 12, fontWeight: 600, userSelect: "none" },
-  winControls: { display: "flex", gap: 4, WebkitAppRegion: "no-drag" as any },
+  winControls: { display: "flex", gap: 4, WebkitAppRegion: "no-drag" },
   winBtn: {
     background: "none", color: "var(--text-muted)", width: 28, height: 22,
     borderRadius: 4, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center",

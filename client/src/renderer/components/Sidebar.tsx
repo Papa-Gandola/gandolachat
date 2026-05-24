@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import FormattedText from "./FormattedText";
 import { ChatOut, UserOut, chatApi, userApi, authApi, getFileUrl } from "../services/api";
 import { wsService } from "../services/ws";
 import { applyTheme, getTheme, Theme, useTheme, getNeoColors, saveNeoColors, resetNeoColors, DEFAULT_NEO_COLORS } from "../services/theme";
@@ -314,7 +315,9 @@ export default function Sidebar({
             </span>
           ) : chat.last_message ? (
             <span style={{ ...s.chatPreview, ...(isNeo ? mono : {}) }}>
-              {chat.last_message.content || chat.last_message.file_name || "Файл"}
+              {chat.last_message.content
+                ? <FormattedText text={chat.last_message.content} noBold staticSpoiler />
+                : (chat.last_message.file_name || "Файл")}
             </span>
           ) : null}
         </div>

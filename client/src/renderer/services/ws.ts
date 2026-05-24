@@ -12,6 +12,7 @@ class WSService {
   public ping: number = 0;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   public onQualityChange: ((q: string, ping: number) => void) | null = null;
+  private seenEids = new Set<string>();
 
   connect(token: string) {
     this.token = token;
@@ -47,6 +48,14 @@ class WSService {
           this.quality = p < 100 ? "good" : p < 300 ? "ok" : "bad";
           this.onQualityChange?.(this.quality, p);
           return;
+        }
+        if (data._eid) {
+          if (this.seenEids.has(data._eid)) return;
+          this.seenEids.add(data._eid);
+          if (this.seenEids.size > 500) {
+            const [oldest] = this.seenEids;
+            this.seenEids.delete(oldest);
+          }
         }
         const listeners = this.handlers.get(data.type) || [];
         listeners.forEach((h) => h(data));
