@@ -61,10 +61,16 @@ export function useChats(): ChatsState {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  const doRefresh = useCallback(async (silent: boolean) => {
     if (!user) return;
-    setLoading(true);
-    setError(null);
+    // `silent` skips toggling `loading`. WS-driven background refreshes use
+    // it so the chats list doesn't flash its pull-to-refresh spinner every
+    // time a friend sends a message — the user already sees the chat row
+    // update with the new last-message text, no need to also draw a loader.
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     // allSettled so one failing endpoint (e.g. unread counts) doesn't wipe out
     // the chat list or online status.
     const [chatsRes, unreadRes, onlineRes] = await Promise.allSettled([
@@ -73,11 +79,16 @@ export function useChats(): ChatsState {
       chatApi.getOnlineUsers(),
     ]);
     if (chatsRes.status === "fulfilled") setRaw(chatsRes.value.data);
-    else setError(apiErrorMessage(chatsRes.reason));
+    else if (!silent) setError(apiErrorMessage(chatsRes.reason));
     if (unreadRes.status === "fulfilled") setUnread(unreadRes.value.data);
     if (onlineRes.status === "fulfilled") setOnline(new Set(onlineRes.value.data.online_user_ids));
-    setLoading(false);
+    if (!silent) setLoading(false);
   }, [user]);
+
+  // User-initiated refresh (pull-to-refresh, first mount) — shows the spinner.
+  const refresh = useCallback(() => doRefresh(false), [doRefresh]);
+  // Background refresh triggered by WS events — never shows the spinner.
+  const refreshSilent = useCallback(() => doRefresh(true), [doRefresh]);
 
   useEffect(() => {
     refresh();
@@ -87,10 +98,10 @@ export function useChats(): ChatsState {
   // could change it. Cheap because /api/chats is paginated server-side.
   useEffect(() => {
     if (!token) return;
-    const onNewChat = () => refresh();
-    const onMessage = () => refresh();
-    const onChatUpdated = () => refresh();
-    const onChatDeleted = () => refresh();
+    const onNewChat = () => refreshSilent();
+    const onMessage = () => refreshSilent();
+    const onChatUpdated = () => refreshSilent();
+    const onChatDeleted = () => refreshSilent();
     const onUserOnline = (data: Record<string, unknown>) => {
       const uid = data.user_id as number | undefined;
       if (typeof uid === "number") setOnline((prev) => new Set(prev).add(uid));
@@ -106,7 +117,7 @@ export function useChats(): ChatsState {
     };
     // On (re)connect, re-pull the online snapshot — WS-only tracking would
     // miss friends who were already online before we connected.
-    const onWsOpen = () => refresh();
+    const onWsOpen = () => refreshSilent();
     wsService.on("new_chat", onNewChat);
     wsService.on("message", onMessage);
     wsService.on("chat_updated", onChatUpdated);
@@ -123,7 +134,7 @@ export function useChats(): ChatsState {
       wsService.off("user_offline", onUserOffline);
       wsService.off("_ws_open", onWsOpen);
     };
-  }, [token, refresh]);
+  }, [token, refreshSilent]);
 
   // Transform raw API chats → flat rows the ChatRow component expects,
   // sorted by most recent activity (newest message first) so a chat you just
