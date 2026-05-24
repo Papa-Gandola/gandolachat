@@ -66,6 +66,11 @@ class WebRTCService {
     this.inited = true;
     wsService.on("call_signal", this._onSignal);
     wsService.on("call_end", this._onEnd);
+    // Group calls: the server broadcasts the full participant list on each
+    // call_signal. We use it to ensure every pair of participants is
+    // connected (mesh) — a brand-new joiner sees everyone, and existing
+    // members open a connection to them.
+    wsService.on("call_active", this._onCallActive);
   }
 
   isInCall() {
@@ -240,6 +245,27 @@ class WebRTCService {
       }
     } catch (err) {
       console.warn("[webrtc] applySignal failed", err);
+    }
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _onCallActive = (data: any) => {
+    const chatId = data.chat_id as number;
+    // Only consider broadcasts for the call we're currently in.
+    if (chatId !== this.chatId) return;
+    // Not in the call yet (pre-accept) — don't open extra peers.
+    if (!this.localStream || this.myId == null) return;
+    const participants: number[] = Array.isArray(data.participants) ? data.participants : [];
+    for (const uid of participants) {
+      if (uid === this.myId) continue;
+      if (this.peers.has(uid)) continue;
+      // Tie-breaker: the participant with the LOWER user_id initiates the
+      // offer. The other side will receive that offer via call_signal and
+      // create the responder peer in _onSignal. Without this both sides
+      // could offer at the same time ("glare") and one of the offers would
+      // be discarded.
+      const initiator = this.myId < uid;
+      this._createPeer(uid, initiator);
     }
   };
 

@@ -40,6 +40,11 @@ class WebRTCService {
     this._initialized = true;
     wsService.on("call_signal", this._handleSignal);
     wsService.on("call_end", this._handleCallEnd);
+    // Group calls: server broadcasts the participant list on every
+    // call_signal. Use it to ensure every pair of participants has a peer
+    // connection, not just (caller, callee). Without this, in a 3-way call
+    // the two callees can't see/hear each other — only the initiator.
+    wsService.on("call_active", this._handleCallActive);
     // When the OS reports network back (VPN flip, WiFi switch), force-restart ICE
     // on every active peer instead of waiting for the per-peer disconnect debounce.
     window.addEventListener("online", () => {
@@ -297,6 +302,27 @@ class WebRTCService {
         this._createPeer(fromId, false, purpose);
         try { map.get(fromId)?.signal(data.signal); } catch {}
       }
+    }
+  };
+
+  private _handleCallActive = (data: any) => {
+    const chatId = data.chat_id as number;
+    // Only act on broadcasts for the call we're currently in.
+    if (chatId !== this.currentChatId) return;
+    // Not in the call yet (haven't accepted) — skip; joinCall handles
+    // the initial peer for us.
+    if (!this.localStream || this.myUserId == null) return;
+    const myId = this.myUserId;
+    const participants: number[] = Array.isArray(data.participants) ? data.participants : [];
+    for (const uid of participants) {
+      if (uid === myId) continue;
+      if (this.peers.has(uid)) continue;
+      // Tie-breaker: the participant with the LOWER user_id initiates the
+      // offer. The other side will receive that offer via call_signal and
+      // become responder in _handleSignal. Without this both sides would
+      // try to offer at the same time ("glare").
+      const initiator = myId < uid;
+      this._createPeer(uid, initiator, "webcam");
     }
   };
 

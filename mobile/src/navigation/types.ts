@@ -18,6 +18,11 @@ export type ChatsStackParamList = {
     isGroup?: boolean;
     allowAllWrite?: boolean;
     createdBy?: number;
+    // When non-null, ChatScreen highlights and scrolls to the matching
+    // message. scrollToTick is just a "did the user click again?" marker so
+    // navigating to the same message twice still triggers the effect.
+    scrollToMessageId?: number;
+    scrollToTick?: number;
   };
   GroupChat: {
     chatId: string;
@@ -27,8 +32,11 @@ export type ChatsStackParamList = {
     isGroup?: boolean;
     allowAllWrite?: boolean;
     createdBy?: number;
+    scrollToMessageId?: number;
+    scrollToTick?: number;
   };
   ChatInfo: { chatId: string };
+  MessageSearch: { chatId: string; chatName: string };
   OtherProfile: { userId: number };
   MediaViewer: { url: string };
   StickerPicker: undefined;
