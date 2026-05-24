@@ -2,9 +2,11 @@ import { NavigationContainer, Theme as NavTheme } from "@react-navigation/native
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
 import { useAuth } from "../services/AuthContext";
+import { initNotificationTapHandler } from "../services/notificationTapHandler";
 import { useTheme } from "../theme";
 import { AuthStack } from "./AuthStack";
 import { MainTabs } from "./MainTabs";
+import { navigationRef } from "./navigationRef";
 import { RootStackParamList } from "./types";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -30,7 +32,15 @@ export function RootNavigator() {
   };
 
   return (
-    <NavigationContainer theme={navTheme}>
+    <NavigationContainer
+      ref={navigationRef}
+      theme={navTheme}
+      onReady={() => {
+        // Hook up notification tap → deeplink handler now that we have a
+        // navigation ref ready to dispatch against.
+        initNotificationTapHandler();
+      }}
+    >
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {token == null ? (
           <Stack.Screen name="Auth" component={AuthStack} />

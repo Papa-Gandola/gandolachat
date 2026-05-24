@@ -9,6 +9,7 @@ import { HangupIcon, MicIcon, MicOffIcon, PhoneIcon, VideoIcon, VideoOffIcon } f
 import { useTheme } from "../theme";
 import { UserOut, userApi } from "./api";
 import { useAuth } from "./AuthContext";
+import { startCallForegroundService, stopCallForegroundService } from "./callForegroundService";
 import { webrtcService } from "./webrtc";
 import { wsService } from "./ws";
 
@@ -62,6 +63,18 @@ export function CallProvider({ children }: { children: ReactNode }) {
     if (chatId != null) wsService.send({ type: "video_status", chat_id: chatId, video_off: off });
   };
 
+  // Foreground Service notification while a call is active. This is what
+  // actually keeps the call running when the user backgrounds the app — the
+  // OS no longer feels free to suspend our process because there's a visible
+  // ongoing notification anchored to a service.
+  useEffect(() => {
+    if (!inCall) return;
+    const peer = callName || "собеседником";
+    startCallForegroundService(peer);
+    return () => {
+      stopCallForegroundService();
+    };
+  }, [inCall, callName]);
   // Keep the screen on + hold a wake lock for the duration of an active call.
   // Without this Android can suspend the JS thread when the user backgrounds
   // the app, which freezes the WebRTC render loop and effectively pauses the
