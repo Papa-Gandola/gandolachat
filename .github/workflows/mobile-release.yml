@@ -8,10 +8,12 @@ on:
       - main
     paths:
       # Native config / version changes need a fresh APK (JS-only changes go
-      # through the OTA workflow instead). Touching either of these on main
+      # through the OTA workflow instead). Touching any of these on main
       # triggers a cloud build automatically.
       - "mobile/app.json"
       - "mobile/package.json"
+      - "mobile/eas.json"
+      - "mobile/google-services.json"
   workflow_dispatch:
 
 permissions:
