@@ -2,6 +2,7 @@ import { ReactNode } from "react";
 import { Image, Pressable, Text, View } from "react-native";
 
 import { useTheme } from "../theme";
+import { FormattedText } from "./FormattedText";
 import { ReadBar, ReadStatus } from "./ReadBar";
 
 interface Props {
@@ -81,12 +82,13 @@ export function Bubble({ mine = false, text, ts, status, imageUri, onPressImage,
             >
               {reply.author}
             </Text>
-            <Text
+            <FormattedText
+              text={reply.text}
               numberOfLines={1}
+              noBold
+              staticSpoiler
               style={{ fontSize: 12, color: mine ? theme.colors.bubbleMineText : theme.colors.inkDim }}
-            >
-              {reply.text}
-            </Text>
+            />
           </View>
         ) : null}
         {imageUri ? (
@@ -106,16 +108,15 @@ export function Bubble({ mine = false, text, ts, status, imageUri, onPressImage,
         ) : null}
         {media}
         {text ? (
-          <Text
+          <FormattedText
+            text={text}
             style={{
               fontSize: 13.5,
               lineHeight: 19,
               fontFamily: theme.fonts.body,
               color: mine ? theme.colors.bubbleMineText : theme.colors.bubbleOtherText,
             }}
-          >
-            {text}
-          </Text>
+          />
         ) : null}
         {children}
         {ts ? (

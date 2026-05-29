@@ -2,6 +2,7 @@ import { Pressable, Text, View } from "react-native";
 
 import { useTheme } from "../theme";
 import { Avatar } from "./Avatar";
+import { FormattedText } from "./FormattedText";
 import { Unread } from "./Unread";
 
 export interface ChatRowData {
@@ -79,22 +80,33 @@ export function ChatRow({ chat, onPress }: Props) {
           </Text>
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 2 }}>
-          <Text
-            numberOfLines={1}
-            style={{
-              fontSize: 12.5,
-              color: chat.typing ? theme.colors.accent : theme.colors.inkDim,
-              flex: 1,
-              fontFamily: chat.typing ? theme.fonts.mono : theme.fonts.body,
-              fontStyle: chat.typing ? "italic" : "normal",
-            }}
-          >
-            {chat.typing
-              ? theme.decorate
-                ? "> печатает…"
-                : "печатает…"
-              : (chat.lastStatus ? "✓ " : "") + chat.last}
-          </Text>
+          {chat.typing ? (
+            <Text
+              numberOfLines={1}
+              style={{
+                fontSize: 12.5,
+                color: theme.colors.accent,
+                flex: 1,
+                fontFamily: theme.fonts.mono,
+                fontStyle: "italic",
+              }}
+            >
+              {theme.decorate ? "> печатает…" : "печатает…"}
+            </Text>
+          ) : (
+            <FormattedText
+              numberOfLines={1}
+              noBold
+              staticSpoiler
+              text={(chat.lastStatus ? "✓ " : "") + chat.last}
+              style={{
+                fontSize: 12.5,
+                color: theme.colors.inkDim,
+                flex: 1,
+                fontFamily: theme.fonts.body,
+              }}
+            />
+          )}
           {chat.muted ? <Text style={{ color: theme.colors.inkMuted, fontSize: 13 }}>🔕</Text> : null}
           <Unread count={chat.unread} />
         </View>
