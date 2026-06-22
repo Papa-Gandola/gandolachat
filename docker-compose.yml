@@ -26,6 +26,10 @@ services:
       SECRET_KEY: "${SECRET_KEY:-change-me-in-production-please}"
     volumes:
       - uploads:/app/uploads
+      # Bind-mount the web PWA bundle from the host so deploying a new build
+      # is just `scp` of fresh files — no image rebuild needed. The server
+      # reads from /app/web on every request via StaticFiles.
+      - ./server/web:/app/web
     depends_on:
       db:
         condition: service_healthy
