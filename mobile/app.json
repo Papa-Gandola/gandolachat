@@ -37,6 +37,20 @@
         "android.permission.FOREGROUND_SERVICE_CAMERA"
       ]
     },
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/icon.png",
+      "name": "GandolaChat",
+      "shortName": "Gandola",
+      "themeColor": "#0a0a0a",
+      "backgroundColor": "#0a0a0a",
+      "description": "GandolaChat — мессенджер для своих.",
+      "display": "standalone",
+      "orientation": "portrait",
+      "lang": "ru",
+      "startUrl": "/",
+      "scope": "/"
+    },
     "plugins": [
       "expo-font",
       "expo-secure-store",

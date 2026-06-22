@@ -51,6 +51,15 @@ app.add_middleware(
 Path(settings.UPLOAD_DIR).mkdir(exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
 
+# PWA bundle for the web client (built from mobile/ via `npm run build:web`,
+# output copied to server/web/). Mounted at /app so the iPhone "Add to Home
+# Screen" PWA lives at https://<host>/app/. html=True serves index.html on
+# directory hits and for unknown subroutes (SPA routing). Missing-directory
+# is tolerated so the server starts even before the first web build.
+_PWA_DIR = Path(__file__).parent.parent / "web"
+if _PWA_DIR.is_dir():
+    app.mount("/app", StaticFiles(directory=str(_PWA_DIR), html=True), name="pwa")
+
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(chats.router)

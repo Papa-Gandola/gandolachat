@@ -5,7 +5,7 @@
  * Keyed per chat. Values are tiny (a line or two of text), well within
  * SecureStore's per-item limit.
  */
-import * as SecureStore from "expo-secure-store";
+import * as SecureStore from "./secureStorage";
 
 // SecureStore keys must match /^[A-Za-z0-9._-]+$/ — chatId is numeric so the
 // template is always valid.
