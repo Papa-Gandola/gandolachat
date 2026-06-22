@@ -23,12 +23,14 @@ import { Bubble } from "../../components/Bubble";
 import { ChevronLeftIcon, PhoneIcon, SearchIcon, SendIcon } from "../../components/icons";
 import { IconBtn } from "../../components/IconBtn";
 import { ScreenContainer } from "../../components/ScreenContainer";
+import { SwipeableMessage } from "../../components/SwipeableMessage";
 import { VoiceMessage } from "../../components/VoiceMessage";
 import { ChatsStackParamList } from "../../navigation/types";
 import { apiErrorMessage, chatApi, ChatOut, MessageOut, userApi } from "../../services/api";
 import { API_URL } from "../../services/config";
 import { useAuth } from "../../services/AuthContext";
 import { useCall } from "../../services/CallContext";
+import { clearDraft, getDraft, setDraft as persistDraft } from "../../services/drafts";
 import { useMessages } from "../../services/useMessages";
 import { wsService } from "../../services/ws";
 import { useTheme } from "../../theme";
@@ -136,6 +138,28 @@ export function ChatScreen({ navigation, route }: Props) {
       if (typingResetRef.current) clearTimeout(typingResetRef.current);
     };
   }, [chatId, user?.id]);
+
+  // Restore a persisted draft when opening the chat. draftLoadedRef guards the
+  // save effect below so it can't clobber the stored draft with the initial
+  // empty string before the load resolves.
+  const draftLoadedRef = useRef(false);
+  useEffect(() => {
+    draftLoadedRef.current = false;
+    let cancelled = false;
+    getDraft(chatId).then((d) => {
+      if (!cancelled && d) setDraft(d);
+      draftLoadedRef.current = true;
+    });
+    return () => { cancelled = true; };
+  }, [chatId]);
+  // Persist the draft (debounced) as the user types. Skipped while editing an
+  // existing message, since `draft` then holds the edit text, not a new draft.
+  useEffect(() => {
+    if (!draftLoadedRef.current || editing) return;
+    const t = setTimeout(() => { persistDraft(chatId, draft); }, 500);
+    return () => clearTimeout(t);
+  }, [draft, chatId, editing]);
+
   // Per-chat mute. Read from SecureStore-backed cache; toggled by the bell
   // icon in the header. Persists across restarts. Server keeps pushing, the
   // notification handler in services/notifications.ts silently drops the
@@ -303,6 +327,7 @@ export function ChatScreen({ navigation, route }: Props) {
     });
     if (ok) {
       setDraft("");
+      clearDraft(chatId);
       setReplyTo(null);
     }
     // Server echoes the message back over WebSocket; useMessages appends it.
@@ -710,8 +735,8 @@ export function ChatScreen({ navigation, route }: Props) {
           const text = m.content ?? (m.file_url && !img && !audio ? `📎 ${m.file_name ?? "файл"}` : "");
           const isHighlighted = highlightMsgId === m.id;
           return (
+            <SwipeableMessage key={m.id} onReply={() => beginReply(m)}>
             <Pressable
-              key={m.id}
               onLayout={(e) => messageOffsets.current.set(m.id, e.nativeEvent.layout.y)}
               onLongPress={() => {
                 Haptics.selectionAsync().catch(() => {});
@@ -765,6 +790,7 @@ export function ChatScreen({ navigation, route }: Props) {
                 />
               ) : null}
             </Pressable>
+            </SwipeableMessage>
           );
         })}
       </ScrollView>
