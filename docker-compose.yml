@@ -30,6 +30,19 @@ services:
       db:
         condition: service_healthy
 
+  # TURN/STUN relay so WebRTC calls work between devices behind NAT.
+  # Runs in host network mode so coturn sees real source IPs on UDP — without
+  # this, ICE candidates would advertise the docker bridge address and the
+  # remote peer wouldn't be able to reach the relay. Don't forget to open
+  # UDP 3478 + UDP 49160-49200 + TCP 3478 in the VPS firewall (ufw/iptables).
+  coturn:
+    image: coturn/coturn:4.6
+    restart: always
+    network_mode: host
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    command: ["-c", "/etc/coturn/turnserver.conf"]
+
 volumes:
   pgdata:
   uploads:
