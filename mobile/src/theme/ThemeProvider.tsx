@@ -1,4 +1,4 @@
-import * as SecureStore from "expo-secure-store";
+import * as SecureStore from "../services/secureStorage";
 import { ReactNode, useEffect, useMemo, useState } from "react";
 
 import { defaultTheme, ThemeContext, THEMES } from "./index";

@@ -11,6 +11,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { RootNavigator } from "./src/navigation/RootNavigator";
 import { AuthProvider } from "./src/services/AuthContext";
 import { CallProvider } from "./src/services/CallContext";
+import { initWebPwa } from "./src/services/webPwa";
 import { ThemeProvider } from "./src/theme/ThemeProvider";
 
 export default function App() {
@@ -21,6 +22,8 @@ export default function App() {
     // Match the system surface so the status bar / nav bar match the dark
     // theme even before React mounts.
     SystemUI.setBackgroundColorAsync("#0a0a0a");
+    // iOS PWA meta tags + service worker registration (no-op on native).
+    initWebPwa();
   }, []);
 
   if (!interLoaded || !monoLoaded) return null;

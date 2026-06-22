@@ -10,7 +10,7 @@
  * SecureStore is overkill for a list of numbers, but expo-secure-store is
  * already in the deps so we avoid adding a separate AsyncStorage dependency.
  */
-import * as SecureStore from "expo-secure-store";
+import * as SecureStore from "./secureStorage";
 
 const KEY = "gandola.mutedChats";
 
