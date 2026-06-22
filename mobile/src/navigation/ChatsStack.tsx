@@ -11,7 +11,6 @@ import { PokerScreen } from "../screens/chats/PokerScreen";
 import { SearchScreen } from "../screens/chats/SearchScreen";
 import { CameraScreen } from "../screens/extras/CameraScreen";
 import { MediaViewerScreen } from "../screens/extras/MediaViewerScreen";
-import { StickerPickerScreen } from "../screens/extras/StickerPickerScreen";
 import { OtherProfileScreen } from "../screens/profile/OtherProfileScreen";
 import { ChatsStackParamList } from "./types";
 
@@ -34,11 +33,6 @@ export function ChatsStack() {
         name="MediaViewer"
         component={MediaViewerScreen}
         options={{ presentation: "modal", animation: "fade" }}
-      />
-      <Stack.Screen
-        name="StickerPicker"
-        component={StickerPickerScreen}
-        options={{ presentation: "modal", animation: "slide_from_bottom" }}
       />
       <Stack.Screen
         name="Camera"

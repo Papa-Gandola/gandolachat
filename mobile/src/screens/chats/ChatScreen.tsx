@@ -23,12 +23,14 @@ import { Bubble } from "../../components/Bubble";
 import { ChevronLeftIcon, PhoneIcon, SearchIcon, SendIcon } from "../../components/icons";
 import { IconBtn } from "../../components/IconBtn";
 import { ScreenContainer } from "../../components/ScreenContainer";
+import { SwipeableMessage } from "../../components/SwipeableMessage";
 import { VoiceMessage } from "../../components/VoiceMessage";
 import { ChatsStackParamList } from "../../navigation/types";
 import { apiErrorMessage, chatApi, ChatOut, MessageOut, userApi } from "../../services/api";
 import { API_URL } from "../../services/config";
 import { useAuth } from "../../services/AuthContext";
 import { useCall } from "../../services/CallContext";
+import { clearDraft, getDraft, setDraft as persistDraft } from "../../services/drafts";
 import { useMessages } from "../../services/useMessages";
 import { wsService } from "../../services/ws";
 import { useTheme } from "../../theme";
@@ -107,6 +109,57 @@ export function ChatScreen({ navigation, route }: Props) {
   // Peer presence for the header subtitle (DM only).
   const [peerOnline, setPeerOnline] = useState(false);
   const [peerLastSeen, setPeerLastSeen] = useState<string | null>(null);
+  // Someone in this chat is typing — drives the "печатает…" header subtitle.
+  // Reset by a 4s timer that's re-armed on every typing event we receive.
+  const [someoneTyping, setSomeoneTyping] = useState(false);
+  const typingResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Throttle our own outgoing typing pings to at most one per 2.5s.
+  const lastTypingSentRef = useRef(0);
+  const onDraftChange = (text: string) => {
+    setDraft(text);
+    if (editing) return; // editing an existing message isn't "typing a new one"
+    const now = Date.now();
+    if (now - lastTypingSentRef.current > 2500) {
+      lastTypingSentRef.current = now;
+      wsService.send({ type: "typing", chat_id: Number(chatId) });
+    }
+  };
+  useEffect(() => {
+    const onTyping = (data: Record<string, unknown>) => {
+      if ((data.chat_id as number) !== Number(chatId)) return;
+      if ((data.user_id as number) === user?.id) return;
+      setSomeoneTyping(true);
+      if (typingResetRef.current) clearTimeout(typingResetRef.current);
+      typingResetRef.current = setTimeout(() => setSomeoneTyping(false), 4000);
+    };
+    wsService.on("typing", onTyping);
+    return () => {
+      wsService.off("typing", onTyping);
+      if (typingResetRef.current) clearTimeout(typingResetRef.current);
+    };
+  }, [chatId, user?.id]);
+
+  // Restore a persisted draft when opening the chat. draftLoadedRef guards the
+  // save effect below so it can't clobber the stored draft with the initial
+  // empty string before the load resolves.
+  const draftLoadedRef = useRef(false);
+  useEffect(() => {
+    draftLoadedRef.current = false;
+    let cancelled = false;
+    getDraft(chatId).then((d) => {
+      if (!cancelled && d) setDraft(d);
+      draftLoadedRef.current = true;
+    });
+    return () => { cancelled = true; };
+  }, [chatId]);
+  // Persist the draft (debounced) as the user types. Skipped while editing an
+  // existing message, since `draft` then holds the edit text, not a new draft.
+  useEffect(() => {
+    if (!draftLoadedRef.current || editing) return;
+    const t = setTimeout(() => { persistDraft(chatId, draft); }, 500);
+    return () => clearTimeout(t);
+  }, [draft, chatId, editing]);
+
   // Per-chat mute. Read from SecureStore-backed cache; toggled by the bell
   // icon in the header. Persists across restarts. Server keeps pushing, the
   // notification handler in services/notifications.ts silently drops the
@@ -274,6 +327,7 @@ export function ChatScreen({ navigation, route }: Props) {
     });
     if (ok) {
       setDraft("");
+      clearDraft(chatId);
       setReplyTo(null);
     }
     // Server echoes the message back over WebSocket; useMessages appends it.
@@ -546,7 +600,19 @@ export function ChatScreen({ navigation, route }: Props) {
             >
               {name}
             </Text>
-            {userId != null ? (
+            {someoneTyping ? (
+              <Text
+                style={{
+                  fontFamily: theme.fonts.mono,
+                  fontSize: 10.5,
+                  color: theme.colors.accent,
+                  fontStyle: "italic",
+                  marginTop: 1,
+                }}
+              >
+                {theme.decorate ? "> печатает…" : "печатает…"}
+              </Text>
+            ) : userId != null ? (
               <Text
                 style={{
                   fontFamily: theme.fonts.mono,
@@ -669,8 +735,8 @@ export function ChatScreen({ navigation, route }: Props) {
           const text = m.content ?? (m.file_url && !img && !audio ? `📎 ${m.file_name ?? "файл"}` : "");
           const isHighlighted = highlightMsgId === m.id;
           return (
+            <SwipeableMessage key={m.id} onReply={() => beginReply(m)}>
             <Pressable
-              key={m.id}
               onLayout={(e) => messageOffsets.current.set(m.id, e.nativeEvent.layout.y)}
               onLongPress={() => {
                 Haptics.selectionAsync().catch(() => {});
@@ -724,6 +790,7 @@ export function ChatScreen({ navigation, route }: Props) {
                 />
               ) : null}
             </Pressable>
+            </SwipeableMessage>
           );
         })}
       </ScrollView>
@@ -883,7 +950,7 @@ export function ChatScreen({ navigation, route }: Props) {
             <TextInput
               multiline
               value={draft}
-              onChangeText={setDraft}
+              onChangeText={onDraftChange}
               placeholder={theme.decorate ? "> сообщение_" : "Сообщение"}
               placeholderTextColor={theme.colors.inkMuted}
               style={{

@@ -3,19 +3,18 @@ import { Pressable, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useTheme } from "../theme";
-import { ChatBubbleIcon, PersonIcon, PhoneIcon } from "./icons";
+import { ChatBubbleIcon, PersonIcon } from "./icons";
 import { Unread } from "./Unread";
 
 interface TabSpec {
   routeName: string;
   label: string;
-  iconKey: "chats" | "calls" | "profile";
+  iconKey: "chats" | "profile";
   badge?: number;
 }
 
 const TABS: TabSpec[] = [
   { routeName: "Chats", label: "ЧАТЫ", iconKey: "chats" },
-  { routeName: "Calls", label: "ЗВОНКИ", iconKey: "calls" },
   { routeName: "Profile", label: "Я", iconKey: "profile" },
 ];
 
@@ -93,6 +92,5 @@ function prettyLabel(uppercase: string): string {
 
 function TabIcon({ iconKey, color }: { iconKey: TabSpec["iconKey"]; color: string }) {
   if (iconKey === "chats") return <ChatBubbleIcon color={color} />;
-  if (iconKey === "calls") return <PhoneIcon color={color} />;
   return <PersonIcon color={color} />;
 }

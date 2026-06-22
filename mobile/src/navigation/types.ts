@@ -39,14 +39,8 @@ export type ChatsStackParamList = {
   MessageSearch: { chatId: string; chatName: string };
   OtherProfile: { userId: number };
   MediaViewer: { url: string };
-  StickerPicker: undefined;
   Camera: { chatId: string };
   Poker: { chatId: string; chatName: string };
-};
-
-export type CallsStackParamList = {
-  CallsList: undefined;
-  ActiveCall: { chatId: string };
 };
 
 export type ProfileStackParamList = {
@@ -56,7 +50,6 @@ export type ProfileStackParamList = {
 
 export type MainTabsParamList = {
   Chats: NavigatorScreenParams<ChatsStackParamList>;
-  Calls: NavigatorScreenParams<CallsStackParamList>;
   Profile: NavigatorScreenParams<ProfileStackParamList>;
 };
 

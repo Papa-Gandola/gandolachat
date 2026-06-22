@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ChatRowData } from "../components/ChatRow";
 import { apiErrorMessage, chatApi, ChatOut } from "./api";
@@ -58,6 +58,8 @@ export function useChats(): ChatsState {
   const [raw, setRaw] = useState<ChatOut[]>([]);
   const [unread, setUnread] = useState<Record<string, number>>({});
   const [online, setOnline] = useState<Set<number>>(new Set());
+  const [typingChats, setTypingChats] = useState<Set<number>>(new Set());
+  const typingTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -118,14 +120,44 @@ export function useChats(): ChatsState {
     // On (re)connect, re-pull the online snapshot — WS-only tracking would
     // miss friends who were already online before we connected.
     const onWsOpen = () => refreshSilent();
+    const clearTyping = (cid: number) => {
+      const t = typingTimersRef.current.get(cid);
+      if (t) { clearTimeout(t); typingTimersRef.current.delete(cid); }
+      setTypingChats((prev) => {
+        if (!prev.has(cid)) return prev;
+        const next = new Set(prev);
+        next.delete(cid);
+        return next;
+      });
+    };
+    const onTyping = (data: Record<string, unknown>) => {
+      const cid = data.chat_id as number | undefined;
+      const uid = data.user_id as number | undefined;
+      if (typeof cid !== "number" || uid === user?.id) return;
+      setTypingChats((prev) => prev.has(cid) ? prev : new Set(prev).add(cid));
+      const existing = typingTimersRef.current.get(cid);
+      if (existing) clearTimeout(existing);
+      typingTimersRef.current.set(cid, setTimeout(() => clearTyping(cid), 4000));
+    };
+    // A real message means typing has ended — drop the indicator immediately.
+    const onMessageClearTyping = (data: Record<string, unknown>) => {
+      const cid = data.chat_id as number | undefined;
+      if (typeof cid === "number") clearTyping(cid);
+    };
     wsService.on("new_chat", onNewChat);
     wsService.on("message", onMessage);
+    wsService.on("message", onMessageClearTyping);
+    wsService.on("typing", onTyping);
     wsService.on("chat_updated", onChatUpdated);
     wsService.on("chat_deleted", onChatDeleted);
     wsService.on("user_online", onUserOnline);
     wsService.on("user_offline", onUserOffline);
     wsService.on("_ws_open", onWsOpen);
     return () => {
+      typingTimersRef.current.forEach((t) => clearTimeout(t));
+      typingTimersRef.current.clear();
+      wsService.off("typing", onTyping);
+      wsService.off("message", onMessageClearTyping);
       wsService.off("new_chat", onNewChat);
       wsService.off("message", onMessage);
       wsService.off("chat_updated", onChatUpdated);
@@ -179,9 +211,10 @@ export function useChats(): ChatsState {
         avatarUrl,
         createdBy: c.created_by,
         allowAllWrite: c.allow_all_write,
+        typing: typingChats.has(c.id),
       };
     });
-  }, [raw, user, unread, online]);
+  }, [raw, user, unread, online, typingChats]);
 
   return { chats, raw, loading, error, refresh };
 }
