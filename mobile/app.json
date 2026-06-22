@@ -48,8 +48,11 @@
       "display": "standalone",
       "orientation": "portrait",
       "lang": "ru",
-      "startUrl": "/",
-      "scope": "/"
+      "startUrl": "/app/",
+      "scope": "/app/"
+    },
+    "experiments": {
+      "baseUrl": "/app"
     },
     "plugins": [
       "expo-font",

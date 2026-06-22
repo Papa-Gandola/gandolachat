@@ -8,7 +8,7 @@
 // JWT can expire while the SW serves stale shells. We'll add a precache for
 // the bundle once Web Push is wired and the routing is stable.
 
-const APP_URL = "/";
+const APP_URL = "/app/";
 
 self.addEventListener("install", (e) => {
   // Activate immediately so the user doesn't need to refresh after installing.

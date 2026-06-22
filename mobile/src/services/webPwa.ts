@@ -49,14 +49,16 @@ export function initWebPwa(): void {
   // Fill the notch / safe area with the app background instead of white.
   ensureMeta("viewport", "width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no");
 
-  // Apple touch icon — iOS picks this for the home screen tile. Falls back to
-  // the favicon Expo generates if this file isn't present.
-  ensureLink("apple-touch-icon", "/apple-touch-icon.png", { sizes: "180x180" });
+  // App lives under /app, so static assets do too. Apple picks this image
+  // for the home-screen tile; falls back to the favicon if missing.
+  ensureLink("apple-touch-icon", "/app/apple-touch-icon.png", { sizes: "180x180" });
 
-  // Service worker registration. Wrapped in try because some browsers (e.g.
-  // private mode) reject it, and we don't want that to crash the chat.
+  // Service worker registration. Scope is the directory the SW controls — we
+  // set it to /app/ so the SW handles in-app routes only. Wrapped in try
+  // because some browsers (e.g. private mode) reject it and we don't want
+  // that to crash the chat.
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/sw.js").catch(() => {
+    navigator.serviceWorker.register("/app/sw.js", { scope: "/app/" }).catch(() => {
       // best-effort — chat keeps working without the SW; only PWA install
       // banner and (future) Web Push need it.
     });
