@@ -9,7 +9,7 @@
     "web": "expo start --web",
     "build:preview": "eas build --profile preview --platform android",
     "build:dev": "eas build --profile development --platform android",
-    "build:web": "expo export -p web --output-dir dist",
+    "build:web": "expo export -p web --output-dir dist && node scripts/postbuild-web.js",
     "lint": "eslint src --ext .ts,.tsx"
   },
   "dependencies": {
