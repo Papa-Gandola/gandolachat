@@ -6,8 +6,11 @@ services:
       POSTGRES_USER: gandola
       POSTGRES_PASSWORD: gandola
       POSTGRES_DB: gandolachat
-    ports:
-      - "5432:5432"
+    # Postgres no longer needs to be reachable from outside the host —
+    # only the FastAPI container talks to it on the internal docker
+    # network. Closing the public port removes a brute-force surface.
+    expose:
+      - "5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -19,8 +22,11 @@ services:
   server:
     build: ./server
     restart: always
-    ports:
-      - "8000:8000"
+    # No host port — all external traffic goes through caddy on 443.
+    # The container still listens on 8000 internally; caddy reverse-proxies
+    # to it via the docker network.
+    expose:
+      - "8000"
     environment:
       DATABASE_URL: postgresql+asyncpg://gandola:gandola@db:5432/gandolachat
       SECRET_KEY: "${SECRET_KEY:-change-me-in-production-please}"
@@ -34,19 +40,32 @@ services:
       db:
         condition: service_healthy
 
-  # TURN/STUN relay so WebRTC calls work between devices behind NAT.
-  # Runs in host network mode so coturn sees real source IPs on UDP — without
-  # this, ICE candidates would advertise the docker bridge address and the
-  # remote peer wouldn't be able to reach the relay. Don't forget to open
-  # UDP 3478 + UDP 49160-49200 + TCP 3478 in the VPS firewall (ufw/iptables).
-  coturn:
-    image: coturn/coturn:4.6
+  # HTTPS reverse proxy. Terminates TLS for the public hostname (DOMAIN env
+  # var, e.g. yourname.duckdns.org), auto-renews the Let's Encrypt cert, and
+  # forwards everything (API, WS, /uploads, /app PWA) to the server container.
+  # ACME challenge needs ports 80 and 443 reachable from the public internet.
+  caddy:
+    image: caddy:2-alpine
     restart: always
-    network_mode: host
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
     volumes:
-      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
-    command: ["-c", "/etc/coturn/turnserver.conf"]
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Persist issued certs + ACME account state across restarts — without
+      # this, every `docker compose down/up` would re-issue and hit LE rate
+      # limits (5 certs/week per FQDN).
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      DOMAIN: "${DOMAIN}"
+      ACME_EMAIL: "${ACME_EMAIL:-}"
+    depends_on:
+      - server
 
 volumes:
   pgdata:
   uploads:
+  caddy_data:
+  caddy_config:
