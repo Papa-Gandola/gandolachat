@@ -2,7 +2,7 @@
   "expo": {
     "name": "GandolaChat",
     "slug": "gandolachat",
-    "version": "0.5.0",
+    "version": "0.6.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "gandolachat",
@@ -14,7 +14,7 @@
     },
     "android": {
       "package": "com.gandola.chat",
-      "versionCode": 5,
+      "versionCode": 6,
       "usesCleartextTraffic": true,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
@@ -110,8 +110,8 @@
       ]
     ],
     "extra": {
-      "apiUrl": "http://2.26.117.77:8000",
-      "wsUrl": "ws://2.26.117.77:8000",
+      "apiUrl": "https://2-26-117-77.sslip.io",
+      "wsUrl": "wss://2-26-117-77.sslip.io",
       "eas": {
         "projectId": "40d53c62-406d-44e9-99ae-bb4c01a3dc28"
       }
