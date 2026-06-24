@@ -1,6 +1,10 @@
 import axios from "axios";
 
-const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+// Production fallback — keeps us safe if VITE_API_URL ever ships empty (which
+// is what happened to v2.1.8: GH Actions secrets still held the old
+// http://2.26.117.77:8000 value, so the desktop bundle baked it in and the
+// client hit a closed port). Override in client/.env for local dev.
+const BASE_URL = import.meta.env.VITE_API_URL || "https://2-26-117-77.sslip.io";
 
 const api = axios.create({ baseURL: BASE_URL });
 

@@ -1,4 +1,6 @@
-const WS_URL = import.meta.env.VITE_WS_URL || "ws://localhost:8000";
+// Production fallback over wss:// — see api.ts for the why. Override in
+// client/.env for local dev.
+const WS_URL = import.meta.env.VITE_WS_URL || "wss://2-26-117-77.sslip.io";
 
 type Handler = (data: any) => void;
 
