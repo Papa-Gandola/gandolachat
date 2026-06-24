@@ -21,13 +21,17 @@ services:
   server:
     build: ./server
     restart: always
-    # Publish ONLY on the loopback interface. The host's nginx (which holds
-    # the Let's Encrypt cert and terminates TLS) reverse-proxies
-    # https://2-26-117-77.sslip.io -> http://localhost:8000. Binding to
-    # 127.0.0.1 means the raw HTTP port is NOT reachable from the public
-    # internet — everything external must go through nginx over HTTPS.
+    # TRANSITIONAL: published on all interfaces so existing desktop / APK
+    # clients (built against http://2.26.117.77:8000) keep working while
+    # they're migrated to the HTTPS endpoint. nginx also proxies
+    # https://2-26-117-77.sslip.io -> localhost:8000.
+    #
+    # Once every client is rebuilt against https://2-26-117-77.sslip.io,
+    # lock this down to "127.0.0.1:8000:8000" so the raw HTTP port is no
+    # longer reachable from the public internet (all external traffic then
+    # goes through nginx/TLS only).
     ports:
-      - "127.0.0.1:8000:8000"
+      - "8000:8000"
     environment:
       DATABASE_URL: postgresql+asyncpg://gandola:gandola@db:5432/gandolachat
       SECRET_KEY: "${SECRET_KEY:-change-me-in-production-please}"
