@@ -47,7 +47,8 @@
     "publish": {
       "provider": "github",
       "owner": "Papa-Gandola",
-      "repo": "gandolachat"
+      "repo": "gandolachat",
+      "releaseType": "draft"
     },
     "win": {
       "target": "nsis",

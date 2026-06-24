@@ -9,8 +9,15 @@ permissions:
   contents: write
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  # Linux goes first and creates the draft GitHub release with its artifacts
+  # (AppImage + .deb + latest-linux.yml). Windows then runs after Linux is
+  # done and ATTACHES its files (.exe + .blockmap + latest.yml) to the SAME
+  # draft. Running them in parallel caused a race: one runner created the
+  # release while the other was still building, the second runner then saw
+  # an "existing release" with a different type and silently skipped every
+  # file — that's how v2.1.8 ended up with only AppImage published.
+  build-linux:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,8 +32,9 @@ jobs:
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
           VITE_WS_URL: ${{ secrets.VITE_WS_URL }}
 
-  build-linux:
-    runs-on: ubuntu-latest
+  build-windows:
+    needs: build-linux
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
