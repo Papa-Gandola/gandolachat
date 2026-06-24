@@ -6,9 +6,8 @@ services:
       POSTGRES_USER: gandola
       POSTGRES_PASSWORD: gandola
       POSTGRES_DB: gandolachat
-    # Postgres no longer needs to be reachable from outside the host —
-    # only the FastAPI container talks to it on the internal docker
-    # network. Closing the public port removes a brute-force surface.
+    # Internal-only: only the server container talks to Postgres over the
+    # docker network. No public port — removes a brute-force surface.
     expose:
       - "5432"
     volumes:
@@ -22,50 +21,25 @@ services:
   server:
     build: ./server
     restart: always
-    # No host port — all external traffic goes through caddy on 443.
-    # The container still listens on 8000 internally; caddy reverse-proxies
-    # to it via the docker network.
-    expose:
-      - "8000"
+    # Publish ONLY on the loopback interface. The host's nginx (which holds
+    # the Let's Encrypt cert and terminates TLS) reverse-proxies
+    # https://2-26-117-77.sslip.io -> http://localhost:8000. Binding to
+    # 127.0.0.1 means the raw HTTP port is NOT reachable from the public
+    # internet — everything external must go through nginx over HTTPS.
+    ports:
+      - "127.0.0.1:8000:8000"
     environment:
       DATABASE_URL: postgresql+asyncpg://gandola:gandola@db:5432/gandolachat
       SECRET_KEY: "${SECRET_KEY:-change-me-in-production-please}"
     volumes:
       - uploads:/app/uploads
       # Bind-mount the web PWA bundle from the host so deploying a new build
-      # is just `scp` of fresh files — no image rebuild needed. The server
-      # reads from /app/web on every request via StaticFiles.
+      # is just `scp` of fresh files — no image rebuild needed.
       - ./server/web:/app/web
     depends_on:
       db:
         condition: service_healthy
 
-  # HTTPS reverse proxy. Terminates TLS for the public hostname (DOMAIN env
-  # var, e.g. yourname.duckdns.org), auto-renews the Let's Encrypt cert, and
-  # forwards everything (API, WS, /uploads, /app PWA) to the server container.
-  # ACME challenge needs ports 80 and 443 reachable from the public internet.
-  caddy:
-    image: caddy:2-alpine
-    restart: always
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp" # HTTP/3
-    volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      # Persist issued certs + ACME account state across restarts — without
-      # this, every `docker compose down/up` would re-issue and hit LE rate
-      # limits (5 certs/week per FQDN).
-      - caddy_data:/data
-      - caddy_config:/config
-    environment:
-      DOMAIN: "${DOMAIN}"
-      ACME_EMAIL: "${ACME_EMAIL:-}"
-    depends_on:
-      - server
-
 volumes:
   pgdata:
   uploads:
-  caddy_data:
-  caddy_config:

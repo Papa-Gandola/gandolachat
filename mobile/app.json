@@ -110,8 +110,8 @@
       ]
     ],
     "extra": {
-      "apiUrl": "http://2.26.117.77:8000",
-      "wsUrl": "ws://2.26.117.77:8000",
+      "apiUrl": "https://2-26-117-77.sslip.io",
+      "wsUrl": "wss://2-26-117-77.sslip.io",
       "eas": {
         "projectId": "40d53c62-406d-44e9-99ae-bb4c01a3dc28"
       }
