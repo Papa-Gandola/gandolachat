@@ -2,7 +2,7 @@
   "expo": {
     "name": "GandolaChat",
     "slug": "gandolachat",
-    "version": "0.5.0",
+    "version": "0.6.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "gandolachat",
@@ -14,7 +14,7 @@
     },
     "android": {
       "package": "com.gandola.chat",
-      "versionCode": 5,
+      "versionCode": 6,
       "usesCleartextTraffic": true,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
