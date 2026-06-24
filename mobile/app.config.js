@@ -1,16 +1,26 @@
-// Expo config that extends app.json so the static config stays the
-// source of truth for everything else. We override only the Android
-// Firebase config so EAS Build can supply the file via Environment
-// Variable (file type, name GOOGLE_SERVICES_JSON) without having to
-// commit the credentials into the repo.
+// Expo config that extends app.json. Two overrides:
 //
-// Local dev keeps working with the file at mobile/google-services.json
-// (gitignored) — the env var is undefined there so we fall back to it.
+// 1. Android Firebase config — EAS Build supplies the file via the
+//    GOOGLE_SERVICES_JSON env var (file type) without committing the
+//    credentials. Local dev falls back to mobile/google-services.json
+//    (gitignored).
+//
+// 2. apiUrl / wsUrl — pulled from APP_API_URL / APP_WS_URL env vars at
+//    build time. This lets the same source tree produce a dev build
+//    pointing at a local IP and a prod build pointing at the HTTPS
+//    domain, without editing app.json each release. If the env vars
+//    aren't set we keep the values from app.json's "extra" block as a
+//    fallback (handy for `expo start` on a LAN).
 module.exports = ({ config }) => ({
   ...config,
   android: {
     ...(config.android ?? {}),
     googleServicesFile:
       process.env.GOOGLE_SERVICES_JSON || config.android?.googleServicesFile || "./google-services.json",
+  },
+  extra: {
+    ...(config.extra ?? {}),
+    apiUrl: process.env.APP_API_URL || config.extra?.apiUrl,
+    wsUrl: process.env.APP_WS_URL || config.extra?.wsUrl,
   },
 });
