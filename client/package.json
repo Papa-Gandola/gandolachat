@@ -13,6 +13,7 @@
     "dev:vite": "vite",
     "dev:electron": "wait-on http://localhost:5173 && electron .",
     "build": "vite build && tsc -p tsconfig.main.json",
+    "build:web": "vite build",
     "dist": "npm run build && electron-builder",
     "lint": "eslint src --ext .ts,.tsx"
   },

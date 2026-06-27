@@ -2,6 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, Depends, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -51,14 +52,45 @@ app.add_middleware(
 Path(settings.UPLOAD_DIR).mkdir(exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
 
-# PWA bundle for the web client (built from mobile/ via `npm run build:web`,
-# output copied to server/web/). Mounted at /app so the iPhone "Add to Home
-# Screen" PWA lives at https://<host>/app/. html=True serves index.html on
-# directory hits and for unknown subroutes (SPA routing). Missing-directory
-# is tolerated so the server starts even before the first web build.
+# Mobile PWA bundle (built from mobile/ via `npm run build:web`, copied to
+# server/web/). Mounted at /app — the iPhone "Add to Home Screen" PWA lives
+# at https://<host>/app/. Missing-directory tolerated so the server starts
+# even before the first web build.
 _PWA_DIR = Path(__file__).parent.parent / "web"
 if _PWA_DIR.is_dir():
     app.mount("/app", StaticFiles(directory=str(_PWA_DIR), html=True), name="pwa")
+
+# Desktop web build (the Electron renderer built for the browser, from
+# client/ via `npm run build`, copied to server/web-desktop/). Mounted at
+# /desktop. Same renderer as the .exe, minus the Electron-only chrome (hidden
+# at runtime via isElectron). The desktop client's vite base is "./" so its
+# relative asset URLs resolve correctly under /desktop/.
+_DESKTOP_DIR = Path(__file__).parent.parent / "web-desktop"
+if _DESKTOP_DIR.is_dir():
+    app.mount("/desktop", StaticFiles(directory=str(_DESKTOP_DIR), html=True), name="desktop")
+
+
+# Root dispatcher: pick the mobile or desktop UI by viewport width + UA, then
+# redirect. Keeps a single entry URL (the bare domain) that "just works" on
+# any device. The installed iPhone PWA opens /app/ directly (its manifest
+# start_url), so it never hits this. Served inline so it loads instantly
+# without pulling either 2 MB bundle first.
+@app.get("/", response_class=HTMLResponse)
+async def root_dispatch():
+    return """<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GandolaChat</title></head>
+<body style="margin:0;background:#0a0a0a">
+<script>
+(function () {
+  var ua = navigator.userAgent || "";
+  var isMobileUA = /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+  var narrow = window.innerWidth > 0 && window.innerWidth < 900;
+  var mobile = isMobileUA || narrow;
+  location.replace(mobile ? "/app/" : "/desktop/");
+})();
+</script>
+</body></html>"""
 
 app.include_router(auth.router)
 app.include_router(users.router)

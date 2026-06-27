@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChatOut, MessageOut, UserOut, chatApi } from "../services/api";
+import { saveFile } from "../services/platform";
 import { wsService } from "../services/ws";
 import { playMessageSound } from "../services/sounds";
 import EmojiPicker from "./EmojiPicker";
@@ -828,7 +829,8 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   async function downloadImage(url: string, filename: string) {
     const res = await fetch(url);
     const buf = await res.arrayBuffer();
-    (window as any).electron?.saveFileAs(buf, filename);
+    // Native save dialog in Electron, blob-download fallback in the browser.
+    saveFile(buf, filename);
   }
 
   async function copyImage(url: string) {

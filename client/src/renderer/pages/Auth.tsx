@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { authApi } from "../services/api";
+import { isElectron } from "../services/platform";
 import { useTheme } from "../services/theme";
 
 interface Props {
@@ -100,7 +101,9 @@ export default function Auth({ onLogin }: Props) {
 
   return (
     <div style={styles.root}>
-      <button style={{ ...styles.closeAppBtn, ...mono, ...(isNeo ? { color: "var(--accent)" } : {}) }} onClick={() => (window as any).electron?.close()} title="Закрыть">✕</button>
+      {isElectron && (
+        <button style={{ ...styles.closeAppBtn, ...mono, ...(isNeo ? { color: "var(--accent)" } : {}) }} onClick={() => (window as any).electron?.close()} title="Закрыть">✕</button>
+      )}
       <div style={{ ...styles.card, ...neoCardExtra }}>
         {isNeo && <CornerBrackets />}
         <div style={styles.logo}>

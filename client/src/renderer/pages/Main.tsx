@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ChatOut, UserOut, chatApi } from "../services/api";
+import { isElectron } from "../services/platform";
 import { wsService } from "../services/ws";
 import { webrtcService } from "../services/webrtc";
 import { playCallRing } from "../services/sounds";
@@ -322,11 +323,13 @@ export default function Main({ token, user, onLogout }: Props) {
             {connQuality === "offline" ? "offline" : `${connPing} мс`}
           </span>
         </div>
-        <div style={s.winControls}>
-          <button style={s.winBtn} onClick={() => (window as any).electron?.minimize()}>─</button>
-          <button style={s.winBtn} onClick={() => (window as any).electron?.maximize()}>□</button>
-          <button style={{ ...s.winBtn, ...s.closeBtn }} onClick={() => setShowCloseDialog(true)}>✕</button>
-        </div>
+        {isElectron && (
+          <div style={s.winControls}>
+            <button style={s.winBtn} onClick={() => (window as any).electron?.minimize()}>─</button>
+            <button style={s.winBtn} onClick={() => (window as any).electron?.maximize()}>□</button>
+            <button style={{ ...s.winBtn, ...s.closeBtn }} onClick={() => setShowCloseDialog(true)}>✕</button>
+          </div>
+        )}
       </div>
 
       {/* Incoming call banners — multiple */}

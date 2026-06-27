@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import FormattedText from "./FormattedText";
 import { ChatOut, UserOut, chatApi, userApi, authApi, getFileUrl } from "../services/api";
+import { isElectron } from "../services/platform";
 import { wsService } from "../services/ws";
 import { applyTheme, getTheme, Theme, useTheme, getNeoColors, saveNeoColors, resetNeoColors, DEFAULT_NEO_COLORS } from "../services/theme";
 
@@ -629,14 +630,16 @@ export default function Sidebar({
                     </button>
                   </>
                 )}
-                <button style={s.settingsMenuItem} onClick={() => {
-                  setShowSettingsMenu(false);
-                  setUpdateStatus(null);
-                  setShowUpdateBanner(false);
-                  (window as any).electron?.checkForUpdates();
-                }}>
-                  🔄 Проверить обновления
-                </button>
+                {isElectron && (
+                  <button style={s.settingsMenuItem} onClick={() => {
+                    setShowSettingsMenu(false);
+                    setUpdateStatus(null);
+                    setShowUpdateBanner(false);
+                    (window as any).electron?.checkForUpdates();
+                  }}>
+                    🔄 Проверить обновления
+                  </button>
+                )}
                 <button style={{ ...s.settingsMenuItem, color: "#ed4245" }} onClick={() => { setShowSettingsMenu(false); onLogout(); }}>
                   ⎋ Выйти
                 </button>
