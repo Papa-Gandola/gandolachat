@@ -33,8 +33,8 @@ self.addEventListener("push", (event) => {
       body,
       tag,           // collapses multiple notifications from the same chat
       renotify: !!tag,
-      icon: "/apple-touch-icon.png",
-      badge: "/apple-touch-icon.png",
+      icon: "/app/apple-touch-icon.png",
+      badge: "/app/apple-touch-icon.png",
       data,
     }),
   );

@@ -99,6 +99,15 @@ export async function registerForPushNotifications(): Promise<void> {
     // see it on the very first notification after launch.
     const { loadMutedChats } = await import("./mutedChats");
     await loadMutedChats();
+
+    // Web build: Expo push doesn't apply — use the Web Push (VAPID) path and
+    // stop here. Everything below is native-only (Android channels, Expo token).
+    if (Platform.OS === "web") {
+      const { registerWebPush } = await import("./webPush");
+      await registerWebPush();
+      return;
+    }
+
     await ensureAndroidChannels();
     const { status: existing } = await Notifications.getPermissionsAsync();
     let granted = existing === "granted";
@@ -125,6 +134,16 @@ export async function registerForPushNotifications(): Promise<void> {
  * doesn't keep getting notifications for the previous account.
  */
 export async function unregisterCurrentPushToken(): Promise<void> {
+  // Web: drop the browser's Web Push subscription instead of an Expo token.
+  if (Platform.OS === "web") {
+    try {
+      const { unregisterWebPush } = await import("./webPush");
+      await unregisterWebPush();
+    } catch {
+      // best-effort
+    }
+    return;
+  }
   if (!currentToken) return;
   try {
     await userApi.unregisterPushToken(currentToken);

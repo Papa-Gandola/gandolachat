@@ -10,6 +10,16 @@ class Settings(BaseSettings):
     MAX_FILE_SIZE_MB: int = 50
     MESSAGE_TTL_DAYS: int = 2
 
+    # Web Push (VAPID) for the browser/iOS-PWA clients. Generate once with
+    # `python -m app.gen_vapid` and paste the output into .env. If left empty,
+    # web push is simply disabled (Expo push for the native APK still works).
+    #   VAPID_PUBLIC_KEY  — base64url applicationServerKey handed to the browser
+    #   VAPID_PRIVATE_KEY — base64url raw EC private key used to sign pushes
+    #   VAPID_SUBJECT     — contact URI, e.g. mailto:you@example.com
+    VAPID_PUBLIC_KEY: str = ""
+    VAPID_PRIVATE_KEY: str = ""
+    VAPID_SUBJECT: str = "mailto:admin@gandola.chat"
+
     class Config:
         env_file = ".env"
 

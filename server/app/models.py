@@ -134,6 +134,26 @@ class PushToken(Base):
     )
 
 
+class WebPushSubscription(Base):
+    """Browser / iOS-PWA Web Push subscription. Unlike Expo tokens these are
+    structured (endpoint URL + two keys), and the endpoint can exceed 255
+    chars, so they get their own table. One row per browser; re-subscribing
+    with the same endpoint re-points it to the current user."""
+    __tablename__ = "web_push_subscriptions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    endpoint: Mapped[str] = mapped_column(Text, unique=True)
+    p256dh: Mapped[str] = mapped_column(String(255))
+    auth: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
 class PokerSeat(Base):
     __tablename__ = "poker_seats"
 

@@ -120,6 +120,14 @@ export const userApi = {
     getInstance().post("/api/users/push-token", { token, platform }),
   unregisterPushToken: (token: string) =>
     getInstance().delete("/api/users/push-token", { data: { token } }),
+  // Web Push (browser / iOS-PWA). vapidPublicKey returns "" when the server
+  // has web push disabled (no VAPID keys configured).
+  getVapidPublicKey: () =>
+    getInstance().get<{ key: string }>("/api/users/web-push/vapid-public-key"),
+  webPushSubscribe: (sub: { endpoint: string; keys: { p256dh: string; auth: string } }) =>
+    getInstance().post("/api/users/web-push/subscribe", sub),
+  webPushUnsubscribe: (endpoint: string) =>
+    getInstance().post("/api/users/web-push/unsubscribe", { endpoint, keys: { p256dh: "", auth: "" } }),
   uploadAvatar: async (file: { uri: string; name: string; type: string }): Promise<UserOut> => {
     // Multipart via fetch (RN's fetch builds the boundary correctly for file parts).
     const token = await SecureStore.getItemAsync(TOKEN_KEY);

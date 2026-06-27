@@ -7,7 +7,7 @@ import aiofiles
 import uuid
 from pydantic import BaseModel
 from app.database import get_db
-from app.models import User, PushToken
+from app.models import User, PushToken, WebPushSubscription
 from app.schemas import UserOut
 from app.auth import get_current_user, create_access_token
 from app.schemas import Token, MeOut
@@ -188,6 +188,84 @@ async def unregister_push_token(
         return {"ok": True}
     existing = await db.execute(
         select(PushToken).where(PushToken.token == tok, PushToken.user_id == current_user.id)
+    )
+    row = existing.scalar_one_or_none()
+    if row is not None:
+        await db.delete(row)
+        await db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Web Push (browser / iOS-PWA) — separate from the Expo native push above.
+# ---------------------------------------------------------------------------
+
+class WebPushKeys(BaseModel):
+    p256dh: str
+    auth: str
+
+
+class WebPushSubscriptionIn(BaseModel):
+    endpoint: str
+    keys: WebPushKeys
+
+
+@router.get("/web-push/vapid-public-key")
+async def get_vapid_public_key():
+    """Hand the browser the applicationServerKey it needs to subscribe.
+    Empty string means web push isn't configured on this server — the client
+    treats that as 'feature off' and skips subscribing."""
+    return {"key": settings.VAPID_PUBLIC_KEY}
+
+
+@router.post("/web-push/subscribe")
+async def web_push_subscribe(
+    data: WebPushSubscriptionIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Save (or re-point) a browser Web Push subscription for the current user.
+    Keyed by endpoint — the same browser re-subscribing just updates its row."""
+    endpoint = (data.endpoint or "").strip()
+    if not endpoint or not data.keys.p256dh or not data.keys.auth:
+        raise HTTPException(400, "Incomplete subscription")
+    existing = await db.execute(
+        select(WebPushSubscription).where(WebPushSubscription.endpoint == endpoint)
+    )
+    row = existing.scalar_one_or_none()
+    now = datetime.now(timezone.utc)
+    if row is None:
+        db.add(WebPushSubscription(
+            user_id=current_user.id,
+            endpoint=endpoint,
+            p256dh=data.keys.p256dh[:255],
+            auth=data.keys.auth[:255],
+        ))
+    else:
+        row.user_id = current_user.id
+        row.p256dh = data.keys.p256dh[:255]
+        row.auth = data.keys.auth[:255]
+        row.updated_at = now
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/web-push/unsubscribe")
+async def web_push_unsubscribe(
+    data: WebPushSubscriptionIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Drop a browser subscription (logout / permission revoked). Only removes
+    the row if it belongs to the current user."""
+    endpoint = (data.endpoint or "").strip()
+    if not endpoint:
+        return {"ok": True}
+    existing = await db.execute(
+        select(WebPushSubscription).where(
+            WebPushSubscription.endpoint == endpoint,
+            WebPushSubscription.user_id == current_user.id,
+        )
     )
     row = existing.scalar_one_or_none()
     if row is not None:

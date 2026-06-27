@@ -31,6 +31,11 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://gandola:gandola@db:5432/gandolachat
       SECRET_KEY: "${SECRET_KEY:-change-me-in-production-please}"
+      # Web Push (VAPID). Empty unless set in the host .env — web push then
+      # stays disabled and the server logs nothing. See .env.example.
+      VAPID_PUBLIC_KEY: "${VAPID_PUBLIC_KEY:-}"
+      VAPID_PRIVATE_KEY: "${VAPID_PRIVATE_KEY:-}"
+      VAPID_SUBJECT: "${VAPID_SUBJECT:-mailto:admin@gandola.chat}"
     volumes:
       - uploads:/app/uploads
       # Bind-mount the web PWA bundle from the host so deploying a new build
