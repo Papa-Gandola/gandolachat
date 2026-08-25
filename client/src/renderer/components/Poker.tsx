@@ -3,6 +3,7 @@ import { ChatOut, UserOut, PokerTableOut, PokerSeatOut, PokerGameView, pokerApi 
 import { wsService } from "../services/ws";
 import { useTheme } from "../services/theme";
 import { playCardSound, playChipSound, playTurnSound } from "../services/sounds";
+import PokerAssistPanel from "./PokerAssistPanel";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -496,17 +497,27 @@ export default function Poker({ chat, currentUser }: Props) {
           </div>
         );
       })()}
-      <div style={{ ...s.tableArea, position: "relative" }}>
-        {liveGame ? (
-          <LiveTableLayout
-            table={t}
-            game={liveGame}
-            currentUserId={currentUser.id}
-            isNeo={isNeo}
-          />
-        ) : (
-          <PokerTableLayout table={t} currentUserId={currentUser.id} isNeo={isNeo} />
-        )}
+      <div style={{ ...s.tableArea, position: "relative", gap: 12 }}>
+        <div style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          {liveGame ? (
+            <LiveTableLayout
+              table={t}
+              game={liveGame}
+              currentUserId={currentUser.id}
+              isNeo={isNeo}
+            />
+          ) : (
+            <PokerTableLayout table={t} currentUserId={currentUser.id} isNeo={isNeo} />
+          )}
+        </div>
+        <PokerAssistPanel
+          myHole={myPlayer?.hole ?? null}
+          community={liveGame?.hand?.community ?? []}
+          pot={liveGame?.hand?.pot ?? 0}
+          toCall={liveGame?.hand && myPlayer ? Math.max(0, liveGame.hand.current_bet - myPlayer.bet) : 0}
+          street={liveGame?.hand?.street ?? null}
+          isNeo={isNeo}
+        />
       </div>
       {liveGame && liveGame.last_summary && liveGame.hand?.street === "done" && (
         <HandSummaryBar summary={liveGame.last_summary} players={liveGame.players} isNeo={isNeo} />
