@@ -223,9 +223,19 @@ async def join_table(
     )
     db.add(seat)
     await db.commit()
-    # Reload
+    # Reload. populate_existing is CRITICAL here: the table object is already
+    # in this session's identity map with its seats collection loaded BEFORE
+    # the insert (and the new seat was added via raw FK, not relationship
+    # append, so the in-memory collection never saw it). With
+    # expire_on_commit=False a plain re-select returns that same stale object
+    # untouched — the response and the WS broadcast then go out WITHOUT the
+    # new seat, which is exactly the "sat down but nobody sees it until
+    # re-entering the screen" bug.
     result = await db.execute(
-        select(PokerTable).options(selectinload(PokerTable.seats)).where(PokerTable.id == table.id)
+        select(PokerTable)
+        .options(selectinload(PokerTable.seats))
+        .where(PokerTable.id == table.id)
+        .execution_options(populate_existing=True)
     )
     table = result.scalar_one()
     await _broadcast_table(db, table, "poker_table_updated")
@@ -315,8 +325,15 @@ async def leave_table(
         # Just remove seat; if table empties out, delete it.
         await db.delete(seat)
         await db.commit()
+        # populate_existing: same stale-identity-map trap as join_table — a
+        # plain re-select would return the pre-delete seats collection, the
+        # departed player would still be broadcast as seated, and the
+        # "table emptied -> delete it" check below would count stale seats.
         result = await db.execute(
-            select(PokerTable).options(selectinload(PokerTable.seats)).where(PokerTable.id == table_id)
+            select(PokerTable)
+            .options(selectinload(PokerTable.seats))
+            .where(PokerTable.id == table_id)
+            .execution_options(populate_existing=True)
         )
         table = result.scalar_one_or_none()
         if table and len(table.seats) == 0:
@@ -335,8 +352,13 @@ async def leave_table(
         # Mid-game leave: mark inactive (game logic in Phase 2 will treat as auto-fold/forfeit)
         seat.is_active = False
         await db.commit()
+        # is_active was set via attribute (identity map is fresh for it), but
+        # keep the reload consistent with the other paths anyway.
         result = await db.execute(
-            select(PokerTable).options(selectinload(PokerTable.seats)).where(PokerTable.id == table_id)
+            select(PokerTable)
+            .options(selectinload(PokerTable.seats))
+            .where(PokerTable.id == table_id)
+            .execution_options(populate_existing=True)
         )
         table = result.scalar_one()
         await _broadcast_table(db, table, "poker_table_updated")
