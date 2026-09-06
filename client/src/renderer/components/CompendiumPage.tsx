@@ -139,11 +139,12 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
     <div style={s.root}>
       {showIntro && (
         <div style={{ position: "fixed", inset: 0, background: "#000", zIndex: 400, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}>
+          {/* Крутится по кругу — выход только по кнопке (по просьбе Гандолы) */}
           <video
             ref={introRef}
             src={INTRO_URL}
             playsInline
-            onEnded={introDone}
+            loop
             onError={() => setShowIntro(false)}
             style={{ maxWidth: "100%", maxHeight: "82vh", outline: "none" }}
           />

@@ -28,6 +28,22 @@ async def lifespan(app: FastAPI):
 
     await asyncio.to_thread(_upgrade)
 
+    # Тизер Гандолиума едет в образе (server/assets/…), но раздаётся из
+    # uploads — это docker-том, и файлов образа в нём нет. Синхронизируем
+    # при старте: положил новый intro.mp4 в репо → задеплоил → он на месте.
+    def _sync_compendium_assets():
+        import shutil
+        src = Path(__file__).parent.parent / "assets" / "compendium" / "intro.mp4"
+        dst = Path(settings.UPLOAD_DIR) / "compendium" / "intro.mp4"
+        try:
+            if src.is_file() and (not dst.exists() or dst.stat().st_size != src.stat().st_size):
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, dst)
+        except Exception as e:
+            print(f"[compendium] intro sync failed: {type(e).__name__}: {e}")
+
+    await asyncio.to_thread(_sync_compendium_assets)
+
     from app.compendium import poller as compendium_poller
 
     scheduler = AsyncIOScheduler()
