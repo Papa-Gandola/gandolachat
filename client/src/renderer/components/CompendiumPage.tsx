@@ -92,10 +92,24 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
       if (typeof m?.content === "string" && m.content.startsWith("/quest_card")) {
         load();
         loadSeason();
+        // Развёрнутые полки трофеев в таблице сезона могли устареть
+        setUserTrophies({});
       }
     };
     wsService.on("message", onMsg);
-    const t = setInterval(() => setResetLeft(msToDailyReset()), 30_000);
+    // Тик раз в 30с: обновляем обратный отсчёт, а в полночь МСК (сутки
+    // сменились) перезагружаем и сами ежедневки — иначе на открытом экране
+    // висел бы вчерашний список под новым таймером.
+    let lastDay = new Date(Date.now() + 3 * 3600_000).getUTCDate();
+    const t = setInterval(() => {
+      setResetLeft(msToDailyReset());
+      const day = new Date(Date.now() + 3 * 3600_000).getUTCDate();
+      if (day !== lastDay) {
+        lastDay = day;
+        load();
+        loadSeason();
+      }
+    }, 30_000);
     return () => {
       wsService.off("message", onMsg);
       clearInterval(t);

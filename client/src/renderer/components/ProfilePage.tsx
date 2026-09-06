@@ -330,7 +330,7 @@ function DotaSection({ user, isOwn, isNeo, onUser }: {
               ID {user.dota_account_id}
             </span>
           </div>
-          {!user.dota_rank_tier && (
+          {isOwn && !user.dota_rank_tier && (
             <span style={{ ...mono, color: "var(--text-muted)", fontSize: 11.5, lineHeight: 1.5 }}>
               Проверь в Доте: Настройки → Приватность → «Сделать общедоступной статистику матчей»,
               сыграй катку и нажми «Обновить»

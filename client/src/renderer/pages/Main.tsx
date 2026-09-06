@@ -120,9 +120,11 @@ export default function Main({ token, user, onLogout }: Props) {
     wsService.on("chat_updated", (data) => {
       const updated: ChatOut = data.chat;
       if (!updated) return;
-      setChats((prev) => prev.map((c) => c.id === updated.id ? { ...c, ...updated } : c));
-      setActiveChat((prev) => prev && prev.id === updated.id ? { ...prev, ...updated } : prev);
-      setViewingGroupInfo((prev) => prev && prev.id === updated.id ? { ...prev, ...updated } : prev);
+      // PATCH-и чата приходят без last_message — не затираем превью в сайдбаре
+      const merge = (c: ChatOut): ChatOut => ({ ...c, ...updated, last_message: updated.last_message ?? c.last_message });
+      setChats((prev) => prev.map((c) => c.id === updated.id ? merge(c) : c));
+      setActiveChat((prev) => prev && prev.id === updated.id ? merge(prev) : prev);
+      setViewingGroupInfo((prev) => prev && prev.id === updated.id ? merge(prev) : prev);
     });
 
     wsService.on("call_signal", (data) => {
@@ -147,13 +149,25 @@ export default function Main({ token, user, onLogout }: Props) {
     return () => clearInterval(interval);
   }, [incomingCalls.length]);
 
+  // Из Гандолиума нет чатов на экране — любой «открой чат» возвращает в chat-режим
+  function leaveCompendiumForChat() {
+    setAppMode((m) => {
+      if (m !== "compendium") return m;
+      localStorage.setItem("gandola-mode", "chat");
+      return "chat";
+    });
+  }
+
   // Switch to a chat when a notification is clicked (dispatched from ChatArea)
   useEffect(() => {
     const handler = (e: Event) => {
       const chatId = (e as CustomEvent<{ chatId: number }>).detail?.chatId;
       if (!chatId) return;
       const target = chats.find((c) => c.id === chatId);
-      if (target) setActiveChat(target);
+      if (target) {
+        setActiveChat(target);
+        leaveCompendiumForChat();
+      }
     };
     window.addEventListener("switch-chat", handler as EventListener);
     return () => window.removeEventListener("switch-chat", handler as EventListener);
@@ -193,14 +207,19 @@ export default function Main({ token, user, onLogout }: Props) {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setActiveChat(null);
-        setViewingProfile(null);
+      if (e.key !== "Escape") return;
+      // В Гандолиуме Escape закрывает сам Гандолиум, не трогая выбранный чат
+      if (appMode === "compendium") {
+        setAppMode("chat");
+        localStorage.setItem("gandola-mode", "chat");
+        return;
       }
+      setActiveChat(null);
+      setViewingProfile(null);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [appMode]);
 
   useEffect(() => {
     if (!resizing) return;
@@ -396,7 +415,7 @@ export default function Main({ token, user, onLogout }: Props) {
           chats={chats}
           currentUser={currentUser}
           activeChatId={activeChat?.id ?? null}
-          onSelectChat={(c) => { setActiveChat(c); setViewingProfile(null); setViewingGroupInfo(null); }}
+          onSelectChat={(c) => { setActiveChat(c); setViewingProfile(null); setViewingGroupInfo(null); leaveCompendiumForChat(); }}
           onChatsUpdate={setChats}
           onLogout={handleLogout}
           onAvatarUpdate={setCurrentUser}

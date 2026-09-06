@@ -5,6 +5,7 @@ import { playMessageSound } from "../services/sounds";
 import EmojiPicker from "./EmojiPicker";
 import FormattedText from "./FormattedText";
 import { CompBadge } from "./cosmetics";
+import { markerPreview } from "../services/markers";
 import { useTheme } from "../services/theme";
 
 interface Props {
@@ -147,7 +148,9 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
         const isMuted = JSON.parse(localStorage.getItem("mutedChats") || "[]").includes(chat.id);
         if (!isMuted) {
           playMessageSound();
-          showNotification(data.sender_username, data.content || "Sent a file");
+          // Служебные маркеры (карточки компендиума и т.п.) — человеческим текстом
+          const body = data.content ? (markerPreview(data.content) ?? data.content) : "Sent a file";
+          showNotification(data.sender_username, body);
         }
         // Only auto-mark-read if the new message is going to be visible (we're at the bottom
         // and the window has focus). Otherwise leave it unread — IntersectionObserver will
@@ -1843,7 +1846,18 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
   const special: string | undefined = payload.special;
   const isAnti = kind === "anti";
   const isTeam = kind === "team";
-  const edge = special === "rampage" ? BLOOD : special === "fullstack" ? GOLD : isAnti ? BLOOD : "var(--accent)";
+  // Карточка лежит внутри пузыря сообщения, а поллер постит её от имени
+  // самого игрока — то есть «герой» всегда видит её как СВОЁ сообщение.
+  // Поэтому цвета считаем по всем четырём комбинациям тема × своё/чужое:
+  //   neo + mine    → лаймовый пузырь → тёмный текст
+  //   discord + mine → blurple-пузырь → белый текст (accent сливался бы!)
+  //   чужое          → тёмный пузырь → акцентные цвета
+  const darkOnLime = isNeo && isMine;
+  const lightOnBlurple = !isNeo && isMine;
+  const edgeHue = special === "rampage" ? BLOOD : special === "fullstack" ? GOLD : isAnti ? BLOOD : null;
+  const edge = darkOnLime
+    ? "rgba(0,0,0,0.55)"
+    : (edgeHue ?? (lightOnBlurple ? "rgba(255,255,255,0.7)" : "var(--accent)"));
 
   const cardBg = isNeo
     ? (isMine ? "rgba(0,0,0,0.18)" : "transparent")
@@ -1854,6 +1868,10 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
   const subColor = isNeo
     ? (isMine ? "rgba(0,0,0,0.65)" : "var(--text-muted)")
     : (isMine ? "rgba(255,255,255,0.75)" : "var(--text-muted)");
+  const headerColor = darkOnLime ? "#0a0a0a" : (edgeHue ?? titleColor);
+  const gasColor = darkOnLime ? "#0a0a0a" : lightOnBlurple ? "#fff" : (isAnti ? BLOOD : "var(--accent)");
+  const levelColor = darkOnLime ? "#0a0a0a" : lightOnBlurple ? "#fff" : "var(--accent)";
+  const titleGold = darkOnLime ? "rgba(10,10,10,0.8)" : GOLD;
 
   const header = special === "rampage" ? "🚨 РАМПАГА!!!"
     : special === "fullstack" ? "🏆 СТАК ПОБЕДИЛ"
@@ -1886,7 +1904,7 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
         cursor: "pointer",
       }}
     >
-      <div style={{ ...mono, fontWeight: 800, fontSize: 12.5, letterSpacing: "0.06em", color: special || isAnti ? edge : titleColor }}>
+      <div style={{ ...mono, fontWeight: 800, fontSize: 12.5, letterSpacing: "0.06em", color: headerColor }}>
         {header}
       </div>
       <div style={{ ...mono, color: subColor, fontSize: 12, marginTop: 2 }}>{who}</div>
@@ -1895,9 +1913,9 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
           <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
             <span style={{ ...mono, fontSize: 13, fontWeight: 700, color: titleColor }}>
               {it.name}
-              {it.title && <span style={{ color: GOLD, fontSize: 11, marginLeft: 6 }}>титул «{it.title}»</span>}
+              {it.title && <span style={{ color: titleGold, fontSize: 11, marginLeft: 6 }}>титул «{it.title}»</span>}
             </span>
-            <span style={{ ...mono, fontSize: 12.5, fontWeight: 800, color: isAnti ? BLOOD : (isNeo && isMine ? "#0a0a0a" : "var(--accent)"), whiteSpace: "nowrap" }}>
+            <span style={{ ...mono, fontSize: 12.5, fontWeight: 800, color: gasColor, whiteSpace: "nowrap" }}>
               +{it.gas} ⛽
             </span>
           </div>
@@ -1906,7 +1924,7 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
       {(payload.new_level || payload.gas_total != null) && (
         <div style={{ ...mono, fontSize: 11.5, color: subColor, marginTop: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>
           {payload.new_level && (
-            <span style={{ color: isNeo && isMine ? "#0a0a0a" : "var(--accent)", fontWeight: 800 }}>
+            <span style={{ color: levelColor, fontWeight: 800 }}>
               🆙 УРОВЕНЬ {payload.new_level}
             </span>
           )}
