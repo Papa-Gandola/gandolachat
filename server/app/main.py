@@ -13,7 +13,7 @@ from app.database import get_db, AsyncSessionLocal
 from app.config import settings
 from app.models import Message
 from app.ws.handler import websocket_endpoint
-from app.api import auth, users, chats, poker, dota
+from app.api import auth, users, chats, poker, dota, compendium
 
 
 @asynccontextmanager
@@ -28,8 +28,26 @@ async def lifespan(app: FastAPI):
 
     await asyncio.to_thread(_upgrade)
 
+    from app.compendium import poller as compendium_poller
+
     scheduler = AsyncIOScheduler()
     scheduler.add_job(cleanup_expired_messages, "interval", hours=1)
+    # Гандолиум: катки → задания → газ → карточки. Интервалы бережём под
+    # бесплатный лимит OpenDota (2000 запросов/день).
+    scheduler.add_job(
+        compendium_poller.poll_matches, "interval",
+        minutes=max(5, settings.DOTA_POLL_MINUTES), max_instances=1, coalesce=True,
+    )
+    scheduler.add_job(
+        compendium_poller.recheck_parses, "interval",
+        minutes=20, max_instances=1, coalesce=True,
+    )
+    scheduler.add_job(
+        compendium_poller.refresh_ranks, "interval",
+        hours=1, max_instances=1, coalesce=True,
+    )
+    # Понедельник 03:25 МСК = 00:25 UTC — «Дно недели» (внутри проверка дня)
+    scheduler.add_job(compendium_poller.weekly_roast, "cron", hour=0, minute=25)
     scheduler.start()
 
     yield
@@ -65,6 +83,7 @@ app.include_router(users.router)
 app.include_router(chats.router)
 app.include_router(poker.router)
 app.include_router(dota.router)
+app.include_router(compendium.router)
 
 
 @app.websocket("/ws")

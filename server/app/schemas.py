@@ -21,6 +21,11 @@ class UserOut(BaseModel):
     grammar_errors: int = 0
     is_admin: bool = False
     last_seen: datetime | None = None
+    # Steam / Dota (компендиум): steam_id64 — строкой, число не влезает в JS number
+    steam_id64: str | None = None
+    dota_account_id: int | None = None
+    dota_rank_tier: int | None = None
+    dota_leaderboard_rank: int | None = None
 
     model_config = {"from_attributes": True}
 
@@ -74,6 +79,7 @@ class ChatOut(BaseModel):
     avatar_url: str | None = None
     description: str | None = None
     admin_ids: list[int] = []
+    compendium_enabled: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -88,6 +94,7 @@ class UpdateChat(BaseModel):
     name: str | None = None
     description: str | None = None
     admin_ids: list[int] | None = None
+    compendium_enabled: bool | None = None
 
 
 class CreateGroupChat(BaseModel):

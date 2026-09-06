@@ -513,6 +513,11 @@ async def handle_message(data: dict, sender_id: int, db: AsyncSession):
     if not chat_id or not content:
         return
 
+    # Карточки компендиума создаёт только поллер. Руками набитый /quest_card
+    # отрисовался бы как настоящая ачивка — фейковые достижения режем на входе.
+    if content.startswith("/quest_card"):
+        return
+
     result = await db.execute(
         select(Chat).join(Chat.members).where(Chat.id == chat_id, User.id == sender_id)
     )

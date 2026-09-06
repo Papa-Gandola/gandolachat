@@ -1,0 +1,228 @@
+"""API Гандолиума: мой прогресс, таблица сезона, полка трофеев.
+
+Все ответы собираются из строк DotaMatch/QuestCompletion теми же функциями,
+что и движок — «что видишь на экране» и «что засчитал поллер» не расходятся.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_db
+from app.models import User, CompendiumProfile, QuestCompletion
+from app.auth import get_current_user
+from app.compendium.engine import (
+    current_season, day_key_of, week_key_of, level_for_gas,
+)
+from app.compendium.quests import (
+    BY_ID, QUESTS, GAS_PER_LEVEL, daily_rotation, weekly_rotation,
+)
+from app.compendium import poller
+
+router = APIRouter(prefix="/api/compendium", tags=["compendium"])
+
+
+def _quest_dict(q, done: bool = False, progress: tuple | None = None) -> dict:
+    d = {
+        "id": q.id, "num": q.num, "name": q.name, "desc": q.desc,
+        "gas": q.gas, "cat": q.category, "needs_parse": q.needs_parse,
+        "done": done,
+    }
+    if progress is not None:
+        d["progress"], d["target"] = progress
+    if q.title:
+        d["title"] = q.title
+    return d
+
+
+@router.get("/me")
+async def my_compendium(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    season = current_season()
+    now = datetime.now(timezone.utc)
+    today = day_key_of(now)
+    this_week = week_key_of(now)
+
+    if current_user.dota_account_id is None:
+        return {"linked": False, "season": season}
+
+    ctx = await poller._build_ctx(db, current_user, season)
+    keys = ctx.completion_keys
+
+    daily = [
+        _quest_dict(BY_ID[qid], done=(qid, today) in keys)
+        for qid in daily_rotation(today)
+    ]
+    weekly = [
+        _quest_dict(BY_ID[qid], done=(qid, this_week) in keys)
+        for qid in weekly_rotation(this_week)
+    ]
+
+    season_quests = []
+    for q in QUESTS:
+        if q.category != "season":
+            continue
+        done = (q.id, season) in keys
+        prog = None
+        if q.progress is not None:
+            try:
+                prog = q.progress(ctx)
+            except Exception:
+                prog = None
+        season_quests.append(_quest_dict(q, done=done, progress=prog))
+
+    team = [
+        _quest_dict(q, done=(q.id, season) in keys)
+        for q in QUESTS if q.category == "team"
+    ]
+    # Анти-ачивки показываем списком — пусть боятся. Пасхалки не светим.
+    anti = [
+        _quest_dict(q, done=any(k[0] == q.id for k in keys))
+        for q in QUESTS if q.category == "anti"
+    ]
+
+    comp_res = await db.execute(
+        select(QuestCompletion)
+        .where(QuestCompletion.user_id == current_user.id, QuestCompletion.season == season)
+        .order_by(QuestCompletion.completed_at.desc())
+    )
+    trophies = []
+    for c in comp_res.scalars().all():
+        q = BY_ID.get(c.quest_id)
+        if not q:
+            continue
+        trophies.append({
+            "quest_id": c.quest_id, "name": q.name, "cat": q.category,
+            "gas": c.gas, "completed_at": c.completed_at.isoformat(),
+            **({"title": q.title} if q.title else {}),
+        })
+
+    prof_res = await db.execute(
+        select(CompendiumProfile).where(
+            CompendiumProfile.user_id == current_user.id,
+            CompendiumProfile.season == season,
+        )
+    )
+    prof = prof_res.scalar_one_or_none()
+    gas = prof.gas if prof else 0
+
+    wins = sum(1 for r in ctx.rows if r.is_win)
+    return {
+        "linked": True,
+        "season": season,
+        "gas": gas,
+        "level": level_for_gas(gas),
+        "level_progress": gas % GAS_PER_LEVEL,
+        "level_target": GAS_PER_LEVEL,
+        "matches": len(ctx.rows),
+        "wins": wins,
+        "rank_tier": current_user.dota_rank_tier,
+        "leaderboard_rank": current_user.dota_leaderboard_rank,
+        "daily": daily,
+        "weekly": weekly,
+        "season_quests": season_quests,
+        "team": team,
+        "anti": anti,
+        "trophies": trophies,
+    }
+
+
+@router.get("/season")
+async def season_table(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    season = current_season()
+    users_res = await db.execute(select(User).where(User.dota_account_id.is_not(None)))
+    users = list(users_res.scalars().all())
+    if not users:
+        return {"season": season, "rows": []}
+
+    prof_res = await db.execute(
+        select(CompendiumProfile).where(
+            CompendiumProfile.season == season,
+            CompendiumProfile.user_id.in_([u.id for u in users]),
+        )
+    )
+    gas_by_user = {p.user_id: p.gas for p in prof_res.scalars().all()}
+
+    counts_res = await db.execute(
+        select(QuestCompletion.user_id, QuestCompletion.quest_id, func.count(QuestCompletion.id))
+        .where(
+            QuestCompletion.season == season,
+            QuestCompletion.user_id.in_([u.id for u in users]),
+        )
+        .group_by(QuestCompletion.user_id, QuestCompletion.quest_id)
+    )
+    done_by_user: dict[int, int] = {}
+    anti_by_user: dict[int, int] = {}
+    for uid, qid, cnt in counts_res.all():
+        q = BY_ID.get(qid)
+        if not q:
+            continue
+        if q.category == "anti":
+            anti_by_user[uid] = anti_by_user.get(uid, 0) + int(cnt)
+        else:
+            done_by_user[uid] = done_by_user.get(uid, 0) + int(cnt)
+
+    rows = []
+    for u in users:
+        gas = gas_by_user.get(u.id, 0)
+        rows.append({
+            "user_id": u.id,
+            "username": u.username,
+            "avatar_url": u.avatar_url,
+            "gas": gas,
+            "level": level_for_gas(gas),
+            "quests_done": done_by_user.get(u.id, 0),
+            "anti_count": anti_by_user.get(u.id, 0),
+            "rank_tier": u.dota_rank_tier,
+            "leaderboard_rank": u.dota_leaderboard_rank,
+        })
+    rows.sort(key=lambda r: (-r["gas"], r["username"].lower()))
+    return {"season": season, "rows": rows, "me": current_user.id}
+
+
+@router.get("/user/{user_id}")
+async def user_trophies(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Полка трофеев другого игрока (текущий сезон)."""
+    user = await db.get(User, user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+    season = current_season()
+    comp_res = await db.execute(
+        select(QuestCompletion)
+        .where(QuestCompletion.user_id == user_id, QuestCompletion.season == season)
+        .order_by(QuestCompletion.completed_at.desc())
+    )
+    trophies = []
+    for c in comp_res.scalars().all():
+        q = BY_ID.get(c.quest_id)
+        if not q:
+            continue
+        trophies.append({
+            "quest_id": c.quest_id, "name": q.name, "cat": q.category,
+            "gas": c.gas, "completed_at": c.completed_at.isoformat(),
+            **({"title": q.title} if q.title else {}),
+        })
+    prof_res = await db.execute(
+        select(CompendiumProfile).where(
+            CompendiumProfile.user_id == user_id, CompendiumProfile.season == season
+        )
+    )
+    prof = prof_res.scalar_one_or_none()
+    gas = prof.gas if prof else 0
+    return {
+        "user_id": user_id, "username": user.username, "season": season,
+        "gas": gas, "level": level_for_gas(gas), "trophies": trophies,
+        "rank_tier": user.dota_rank_tier, "leaderboard_rank": user.dota_leaderboard_rank,
+    }

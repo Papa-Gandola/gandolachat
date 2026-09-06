@@ -144,6 +144,130 @@ async def upload_avatar(
     return current_user
 
 
+async def _broadcast_profile(db: AsyncSession, user: User) -> None:
+    """Разослать profile_updated во все чаты пользователя (одна форма payload
+    на все три места, где профиль меняется)."""
+    from app.models import chat_members
+    chat_ids_result = await db.execute(
+        select(chat_members.c.chat_id).where(chat_members.c.user_id == user.id)
+    )
+    payload = {
+        "type": "profile_updated",
+        "user_id": user.id,
+        "username": user.username,
+        "avatar_url": user.avatar_url,
+        "status": user.status,
+        "about": user.about,
+        "dota_rank_tier": user.dota_rank_tier,
+        "dota_leaderboard_rank": user.dota_leaderboard_rank,
+        "dota_account_id": user.dota_account_id,
+    }
+    for row in chat_ids_result.all():
+        await manager.broadcast_to_chat(row.chat_id, payload)
+
+
+class SteamLinkIn(BaseModel):
+    input: str
+
+
+@router.post("/me/steam", response_model=UserOut)
+async def link_steam(
+    data: SteamLinkIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Привязать Steam/Dota аккаунт: принимает ссылку на Steam-профиль,
+    steamID64, Friend ID из Доты или ссылку Dotabuff/OpenDota. Валидирует
+    через OpenDota и сразу подтягивает звание."""
+    from app import opendota
+
+    try:
+        account_id = await opendota.resolve_link_input(data.input)
+    except opendota.LinkError as e:
+        raise HTTPException(400, str(e))
+
+    try:
+        player = await opendota.get_player(account_id)
+    except Exception:
+        raise HTTPException(502, "OpenDota не отвечает — попробуй ещё раз через минуту")
+    if not opendota.profile_exists(player):
+        raise HTTPException(400, "Профиль не найден в OpenDota — проверь ссылку или ID")
+
+    dup = await db.execute(
+        select(User).where(User.dota_account_id == account_id, User.id != current_user.id)
+    )
+    dup_user = dup.scalar_one_or_none()
+    if dup_user:
+        raise HTTPException(400, f"Этот Steam-аккаунт уже привязан к «{dup_user.username}»")
+
+    now = datetime.now(timezone.utc)
+    relink_same = current_user.dota_account_id == account_id
+    rank_tier, lb = opendota.extract_rank(player)
+    current_user.dota_account_id = account_id
+    current_user.steam_id64 = str(account_id + opendota.STEAM64_OFFSET)
+    current_user.dota_rank_tier = rank_tier
+    current_user.dota_leaderboard_rank = lb
+    current_user.dota_rank_updated_at = now
+    if not relink_same or current_user.dota_linked_at is None:
+        # Новая привязка: компендиум считает катки только с этого момента
+        current_user.dota_linked_at = now
+
+    # Базовая медаль сезона — для марафона «Восхождение»
+    from app.compendium.poller import _get_or_create_profile
+    from app.compendium.engine import current_season
+    prof = await _get_or_create_profile(db, current_user.id, current_season())
+    if prof.start_rank_tier is None and rank_tier is not None:
+        prof.start_rank_tier = rank_tier
+
+    await db.commit()
+    await db.refresh(current_user)
+    await _broadcast_profile(db, current_user)
+    return current_user
+
+
+@router.delete("/me/steam", response_model=UserOut)
+async def unlink_steam(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Отвязать Steam. История каток и трофеи остаются, поллер перестаёт следить."""
+    current_user.dota_account_id = None
+    current_user.steam_id64 = None
+    current_user.dota_rank_tier = None
+    current_user.dota_leaderboard_rank = None
+    current_user.dota_rank_updated_at = None
+    current_user.dota_linked_at = None
+    await db.commit()
+    await db.refresh(current_user)
+    await _broadcast_profile(db, current_user)
+    return current_user
+
+
+@router.post("/me/steam/refresh", response_model=UserOut)
+async def refresh_steam(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Обновить звание вручную (кнопка в профиле). Обычно это делает
+    ежечасная джоба — ручка на случай «я только что откалибровался»."""
+    from app import opendota
+
+    if current_user.dota_account_id is None:
+        raise HTTPException(400, "Steam не привязан")
+    try:
+        player = await opendota.get_player(current_user.dota_account_id)
+    except Exception:
+        raise HTTPException(502, "OpenDota не отвечает — попробуй ещё раз через минуту")
+    rank_tier, lb = opendota.extract_rank(player)
+    current_user.dota_rank_tier = rank_tier
+    current_user.dota_leaderboard_rank = lb
+    current_user.dota_rank_updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(current_user)
+    await _broadcast_profile(db, current_user)
+    return current_user
+
+
 class PushTokenIn(BaseModel):
     token: str
     platform: str = "android"

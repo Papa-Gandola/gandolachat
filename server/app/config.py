@@ -9,6 +9,13 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "uploads"
     MAX_FILE_SIZE_MB: int = 50
     MESSAGE_TTL_DAYS: int = 2
+    # === Компендиум / Steam ===
+    # OpenDota works without a key (free tier: 2000 calls/day) — the key slot
+    # is here for the day the chat outgrows that. STEAM_API_KEY is optional
+    # and only needed to resolve steamcommunity.com/id/<vanity> links.
+    OPENDOTA_API_KEY: str = ""
+    STEAM_API_KEY: str = ""
+    DOTA_POLL_MINUTES: int = 15
 
     class Config:
         env_file = ".env"
