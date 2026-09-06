@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +24,48 @@ from app.compendium.quests import (
 from app.compendium import poller
 
 router = APIRouter(prefix="/api/compendium", tags=["compendium"])
+
+# === Косметика: пороги разблокировок (уровни навсегда, comp_max_level) ===
+UNLOCKS = {
+    "badge": 2,           # ⛽ рядом с ником
+    "title": 4,           # титул под ником (из заработанных)
+    "color": 6,           # цвет ника
+    "frame_lime": 8,      # лаймовая рамка аватарки
+    "dota_gold": 10,      # золотой /dota
+    "frame_animated": 12, # переливающаяся рамка
+}
+# Палитра Гандолы для цветных ников
+NAME_PALETTE = [
+    "#c6ff3d", "#57f287", "#fee75c", "#faa61a", "#ff6a5e",
+    "#eb459e", "#a78bda", "#5865f2", "#00b0f4", "#ffd24a",
+]
+FRAMES = ("lime", "animated")
+
+
+async def _earned_titles(db: AsyncSession, user_id: int) -> list[str]:
+    """Титулы со всех сезонов — «полка навсегда»."""
+    res = await db.execute(
+        select(QuestCompletion.quest_id).where(QuestCompletion.user_id == user_id).distinct()
+    )
+    titles = []
+    for (qid,) in res.all():
+        q = BY_ID.get(qid)
+        if q and q.title and q.title not in titles:
+            titles.append(q.title)
+    return titles
+
+
+def _cosmetics_dict(user: User, earned: list[str]) -> dict:
+    return {
+        "max_level": user.comp_max_level or 0,
+        "badge": user.comp_badge,
+        "title": user.comp_title,
+        "color": user.comp_color,
+        "frame": user.comp_frame,
+        "earned_titles": earned,
+        "palette": NAME_PALETTE,
+        "unlocks": UNLOCKS,
+    }
 
 
 def _quest_dict(q, done: bool = False, progress: tuple | None = None) -> dict:
@@ -112,8 +155,10 @@ async def my_compendium(
     gas = prof.gas if prof else 0
 
     wins = sum(1 for r in ctx.rows if r.is_win)
+    earned = await _earned_titles(db, current_user.id)
     return {
         "linked": True,
+        "cosmetics": _cosmetics_dict(current_user, earned),
         "season": season,
         "gas": gas,
         "level": level_for_gas(gas),
@@ -130,6 +175,73 @@ async def my_compendium(
         "anti": anti,
         "trophies": trophies,
     }
+
+
+class CosmeticsIn(BaseModel):
+    badge: bool | None = None
+    title: str | None = None       # "" = снять титул
+    color: str | None = None       # "" = сбросить цвет
+    frame: str | None = None       # "" = без рамки
+
+
+@router.patch("/cosmetics")
+async def update_cosmetics(
+    data: CosmeticsIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Выбор косметики. Снять можно всегда; надеть — только открытое уровнем
+    (comp_max_level, копится навсегда) и, для титулов, реально заработанное."""
+    lvl = current_user.comp_max_level or 0
+
+    if data.badge is not None:
+        if data.badge and lvl < UNLOCKS["badge"]:
+            raise HTTPException(400, f"Значок ⛽ открывается на уровне {UNLOCKS['badge']}")
+        current_user.comp_badge = data.badge
+
+    if data.title is not None:
+        t = data.title.strip()
+        if not t:
+            current_user.comp_title = None
+        else:
+            if lvl < UNLOCKS["title"]:
+                raise HTTPException(400, f"Титулы открываются на уровне {UNLOCKS['title']}")
+            earned = await _earned_titles(db, current_user.id)
+            if t not in earned:
+                raise HTTPException(400, "Такой титул ещё не заработан")
+            current_user.comp_title = t[:40]
+
+    if data.color is not None:
+        c = data.color.strip()
+        if not c:
+            current_user.comp_color = None
+        else:
+            if lvl < UNLOCKS["color"]:
+                raise HTTPException(400, f"Цвет ника открывается на уровне {UNLOCKS['color']}")
+            if c not in NAME_PALETTE:
+                raise HTTPException(400, "Только цвета из палитры Гандолы")
+            current_user.comp_color = c
+
+    if data.frame is not None:
+        f = data.frame.strip()
+        if not f:
+            current_user.comp_frame = None
+        else:
+            if f not in FRAMES:
+                raise HTTPException(400, "Нет такой рамки")
+            need = UNLOCKS["frame_lime"] if f == "lime" else UNLOCKS["frame_animated"]
+            if lvl < need:
+                raise HTTPException(400, f"Эта рамка открывается на уровне {need}")
+            current_user.comp_frame = f
+
+    await db.commit()
+    await db.refresh(current_user)
+
+    from app.api.users import _broadcast_profile
+    await _broadcast_profile(db, current_user)
+
+    earned = await _earned_titles(db, current_user.id)
+    return _cosmetics_dict(current_user, earned)
 
 
 @router.get("/season")
@@ -183,6 +295,10 @@ async def season_table(
             "anti_count": anti_by_user.get(u.id, 0),
             "rank_tier": u.dota_rank_tier,
             "leaderboard_rank": u.dota_leaderboard_rank,
+            "comp_title": u.comp_title,
+            "comp_color": u.comp_color,
+            "comp_frame": u.comp_frame,
+            "comp_badge": u.comp_badge,
         })
     rows.sort(key=lambda r: (-r["gas"], r["username"].lower()))
     return {"season": season, "rows": rows, "me": current_user.id}

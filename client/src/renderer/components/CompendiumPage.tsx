@@ -1,14 +1,20 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  UserOut, compendiumApi, CompendiumMe, CompendiumQuest, CompendiumSeasonRow, CompendiumTrophy,
+  UserOut, compendiumApi, CompendiumMe, CompendiumCosmetics, CompendiumQuest, CompendiumSeasonRow, CompendiumTrophy,
 } from "../services/api";
 import { wsService } from "../services/ws";
 import { useTheme } from "../services/theme";
 import DotaRankBadge from "./DotaRankBadge";
+import { frameClass, frameStyle } from "./cosmetics";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 const BLOOD = "#ff6a5e";
 const GOLD = "#ffd24a";
+// Тизер: крутится при первом заходе в Гандолиум. Файл кладём на сервер в
+// uploads/compendium/intro.mp4 — пока его нет, оверлей молча закрывается
+// (без установки флага, чтобы показать позже, когда видео зальют).
+const INTRO_URL = `${BASE_URL}/uploads/compendium/intro.mp4`;
+const INTRO_SEEN_KEY = "gandolium.introSeen";
 
 // До полуночи по МСК (UTC+3) — момент ротации ежедневок
 function msToDailyReset(): number {
@@ -33,12 +39,33 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
   const isNeo = theme === "neo";
   const mono = { fontFamily: "var(--font-mono)" };
   const [data, setData] = useState<CompendiumMe | null>(null);
-  const [tab, setTab] = useState<"quests" | "season" | "trophies">("quests");
+  const [tab, setTab] = useState<"quests" | "season" | "trophies" | "cosmetics">("quests");
   const [seasonRows, setSeasonRows] = useState<CompendiumSeasonRow[] | null>(null);
   const [expandedUser, setExpandedUser] = useState<number | null>(null);
   const [userTrophies, setUserTrophies] = useState<Record<number, CompendiumTrophy[]>>({});
   const [resetLeft, setResetLeft] = useState(msToDailyReset());
   const [error, setError] = useState("");
+  const [showIntro, setShowIntro] = useState(() => {
+    try { return localStorage.getItem(INTRO_SEEN_KEY) !== "1"; } catch { return false; }
+  });
+  const introRef = useRef<HTMLVideoElement>(null);
+
+  function introDone() {
+    try { localStorage.setItem(INTRO_SEEN_KEY, "1"); } catch { /* приватный режим */ }
+    setShowIntro(false);
+  }
+
+  // Автоплей со звуком: клик по пункту меню даёт user activation, но если
+  // браузер всё же запретит — повторяем без звука; совсем не вышло — закрываем.
+  useEffect(() => {
+    if (!showIntro) return;
+    const v = introRef.current;
+    if (!v) return;
+    v.play().catch(() => {
+      v.muted = true;
+      v.play().catch(() => setShowIntro(false));
+    });
+  }, [showIntro]);
 
   async function load() {
     try {
@@ -96,6 +123,24 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
 
   return (
     <div style={s.root}>
+      {showIntro && (
+        <div style={{ position: "fixed", inset: 0, background: "#000", zIndex: 400, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}>
+          <video
+            ref={introRef}
+            src={INTRO_URL}
+            playsInline
+            onEnded={introDone}
+            onError={() => setShowIntro(false)}
+            style={{ maxWidth: "100%", maxHeight: "82vh", outline: "none" }}
+          />
+          <button
+            onClick={introDone}
+            style={{ ...mono, background: "transparent", color: "var(--accent)", border: "1px solid var(--accent)", borderRadius: isNeo ? 0 : 6, padding: "8px 18px", fontSize: 13, fontWeight: 700, letterSpacing: "0.06em", cursor: "pointer" }}
+          >
+            ПРОПУСТИТЬ →
+          </button>
+        </div>
+      )}
       <div style={{ ...s.header, ...(isNeo ? { borderBottomColor: "var(--accent)" } : {}) }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
           <span style={{ ...s.title, ...mono, color: "var(--accent)", letterSpacing: "0.1em" }}>
@@ -155,8 +200,8 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
             </div>
 
             {/* --- вкладки --- */}
-            <div style={{ display: "flex", gap: 6, margin: "18px 0 14px" }}>
-              {([["quests", "ЗАДАНИЯ"], ["season", "СЕЗОН"], ["trophies", "ТРОФЕИ"]] as const).map(([key, label]) => (
+            <div style={{ display: "flex", gap: 6, margin: "18px 0 14px", flexWrap: "wrap" }}>
+              {([["quests", "ЗАДАНИЯ"], ["season", "СЕЗОН"], ["trophies", "ТРОФЕИ"], ["cosmetics", "КОСМЕТИКА"]] as const).map(([key, label]) => (
                 <button
                   key={key}
                   onClick={() => setTab(key)}
@@ -210,14 +255,15 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                         {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}`}
                       </span>
                       {r.avatar_url ? (
-                        <img src={r.avatar_url.startsWith("http") ? r.avatar_url : `${BASE_URL}${r.avatar_url}`} style={{ width: 28, height: 28, borderRadius: isNeo ? 0 : "50%", objectFit: "cover" }} alt="" />
+                        <img src={r.avatar_url.startsWith("http") ? r.avatar_url : `${BASE_URL}${r.avatar_url}`} className={frameClass({ comp_frame: r.comp_frame })} style={{ width: 28, height: 28, borderRadius: isNeo ? 0 : "50%", objectFit: "cover", ...frameStyle({ comp_frame: r.comp_frame }) }} alt="" />
                       ) : (
-                        <div style={{ width: 28, height: 28, borderRadius: isNeo ? 0 : "50%", background: "var(--bg-tertiary)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: "var(--text-muted)" }}>
+                        <div className={frameClass({ comp_frame: r.comp_frame })} style={{ width: 28, height: 28, borderRadius: isNeo ? 0 : "50%", background: "var(--bg-tertiary)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: "var(--text-muted)", ...frameStyle({ comp_frame: r.comp_frame }) }}>
                           {r.username[0]?.toUpperCase()}
                         </div>
                       )}
-                      <span style={{ ...mono, flex: 1, fontWeight: 700, fontSize: 13.5, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {r.username}{r.user_id === currentUser.id ? " (ты)" : ""}
+                      <span style={{ ...mono, flex: 1, fontWeight: 700, fontSize: 13.5, color: r.comp_color || "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {r.username}{r.comp_badge ? " ⛽" : ""}{r.user_id === currentUser.id ? " (ты)" : ""}
+                        {r.comp_title && <span style={{ color: GOLD, fontWeight: 500, fontSize: 11, marginLeft: 6 }}>«{r.comp_title}»</span>}
                       </span>
                       <DotaRankBadge rankTier={r.rank_tier} leaderboardRank={r.leaderboard_rank} isNeo={isNeo} size="sm" />
                       <span title="Заданий закрыто" style={{ ...mono, fontSize: 11.5, color: "var(--text-muted)" }}>✓{r.quests_done}</span>
@@ -249,6 +295,14 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                   последнее место (от 10 игр) — аватарка на 3 дня голосованием чата 💀
                 </p>
               </div>
+            )}
+
+            {tab === "cosmetics" && data.cosmetics && (
+              <CosmeticsTab
+                isNeo={isNeo}
+                cos={data.cosmetics}
+                onSaved={(c) => setData((prev) => (prev ? { ...prev, cosmetics: c } : prev))}
+              />
             )}
 
             {tab === "trophies" && (
@@ -285,6 +339,137 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+function CosmeticsTab({ isNeo, cos, onSaved }: {
+  isNeo: boolean;
+  cos: CompendiumCosmetics;
+  onSaved: (c: CompendiumCosmetics) => void;
+}) {
+  const mono = { fontFamily: "var(--font-mono)" };
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const lvl = cos.max_level;
+  const U = cos.unlocks;
+
+  async function save(patch: { badge?: boolean; title?: string; color?: string; frame?: string }) {
+    if (busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const res = await compendiumApi.updateCosmetics(patch);
+      onSaved(res.data);
+    } catch (e: any) {
+      setErr(e.response?.data?.detail || "Не получилось сохранить");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const chip = (active: boolean, locked: boolean): React.CSSProperties => ({
+    ...mono,
+    background: active ? "var(--accent)" : "var(--bg-tertiary)",
+    color: active ? "var(--accent-text)" : locked ? "var(--text-muted)" : "var(--text-primary)",
+    border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
+    borderRadius: isNeo ? 0 : 6,
+    padding: "6px 12px", fontSize: 12, fontWeight: 700,
+    cursor: locked ? "not-allowed" : "pointer",
+    opacity: locked ? 0.55 : 1,
+  });
+
+  function Row({ need, name, desc, children }: { need: number; name: string; desc: string; children?: React.ReactNode }) {
+    const locked = lvl < need;
+    return (
+      <div style={{ display: "flex", gap: 14, padding: "13px 14px", borderBottom: "1px solid var(--border)", alignItems: "flex-start", opacity: locked ? 0.75 : 1 }}>
+        <span style={{ ...mono, fontSize: 11, fontWeight: 800, minWidth: 44, color: locked ? "var(--text-muted)" : "var(--accent)", paddingTop: 3 }}>
+          {locked ? `🔒 ${need}` : `ур.${need}`}
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ ...mono, fontWeight: 700, fontSize: 13, color: "var(--text-primary)" }}>{name}</div>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", margin: "2px 0 8px" }}>
+            {locked ? `Откроется на уровне ${need} · ${desc}` : desc}
+          </div>
+          {!locked && children}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: isNeo ? 0 : 8, overflow: "hidden" }}>
+      <div style={{ padding: "10px 14px", background: "var(--bg-secondary)", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+        <span style={{ ...mono, fontWeight: 800, fontSize: 12.5, letterSpacing: "0.08em", color: "var(--accent)" }}>// КОСМЕТИКА</span>
+        <span style={{ ...mono, fontSize: 11, color: "var(--text-muted)" }}>
+          открыто уровнем {lvl} · уровни не сгорают между сезонами
+        </span>
+      </div>
+
+      <Row need={U.badge ?? 2} name="Значок ⛽ у ника" desc="Виден в чате, списке участников и профиле">
+        <div style={{ display: "flex", gap: 6 }}>
+          <button style={chip(cos.badge, false)} onClick={() => save({ badge: !cos.badge })} disabled={busy}>
+            {cos.badge ? (isNeo ? "[ВКЛ]" : "Вкл") : (isNeo ? "[ВЫКЛ]" : "Выкл")}
+          </button>
+        </div>
+      </Row>
+
+      <Row need={U.title ?? 4} name="Титул под ником" desc="Из заработанных — прожарочные тоже считаются">
+        {cos.earned_titles.length === 0 ? (
+          <span style={{ ...mono, fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
+            Пока ни одного титула — закрывай громкие задания
+          </span>
+        ) : (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button style={chip(!cos.title, false)} onClick={() => save({ title: "" })} disabled={busy}>без титула</button>
+            {cos.earned_titles.map((t) => (
+              <button key={t} style={chip(cos.title === t, false)} onClick={() => save({ title: t })} disabled={busy}>
+                «{t}»
+              </button>
+            ))}
+          </div>
+        )}
+      </Row>
+
+      <Row need={U.color ?? 6} name="Цвет ника" desc="Палитра Гандолы — виден всем в чате">
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <button style={chip(!cos.color, false)} onClick={() => save({ color: "" })} disabled={busy}>обычный</button>
+          {cos.palette.map((c) => (
+            <button
+              key={c}
+              title={c}
+              onClick={() => save({ color: c })}
+              disabled={busy}
+              style={{
+                width: 26, height: 26, background: c, cursor: "pointer",
+                border: cos.color === c ? "2.5px solid var(--text-primary)" : "2px solid transparent",
+                borderRadius: isNeo ? 0 : "50%",
+              }}
+            />
+          ))}
+        </div>
+      </Row>
+
+      <Row need={U.frame_lime ?? 8} name="Рамка аватарки" desc="Лаймовая — «ветеран сезона»">
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <button style={chip(!cos.frame, false)} onClick={() => save({ frame: "" })} disabled={busy}>без рамки</button>
+          <button style={chip(cos.frame === "lime", false)} onClick={() => save({ frame: "lime" })} disabled={busy}>лаймовая</button>
+          <button
+            style={chip(cos.frame === "animated", lvl < (U.frame_animated ?? 12))}
+            onClick={() => lvl >= (U.frame_animated ?? 12) && save({ frame: "animated" })}
+            disabled={busy || lvl < (U.frame_animated ?? 12)}
+            title={lvl < (U.frame_animated ?? 12) ? `Откроется на уровне ${U.frame_animated ?? 12}` : ""}
+          >
+            переливающаяся{lvl < (U.frame_animated ?? 12) ? ` 🔒${U.frame_animated ?? 12}` : ""}
+          </button>
+        </div>
+      </Row>
+
+      <Row need={U.dota_gold ?? 10} name="Золотой /dota" desc="Твой зов «Газуем в дотан» — с короной и золотой рамкой. Включается сам.">
+        <span style={{ ...mono, fontSize: 12, color: GOLD }}>👑 активен — просто напиши /dota</span>
+      </Row>
+
+      {err && <p style={{ ...mono, color: BLOOD, fontSize: 12, padding: "10px 14px", margin: 0 }}>{err}</p>}
     </div>
   );
 }

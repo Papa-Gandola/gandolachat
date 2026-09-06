@@ -4,6 +4,7 @@ import { wsService } from "../services/ws";
 import { playMessageSound } from "../services/sounds";
 import EmojiPicker from "./EmojiPicker";
 import FormattedText from "./FormattedText";
+import { CompBadge } from "./cosmetics";
 import { useTheme } from "../services/theme";
 
 interface Props {
@@ -1004,6 +1005,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
             {group.messages.map((msg, i) => {
               const prev = group.messages[i - 1];
               const isMine = msg.sender_id === currentUser.id;
+              const senderMember = chat.members.find((m) => m.id === msg.sender_id);
               const isPending = msg.id < 0;
               const inSamePack = prev && msg.media_group_id && prev.media_group_id === msg.media_group_id;
               const isGrouped = (prev && prev.sender_id === msg.sender_id &&
@@ -1077,7 +1079,11 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                               ? "rgba(10,10,10,0.85)"
                               : (!isNeo && isMine
                                 ? "rgba(255,255,255,0.95)"
-                                : (isMine ? "var(--accent)" : "var(--text-header)")),
+                                : (isMine
+                                  ? "var(--accent)"
+                                  // Косметика Гандолиума: цвет ника (ур.6) — только
+                                  // на чужих сообщениях, свой пузырь и так цветной
+                                  : (senderMember?.comp_color || "var(--text-header)"))),
                             cursor: isMine ? "default" : "pointer",
                             ...(isNeo ? mono : {}),
                           }}
@@ -1088,6 +1094,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                           }}
                         >
                           {isMine ? "Вы" : msg.sender_username}
+                          {!isMine && <CompBadge user={senderMember} />}
                         </span>
                         <span style={{
                           ...s.msgTime,
@@ -1171,6 +1178,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                               senderName={msg.sender_username}
                               ready={dotaReady[msg.id] || []}
                               myId={currentUser.id}
+                              gold={(senderMember?.comp_max_level ?? 0) >= 10}
                             />;
                           }
                           if (msg.content.startsWith("/quest_card ")) {
@@ -1910,7 +1918,7 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
 }
 
 
-function DotaInviteCard({ msgId, chatId, isNeo, isMine, senderName, ready, myId }: {
+function DotaInviteCard({ msgId, chatId, isNeo, isMine, senderName, ready, myId, gold }: {
   msgId: number;
   chatId: number;
   isNeo: boolean;
@@ -1918,6 +1926,7 @@ function DotaInviteCard({ msgId, chatId, isNeo, isMine, senderName, ready, myId 
   senderName: string;
   ready: Array<{ user_id: number; username: string }>;
   myId: number;
+  gold?: boolean; // Гандолиум ур.10: золотой зов
 }) {
   const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
   // Same palette juggling as PokerInviteCard — the card sits inside a message
@@ -1925,9 +1934,10 @@ function DotaInviteCard({ msgId, chatId, isNeo, isMine, senderName, ready, myId 
   const cardBg = isNeo
     ? (isMine ? "rgba(0,0,0,0.18)" : "transparent")
     : (isMine ? "rgba(255,255,255,0.16)" : "rgba(88,101,242,0.08)");
-  const cardBorder = isNeo
+  let cardBorder = isNeo
     ? (isMine ? "1px solid rgba(0,0,0,0.55)" : "1px solid var(--accent)")
     : (isMine ? "1px solid rgba(255,255,255,0.55)" : "1px solid rgba(88,101,242,0.4)");
+  if (gold) cardBorder = "1.5px solid #ffd24a";
   const titleColor = isNeo
     ? (isMine ? "#0a0a0a" : "var(--text-header)")
     : (isMine ? "#fff" : "var(--text-header)");
@@ -1971,9 +1981,9 @@ function DotaInviteCard({ msgId, chatId, isNeo, isMine, senderName, ready, myId 
       maxWidth: 360,
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={{ fontSize: 28 }}>⚔️</div>
+        <div style={{ fontSize: 28 }}>{gold ? "👑" : "⚔️"}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ ...mono, color: titleColor, fontWeight: 700, fontSize: 14 }}>
+          <div style={{ ...mono, color: gold ? "#ffd24a" : titleColor, fontWeight: 700, fontSize: 14 }}>
             {isNeo ? "// ГАЗУЕМ_В_ДОТАН" : "Газуем в дотан"}
           </div>
           <div style={{ ...mono, color: subColor, fontSize: 12, marginTop: 2 }}>

@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from "react";
 import { UserOut, userApi, chatApi } from "../services/api";
 import { useTheme } from "../services/theme";
 import DotaRankBadge from "./DotaRankBadge";
+import { CompBadge, CompTitle, frameStyle, frameClass } from "./cosmetics";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -105,9 +106,10 @@ export default function ProfilePage({ user: initialUser, currentUser, onClose, o
           <label style={{ cursor: isOwn ? "pointer" : "default", position: "relative", display: "block" }}>
             {user.avatar_url ? (
               <img src={user.avatar_url.startsWith("http") ? user.avatar_url : `${BASE_URL}${user.avatar_url}`}
-                style={{ ...s.avatar, ...neoAvatarWrap }} alt={user.username} />
+                className={frameClass(user)}
+                style={{ ...s.avatar, ...neoAvatarWrap, ...frameStyle(user) }} alt={user.username} />
             ) : (
-              <div style={{ ...s.avatarFallback, ...neoAvatarWrap, background: isNeo ? "#0a0a0a" : bg, color: isNeo ? "var(--accent)" : "#fff", fontFamily: isNeo ? "var(--font-mono)" : undefined }}>
+              <div className={frameClass(user)} style={{ ...s.avatarFallback, ...neoAvatarWrap, ...frameStyle(user), background: isNeo ? "#0a0a0a" : bg, color: isNeo ? "var(--accent)" : "#fff", fontFamily: isNeo ? "var(--font-mono)" : undefined }}>
                 {user.username.charAt(0).toUpperCase()}
               </div>
             )}
@@ -121,6 +123,14 @@ export default function ProfilePage({ user: initialUser, currentUser, onClose, o
             )}
           </label>
         </div>
+        {(user.comp_title || user.comp_badge) && (
+          <div style={{ textAlign: "center", marginTop: -14, marginBottom: 18 }}>
+            <span style={{ color: user.comp_color || "var(--text-primary)", fontWeight: 700, fontSize: 14, ...(isNeo ? { fontFamily: "var(--font-mono)" } : {}) }}>
+              {user.username}<CompBadge user={user} />
+            </span>
+            <CompTitle user={user} size={12} center />
+          </div>
+        )}
 
         <div style={s.field}>
           <label style={{ ...s.label, ...mono, ...(isNeo ? { color: "var(--accent)" } : {}) }}>{neoLabel("НИКНЕЙМ")}</label>

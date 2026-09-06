@@ -29,6 +29,12 @@ export interface UserOut {
   dota_account_id?: number | null;
   dota_rank_tier?: number | null;
   dota_leaderboard_rank?: number | null;
+  // Косметика Гандолиума (разблокировки навсегда по comp_max_level)
+  comp_max_level?: number;
+  comp_badge?: boolean;
+  comp_title?: string | null;
+  comp_color?: string | null;
+  comp_frame?: string | null; // "lime" | "animated"
 }
 
 export interface MessageOut {
@@ -127,8 +133,20 @@ export interface CompendiumTrophy {
   title?: string;
 }
 
+export interface CompendiumCosmetics {
+  max_level: number;
+  badge: boolean;
+  title: string | null;
+  color: string | null;
+  frame: string | null;
+  earned_titles: string[];
+  palette: string[];
+  unlocks: Record<string, number>;
+}
+
 export interface CompendiumMe {
   linked: boolean;
+  cosmetics?: CompendiumCosmetics;
   season: string;
   gas?: number;
   level?: number;
@@ -156,10 +174,17 @@ export interface CompendiumSeasonRow {
   anti_count: number;
   rank_tier: number | null;
   leaderboard_rank: number | null;
+  comp_title?: string | null;
+  comp_color?: string | null;
+  comp_frame?: string | null;
+  comp_badge?: boolean;
 }
 
 export const compendiumApi = {
   me: () => api.get<CompendiumMe>("/api/compendium/me"),
+  // ""/false = снять; надеть можно только открытое уровнем
+  updateCosmetics: (data: { badge?: boolean; title?: string; color?: string; frame?: string }) =>
+    api.patch<CompendiumCosmetics>("/api/compendium/cosmetics", data),
   season: () => api.get<{ season: string; rows: CompendiumSeasonRow[]; me: number }>("/api/compendium/season"),
   user: (userId: number) =>
     api.get<{ user_id: number; username: string; season: string; gas: number; level: number; trophies: CompendiumTrophy[]; rank_tier: number | null; leaderboard_rank: number | null }>(

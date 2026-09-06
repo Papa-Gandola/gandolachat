@@ -182,6 +182,9 @@ async def _apply_and_announce(db, user: User, comps: list[Completion], season: s
     prof.gas += sum(c.gas for c in comps)
     level_after = level_for_gas(prof.gas)
     gas_total = prof.gas
+    # Разблокировки косметики — по высшему уровню за всё время
+    if level_after > (user.comp_max_level or 0):
+        user.comp_max_level = level_after
     await db.commit()
 
     # 2) карточки: обычные+пасхалки одной, анти — отдельной (прожарка),
@@ -282,6 +285,10 @@ async def _handle_team(db, row: DotaMatch, user: User) -> None:
             ))
         prof = await _get_or_create_profile(db, uid, season)
         prof.gas += sum(c.gas for c in comps)
+        lvl = level_for_gas(prof.gas)
+        member = users.get(uid)
+        if member is not None and lvl > (member.comp_max_level or 0):
+            member.comp_max_level = lvl
     await db.commit()
 
     # Карточка одна на квест (с именами всех, кто его сейчас закрыл),

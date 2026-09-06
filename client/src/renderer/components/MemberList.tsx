@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { ChatOut, UserOut, userApi, chatApi } from "../services/api";
+import { CompBadge, CompTitle } from "./cosmetics";
 import { useTheme } from "../services/theme";
 
 interface Props {
@@ -43,10 +44,14 @@ export default function MemberList({ chat, currentUser, onChatUpdate, onDeleteCh
         {chat.members.map((m) => (
           <div key={m.id} style={{ ...s.member, ...(isNeo ? { borderRadius: 0 } : {}) }}>
             <Avatar name={m.username} url={m.avatar_url} isNeo={isNeo} />
-            <span style={{ ...s.name, ...mono }}>
-              {isNeo ? `@${m.username}` : m.username}
-              {m.id === currentUser.id ? (isNeo ? "_you" : " (вы)") : ""}
-            </span>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <span style={{ ...s.name, ...mono, display: "block", ...(m.comp_color ? { color: m.comp_color } : {}) }}>
+                {isNeo ? `@${m.username}` : m.username}
+                {m.id === currentUser.id ? (isNeo ? "_you" : " (вы)") : ""}
+                <CompBadge user={m} size={10} />
+              </span>
+              <CompTitle user={m} size={10} />
+            </div>
           </div>
         ))}
       </div>

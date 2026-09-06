@@ -93,6 +93,13 @@ export default function Main({ token, user, onLogout }: Props) {
           dota_leaderboard_rank: data.dota_leaderboard_rank,
           dota_account_id: data.dota_account_id,
         } : {}),
+        ...(data.comp_max_level !== undefined ? {
+          comp_max_level: data.comp_max_level,
+          comp_badge: data.comp_badge,
+          comp_title: data.comp_title,
+          comp_color: data.comp_color,
+          comp_frame: data.comp_frame,
+        } : {}),
       });
       setChats((prev) => prev.map((c) => ({
         ...c,

@@ -37,6 +37,14 @@ class User(Base):
     # Matches started before this moment are ignored by the compendium poller —
     # everyone starts collecting from the moment they link, no retro-farming.
     dota_linked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # === Косметика Гандолиума (открывается уровнями, навсегда) ===
+    # comp_max_level — высший достигнутый уровень за всё время (не сбрасывается
+    # с сезоном): по нему считаются разблокировки. Остальное — выбор игрока.
+    comp_max_level: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    comp_badge: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")  # ⛽ у ника (ур.2)
+    comp_title: Mapped[str | None] = mapped_column(String(40), nullable=True)   # титул из заработанных (ур.4)
+    comp_color: Mapped[str | None] = mapped_column(String(7), nullable=True)    # цвет ника из палитры (ур.6)
+    comp_frame: Mapped[str | None] = mapped_column(String(16), nullable=True)   # рамка: lime (ур.8) | animated (ур.12)
 
     messages: Mapped[list["Message"]] = relationship(back_populates="sender", cascade="all, delete-orphan")
     chats: Mapped[list["Chat"]] = relationship(secondary=chat_members, back_populates="members")

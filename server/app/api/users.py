@@ -70,23 +70,7 @@ async def update_profile(
 
     await db.commit()
     await db.refresh(current_user)
-
-    # Broadcast profile update to all chats this user is in
-    from app.models import chat_members
-    chat_ids_result = await db.execute(
-        select(chat_members.c.chat_id).where(chat_members.c.user_id == current_user.id)
-    )
-    payload = {
-        "type": "profile_updated",
-        "user_id": current_user.id,
-        "username": current_user.username,
-        "avatar_url": current_user.avatar_url,
-        "status": current_user.status,
-        "about": current_user.about,
-    }
-    for row in chat_ids_result.all():
-        await manager.broadcast_to_chat(row.chat_id, payload)
-
+    await _broadcast_profile(db, current_user)
     return current_user
 
 
@@ -125,22 +109,7 @@ async def upload_avatar(
     current_user.avatar_url = f"/uploads/avatars/{filename}"
     await db.commit()
     await db.refresh(current_user)
-
-    from app.models import chat_members
-    chat_ids_result = await db.execute(
-        select(chat_members.c.chat_id).where(chat_members.c.user_id == current_user.id)
-    )
-    payload = {
-        "type": "profile_updated",
-        "user_id": current_user.id,
-        "username": current_user.username,
-        "avatar_url": current_user.avatar_url,
-        "status": current_user.status,
-        "about": current_user.about,
-    }
-    for row in chat_ids_result.all():
-        await manager.broadcast_to_chat(row.chat_id, payload)
-
+    await _broadcast_profile(db, current_user)
     return current_user
 
 
@@ -161,6 +130,11 @@ async def _broadcast_profile(db: AsyncSession, user: User) -> None:
         "dota_rank_tier": user.dota_rank_tier,
         "dota_leaderboard_rank": user.dota_leaderboard_rank,
         "dota_account_id": user.dota_account_id,
+        "comp_max_level": user.comp_max_level,
+        "comp_badge": user.comp_badge,
+        "comp_title": user.comp_title,
+        "comp_color": user.comp_color,
+        "comp_frame": user.comp_frame,
     }
     for row in chat_ids_result.all():
         await manager.broadcast_to_chat(row.chat_id, payload)
