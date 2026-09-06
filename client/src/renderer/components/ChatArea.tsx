@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ChatOut, MessageOut, UserOut, chatApi } from "../services/api";
+import { ChatOut, MessageOut, UserOut, chatApi, dotaApi } from "../services/api";
 import { wsService } from "../services/ws";
 import { playMessageSound } from "../services/sounds";
 import EmojiPicker from "./EmojiPicker";
@@ -52,6 +52,8 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
   const [showReactionPicker, setShowReactionPicker] = useState<number | null>(null);
   const [forwardMsg, setForwardMsg] = useState<MessageOut | null>(null);
   const [readBy, setReadBy] = useState<Map<number, number>>(new Map()); // userId -> lastReadMsgId
+  // /dota_call cards: message_id -> list of players who pressed "Играть".
+  const [dotaReady, setDotaReady] = useState<Record<number, Array<{ user_id: number; username: string }>>>({});
   const [chatMuted, setChatMuted] = useState(() => {
     const muted = JSON.parse(localStorage.getItem("mutedChats") || "[]");
     return muted.includes(chat.id);
@@ -248,6 +250,13 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
       setReadBy((prev) => new Map(prev).set(data.user_id, data.last_read_message_id));
     };
 
+    // Live ready-list for /dota_call cards (keyed by the card's message id).
+    const dotaReadyHandler = (data: any) => {
+      if (data.chat_id !== chat.id || !data.message_id) return;
+      setDotaReady((prev) => ({ ...prev, [data.message_id]: data.ready || [] }));
+    };
+
+    wsService.on("dota_ready_update", dotaReadyHandler);
     wsService.on("message", handler);
     wsService.on("typing", typingHandler);
     wsService.on("message_edited", editHandler);
@@ -257,6 +266,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     wsService.on("message_read", readHandler);
     wsService.on("_ws_open", reconnectHandler);
     return () => {
+      wsService.off("dota_ready_update", dotaReadyHandler);
       wsService.off("message", handler);
       wsService.off("typing", typingHandler);
       wsService.off("message_edited", editHandler);
@@ -648,6 +658,16 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
     const el = textInputRef.current;
     const content = el ? htmlToMarkdown(el).trim() : "";
     if (!content) return;
+    // /dota — turn the command into a "Газуем в дотан" card instead of a
+    // plain message. The server drops the card into the chat and pushes
+    // everyone's phones; no optimistic placeholder needed.
+    if (content.toLowerCase() === "/dota") {
+      dotaApi.call(chat.id).catch(() => {});
+      if (el) { el.innerHTML = ""; el.style.height = "auto"; }
+      setText("");
+      setReplyTo(null);
+      return;
+    }
     // Optimistic: always enqueue pending placeholder so user sees something immediately,
     // even when WS is offline. It gets removed when the server echoes the real message.
     const tempMsg: MessageOut = {
@@ -1141,6 +1161,17 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                           const pokerMatch = msg.content.match(/^\/poker_table (\d+)$/);
                           if (pokerMatch) {
                             return <PokerInviteCard tableId={Number(pokerMatch[1])} chatId={chat.id} isNeo={isNeo} isMine={isMine} senderName={msg.sender_username} />;
+                          }
+                          if (msg.content === "/dota_call") {
+                            return <DotaInviteCard
+                              msgId={msg.id}
+                              chatId={chat.id}
+                              isNeo={isNeo}
+                              isMine={isMine}
+                              senderName={msg.sender_username}
+                              ready={dotaReady[msg.id] || []}
+                              myId={currentUser.id}
+                            />;
                           }
                           const callMatch = msg.content.match(/^\/call_record (completed|missed|declined|cancelled)\|(\d+)\|(\d+)\|(\d+)$/);
                           if (callMatch) {
@@ -1778,6 +1809,104 @@ function CallRecordCard({ kind, durationSec, participants, initiatorId, currentU
     }}>
       <span style={{ fontSize: 18 }}>{icon}</span>
       <span style={{ color: titleColor, fontWeight: 600 }}>{isNeo ? `// ${title.toLowerCase()}` : title}</span>
+    </div>
+  );
+}
+
+function DotaInviteCard({ msgId, chatId, isNeo, isMine, senderName, ready, myId }: {
+  msgId: number;
+  chatId: number;
+  isNeo: boolean;
+  isMine: boolean;
+  senderName: string;
+  ready: Array<{ user_id: number; username: string }>;
+  myId: number;
+}) {
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
+  // Same palette juggling as PokerInviteCard — the card sits inside a message
+  // bubble whose background depends on theme + own/other message.
+  const cardBg = isNeo
+    ? (isMine ? "rgba(0,0,0,0.18)" : "transparent")
+    : (isMine ? "rgba(255,255,255,0.16)" : "rgba(88,101,242,0.08)");
+  const cardBorder = isNeo
+    ? (isMine ? "1px solid rgba(0,0,0,0.55)" : "1px solid var(--accent)")
+    : (isMine ? "1px solid rgba(255,255,255,0.55)" : "1px solid rgba(88,101,242,0.4)");
+  const titleColor = isNeo
+    ? (isMine ? "#0a0a0a" : "var(--text-header)")
+    : (isMine ? "#fff" : "var(--text-header)");
+  const subColor = isNeo
+    ? (isMine ? "rgba(0,0,0,0.65)" : "var(--text-muted)")
+    : (isMine ? "rgba(255,255,255,0.75)" : "var(--text-muted)");
+  const btnBg = isNeo
+    ? (isMine ? "#0a0a0a" : "var(--accent)")
+    : (isMine ? "rgba(255,255,255,0.95)" : "var(--accent)");
+  const btnColor = isNeo ? "var(--accent)" : (isMine ? "var(--accent)" : "var(--accent-text)");
+
+  // Pull the current ready-list once when the card appears (state on the
+  // server is in-memory; live updates then arrive via dota_ready_update).
+  React.useEffect(() => {
+    wsService.send({ type: "dota_ready_request", chat_id: chatId, message_id: msgId });
+  }, [msgId, chatId]);
+
+  const iAmReady = ready.some((r) => r.user_id === myId);
+  const readyLine = ready.length
+    ? ready.map((r) => (r.user_id === myId ? "ты" : r.username)).join(", ")
+    : null;
+
+  const play = () => {
+    // Mark me as ready (idempotent server-side), then fire up Dota via the
+    // Steam protocol link. In Electron — through the shell; in a plain
+    // browser (web build) — via location, the browser asks to open Steam.
+    wsService.send({ type: "dota_ready", chat_id: chatId, message_id: msgId });
+    const url = "steam://rungameid/570";
+    const electron = (window as any).electron;
+    if (electron?.openExternal) electron.openExternal(url);
+    else window.location.href = url;
+  };
+
+  return (
+    <div style={{
+      padding: "10px 12px",
+      background: cardBg,
+      border: cardBorder,
+      borderRadius: isNeo ? 0 : 8,
+      margin: "4px 0",
+      maxWidth: 360,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ fontSize: 28 }}>⚔️</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ ...mono, color: titleColor, fontWeight: 700, fontSize: 14 }}>
+            {isNeo ? "// ГАЗУЕМ_В_ДОТАН" : "Газуем в дотан"}
+          </div>
+          <div style={{ ...mono, color: subColor, fontSize: 12, marginTop: 2 }}>
+            {isNeo ? `${senderName} зовёт катку` : `${senderName} зовёт катку`}
+          </div>
+        </div>
+        <button
+          onClick={play}
+          style={{
+            background: btnBg,
+            color: btnColor,
+            border: "none",
+            borderRadius: isNeo ? 0 : 6,
+            padding: "8px 14px",
+            fontSize: 13,
+            fontWeight: 700,
+            cursor: "pointer",
+            letterSpacing: isNeo ? "0.05em" : undefined,
+            ...mono,
+          }}
+          title="Запустить Dota 2 через Steam"
+        >
+          {isNeo ? (iAmReady ? "[В ИГРУ →]" : "[ИГРАТЬ]") : (iAmReady ? "В игру →" : "Играть")}
+        </button>
+      </div>
+      {readyLine && (
+        <div style={{ ...mono, color: subColor, fontSize: 11.5, marginTop: 8 }}>
+          {isNeo ? `> готовы: ${readyLine}` : `✅ Готовы: ${readyLine}`}
+        </div>
+      )}
     </div>
   );
 }

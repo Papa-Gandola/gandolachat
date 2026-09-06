@@ -199,6 +199,12 @@ export interface PokerGameView {
   players: PokerPlayerView[];
 }
 
+export const dotaApi = {
+  // Typing /dota in a chat -> server drops a "/dota_call" card message into
+  // the chat and pushes everyone's phones.
+  call: (chatId: number) => api.post<{ message_id: number }>("/api/dota/call", { chat_id: chatId }),
+};
+
 export const pokerApi = {
   list: (chatId: number) => api.get<PokerTableOut[]>(`/api/poker?chat_id=${chatId}`),
   create: (chatId: number, maxSeats = 6) =>

@@ -3,9 +3,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update
 from datetime import datetime, timedelta, timezone
 import asyncio
+import time
 from app.models import Chat, Message, User, Reaction, read_receipts, chat_members
 from app.ws.manager import manager
 from app.config import settings
+
+
+# Ephemeral "who pressed Играть" state for /dota_call cards, keyed by the
+# card's message_id: {message_id: {"users": {user_id: username}, "at": ts}}.
+# In-memory on purpose — a game call is a right-now thing; losing the list on
+# a server restart is fine, and messages themselves expire in 2 days anyway.
+_dota_ready: dict[int, dict] = {}
+_DOTA_READY_TTL = 3 * 3600  # seconds — prune calls older than 3 hours
+
+
+def _touch_dota_ready(message_id: int) -> dict:
+    now = time.time()
+    for stale in [m for m, e in _dota_ready.items() if now - e["at"] > _DOTA_READY_TTL]:
+        _dota_ready.pop(stale, None)
+    entry = _dota_ready.setdefault(message_id, {"users": {}, "at": now})
+    entry["at"] = now
+    return entry
 
 
 # asyncio only keeps WEAK references to tasks created via create_task — if no
@@ -64,6 +82,51 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                     "user_id": user_id,
                     "chat_id": chat_id,
                 }, exclude_user=user_id)
+
+            elif event == "dota_ready":
+                # "Играть" pressed on a /dota_call card — record the player in
+                # the ephemeral ready-list and fan the fresh list out to the
+                # chat so every open card updates live.
+                chat_id = data.get("chat_id")
+                msg_id = data.get("message_id")
+                if chat_id and msg_id:
+                    member = await db.execute(
+                        select(chat_members).where(
+                            chat_members.c.chat_id == chat_id,
+                            chat_members.c.user_id == user_id,
+                        )
+                    )
+                    if member.first() is not None:
+                        u_res = await db.execute(select(User).where(User.id == user_id))
+                        u_row = u_res.scalar_one_or_none()
+                        entry = _touch_dota_ready(msg_id)
+                        entry["users"][user_id] = u_row.username if u_row else "?"
+                        await manager.broadcast_to_chat(chat_id, {
+                            "type": "dota_ready_update",
+                            "chat_id": chat_id,
+                            "message_id": msg_id,
+                            "ready": [
+                                {"user_id": uid, "username": name}
+                                for uid, name in entry["users"].items()
+                            ],
+                        })
+
+            elif event == "dota_ready_request":
+                # A freshly-rendered card asking for the current ready-list —
+                # answer only the requesting socket, no broadcast needed.
+                msg_id = data.get("message_id")
+                chat_id = data.get("chat_id")
+                if msg_id:
+                    entry = _dota_ready.get(msg_id)
+                    await websocket.send_json({
+                        "type": "dota_ready_update",
+                        "chat_id": chat_id,
+                        "message_id": msg_id,
+                        "ready": [
+                            {"user_id": uid, "username": name}
+                            for uid, name in entry["users"].items()
+                        ] if entry else [],
+                    })
 
             elif event == "forward_message":
                 target_chat_id = data.get("target_chat_id")

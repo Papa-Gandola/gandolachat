@@ -13,7 +13,7 @@ from app.database import get_db, AsyncSessionLocal
 from app.config import settings
 from app.models import Message
 from app.ws.handler import websocket_endpoint
-from app.api import auth, users, chats, poker
+from app.api import auth, users, chats, poker, dota
 
 
 @asynccontextmanager
@@ -64,6 +64,7 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(chats.router)
 app.include_router(poker.router)
+app.include_router(dota.router)
 
 
 @app.websocket("/ws")
