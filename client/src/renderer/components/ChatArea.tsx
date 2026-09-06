@@ -1173,6 +1173,13 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                               myId={currentUser.id}
                             />;
                           }
+                          if (msg.content.startsWith("/quest_card ")) {
+                            let qp: any = null;
+                            try { qp = JSON.parse(msg.content.slice(12)); } catch { /* покажем как текст */ }
+                            if (qp) {
+                              return <QuestCardMsg payload={qp} isNeo={isNeo} isMine={isMine} senderName={msg.sender_username} />;
+                            }
+                          }
                           const callMatch = msg.content.match(/^\/call_record (completed|missed|declined|cancelled)\|(\d+)\|(\d+)\|(\d+)$/);
                           if (callMatch) {
                             return <CallRecordCard
@@ -1812,6 +1819,96 @@ function CallRecordCard({ kind, durationSec, participants, initiatorId, currentU
     </div>
   );
 }
+
+// Карточка Гандолиума: "/quest_card {json}" от поллера — закрытые задания,
+// прожарки, командные и рампаги. Клик ведёт на экран компендиума.
+function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
+  payload: any;
+  isNeo: boolean;
+  isMine: boolean;
+  senderName: string;
+}) {
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
+  const BLOOD = "#ff6a5e";
+  const GOLD = "#ffd24a";
+  const kind: string = payload.kind || "quest";
+  const special: string | undefined = payload.special;
+  const isAnti = kind === "anti";
+  const isTeam = kind === "team";
+  const edge = special === "rampage" ? BLOOD : special === "fullstack" ? GOLD : isAnti ? BLOOD : "var(--accent)";
+
+  const cardBg = isNeo
+    ? (isMine ? "rgba(0,0,0,0.18)" : "transparent")
+    : (isMine ? "rgba(255,255,255,0.16)" : "rgba(88,101,242,0.08)");
+  const titleColor = isNeo
+    ? (isMine ? "#0a0a0a" : "var(--text-header)")
+    : (isMine ? "#fff" : "var(--text-header)");
+  const subColor = isNeo
+    ? (isMine ? "rgba(0,0,0,0.65)" : "var(--text-muted)")
+    : (isMine ? "rgba(255,255,255,0.75)" : "var(--text-muted)");
+
+  const header = special === "rampage" ? "🚨 РАМПАГА!!!"
+    : special === "fullstack" ? "🏆 СТАК ПОБЕДИЛ"
+    : isAnti ? "💀 ПРОЖАРКА"
+    : isTeam ? "🤝 КОМАНДНОЕ"
+    : "⛽ ЗАДАНИЕ ЗАКРЫТО";
+
+  const who = isTeam
+    ? (payload.who || payload.names || []).join(" + ")
+    : (payload.username || senderName);
+
+  const items: Array<{ name: string; gas: number; title?: string }> = payload.items || [];
+
+  const openCompendium = () => {
+    window.dispatchEvent(new CustomEvent("set-app-mode", { detail: { mode: "compendium" } }));
+  };
+
+  return (
+    <div
+      onClick={openCompendium}
+      title="Открыть Гандолиум"
+      style={{
+        padding: "10px 12px",
+        background: cardBg,
+        border: `1px solid ${edge}`,
+        borderLeft: `3px solid ${edge}`,
+        borderRadius: isNeo ? 0 : 8,
+        margin: "4px 0",
+        maxWidth: 380,
+        cursor: "pointer",
+      }}
+    >
+      <div style={{ ...mono, fontWeight: 800, fontSize: 12.5, letterSpacing: "0.06em", color: special || isAnti ? edge : titleColor }}>
+        {header}
+      </div>
+      <div style={{ ...mono, color: subColor, fontSize: 12, marginTop: 2 }}>{who}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 8 }}>
+        {items.map((it, i) => (
+          <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
+            <span style={{ ...mono, fontSize: 13, fontWeight: 700, color: titleColor }}>
+              {it.name}
+              {it.title && <span style={{ color: GOLD, fontSize: 11, marginLeft: 6 }}>титул «{it.title}»</span>}
+            </span>
+            <span style={{ ...mono, fontSize: 12.5, fontWeight: 800, color: isAnti ? BLOOD : (isNeo && isMine ? "#0a0a0a" : "var(--accent)"), whiteSpace: "nowrap" }}>
+              +{it.gas} ⛽
+            </span>
+          </div>
+        ))}
+      </div>
+      {(payload.new_level || payload.gas_total != null) && (
+        <div style={{ ...mono, fontSize: 11.5, color: subColor, marginTop: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>
+          {payload.new_level && (
+            <span style={{ color: isNeo && isMine ? "#0a0a0a" : "var(--accent)", fontWeight: 800 }}>
+              🆙 УРОВЕНЬ {payload.new_level}
+            </span>
+          )}
+          {payload.gas_total != null && <span>всего: {payload.gas_total} ⛽ · ур. {payload.level}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 function DotaInviteCard({ msgId, chatId, isNeo, isMine, senderName, ready, myId }: {
   msgId: number;

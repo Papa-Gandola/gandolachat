@@ -316,7 +316,8 @@ export default function Sidebar({
           ) : chat.last_message ? (
             <span style={{ ...s.chatPreview, ...(isNeo ? mono : {}) }}>
               {chat.last_message.content
-                ? <FormattedText text={chat.last_message.content} noBold staticSpoiler />
+                ? (markerPreview(chat.last_message.content)
+                  ?? <FormattedText text={chat.last_message.content} noBold staticSpoiler />)
                 : (chat.last_message.file_name || "Файл")}
             </span>
           ) : null}
@@ -673,6 +674,27 @@ function Avatar({ url, name, size, isGroup }: { url: string | null; name: string
       {isGroup ? groupChar : (name && typeof name === "string" ? name.charAt(0).toUpperCase() : "?")}
     </div>
   );
+}
+
+// Служебные маркеры сообщений → человеческое превью в списке чатов
+// (иначе в сайдбаре светился бы сырой "/quest_card {json}").
+function markerPreview(content: string): string | null {
+  if (content.startsWith("/quest_card")) {
+    try {
+      const p = JSON.parse(content.slice(12));
+      if (p.special === "rampage") return `🚨 РАМПАГА: ${p.username}!`;
+      if (p.special === "fullstack") return "🏆 СТАК ПОБЕДИЛ";
+      if (p.kind === "anti") return `💀 Прожарка: ${p.username}`;
+      if (p.kind === "team") return `🤝 ${(p.who || p.names || []).join(" + ")}`;
+      return `⛽ ${p.username} закрыл задание`;
+    } catch {
+      return "⛽ Компендиум";
+    }
+  }
+  if (content === "/dota_call") return "⚔️ Газуем в дотан";
+  if (/^\/poker_table \d+$/.test(content)) return "🃏 Покерный стол";
+  if (content.startsWith("/call_record")) return "📞 Звонок";
+  return null;
 }
 
 function stringToColor(str: string) {

@@ -217,6 +217,49 @@ export default function GroupInfoPage({ chat, currentUser, onClose, onOpenSearch
           </p>
         )}
 
+        {/* Гандолиум: сюда поллер постит карточки заданий по Доте */}
+        <SectionLabel isNeo={isNeo}>ГАНДОЛИУМ</SectionLabel>
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+          background: "var(--bg-secondary)", borderRadius: palette.radius,
+          border: isNeo ? `1px solid ${palette.border}` : "none",
+          padding: "10px 14px", marginBottom: 20,
+        }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ ...mono, fontSize: 13, fontWeight: 700, color: palette.text }}>
+              ⛽ Карточки компендиума в этом чате
+            </div>
+            <div style={{ ...mono, fontSize: 11.5, color: palette.muted, marginTop: 2 }}>
+              {chat.compendium_enabled
+                ? "Закрытые задания, рампаги и прожарки прилетают сюда"
+                : isOwner ? "Включи — и подвиги по Доте будут приходить в этот чат" : "Выключено создателем"}
+            </div>
+          </div>
+          <button
+            onClick={async () => {
+              if (!isOwner) return;
+              try {
+                await chatApi.update(chat.id, { compendium_enabled: !chat.compendium_enabled });
+              } catch (e: any) {
+                alert(e.response?.data?.detail || "Не удалось");
+              }
+            }}
+            disabled={!isOwner}
+            title={isOwner ? "" : "Только создатель группы"}
+            style={{
+              ...mono,
+              background: chat.compendium_enabled ? palette.accent : "var(--bg-tertiary)",
+              color: chat.compendium_enabled ? palette.accentText : palette.muted,
+              border: isNeo ? `1px solid ${chat.compendium_enabled ? palette.accent : palette.border}` : "none",
+              borderRadius: palette.radius,
+              padding: "7px 14px", fontSize: 12, fontWeight: 700, letterSpacing: isNeo ? "0.05em" : undefined,
+              cursor: isOwner ? "pointer" : "default", whiteSpace: "nowrap",
+            }}
+          >
+            {chat.compendium_enabled ? (isNeo ? "[ВКЛ]" : "Вкл") : (isNeo ? "[ВЫКЛ]" : "Выкл")}
+          </button>
+        </div>
+
         {/* Stats */}
         <SectionLabel isNeo={isNeo}>МЕДИА · ССЫЛКИ · ФАЙЛЫ</SectionLabel>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>

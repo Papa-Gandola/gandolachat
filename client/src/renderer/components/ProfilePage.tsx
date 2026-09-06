@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from "react";
 import { UserOut, userApi, chatApi } from "../services/api";
 import { useTheme } from "../services/theme";
+import DotaRankBadge from "./DotaRankBadge";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -196,6 +197,13 @@ export default function ProfilePage({ user: initialUser, currentUser, onClose, o
           )}
         </div>
 
+        <DotaSection
+          user={user}
+          isOwn={isOwn}
+          isNeo={isNeo}
+          onUser={(u) => { setUser(u); onUpdate(u); }}
+        />
+
         {user.last_seen && (
           <div style={s.field}>
             <label style={{ ...s.label, ...mono, ...(isNeo ? { color: "var(--accent)" } : {}) }}>{neoLabel("ПОСЛЕДНИЙ ВИЗИТ")}</label>
@@ -226,6 +234,152 @@ export default function ProfilePage({ user: initialUser, currentUser, onClose, o
     </div>
   );
 }
+
+function DotaSection({ user, isOwn, isNeo, onUser }: {
+  user: UserOut;
+  isOwn: boolean;
+  isNeo: boolean;
+  onUser: (u: UserOut) => void;
+}) {
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [confirmUnlink, setConfirmUnlink] = useState(false);
+  const linked = !!user.dota_account_id;
+
+  async function link() {
+    if (!input.trim() || busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const res = await userApi.linkSteam(input.trim());
+      onUser(res.data);
+      setInput("");
+    } catch (e: any) {
+      setErr(e.response?.data?.detail || "Не получилось — попробуй ещё раз");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refresh() {
+    if (busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const res = await userApi.refreshSteam();
+      onUser(res.data);
+    } catch (e: any) {
+      setErr(e.response?.data?.detail || "Не получилось обновить");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function unlink() {
+    if (busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const res = await userApi.unlinkSteam();
+      onUser(res.data);
+      setConfirmUnlink(false);
+    } catch (e: any) {
+      setErr(e.response?.data?.detail || "Не получилось отвязать");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Чужой профиль без привязки — секцию не показываем вовсе
+  if (!isOwn && !linked) return null;
+
+  const btn: React.CSSProperties = {
+    background: "var(--bg-tertiary)", color: "var(--text-primary)", border: "1px solid var(--border)",
+    borderRadius: isNeo ? 0 : 4, padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", ...mono,
+  };
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <label style={{ display: "block", color: isNeo ? "var(--accent)" : "var(--text-muted)", fontSize: 11, fontWeight: 700, letterSpacing: "0.05em", marginBottom: 6, ...mono }}>
+        {isNeo ? "// DOTA 2" : "DOTA 2"}
+      </label>
+
+      {linked ? (
+        <div style={{ background: "var(--bg-secondary)", borderRadius: isNeo ? 0 : 6, border: isNeo ? "1px solid var(--border)" : "none", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            {user.dota_rank_tier ? (
+              <DotaRankBadge rankTier={user.dota_rank_tier} leaderboardRank={user.dota_leaderboard_rank} isNeo={isNeo} />
+            ) : (
+              <span style={{ ...mono, color: "var(--text-muted)", fontSize: 13, fontStyle: "italic" }}>
+                звание пока не видно
+              </span>
+            )}
+            <span style={{ ...mono, color: "var(--text-muted)", fontSize: 11 }}>
+              ID {user.dota_account_id}
+            </span>
+          </div>
+          {!user.dota_rank_tier && (
+            <span style={{ ...mono, color: "var(--text-muted)", fontSize: 11.5, lineHeight: 1.5 }}>
+              Проверь в Доте: Настройки → Приватность → «Сделать общедоступной статистику матчей»,
+              сыграй катку и нажми «Обновить»
+            </span>
+          )}
+          {isOwn && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button style={btn} onClick={refresh} disabled={busy}>
+                {busy ? "..." : isNeo ? "[ОБНОВИТЬ]" : "🔄 Обновить"}
+              </button>
+              {!confirmUnlink ? (
+                <button style={{ ...btn, color: "var(--text-muted)" }} onClick={() => setConfirmUnlink(true)} disabled={busy}>
+                  {isNeo ? "[ОТВЯЗАТЬ]" : "Отвязать"}
+                </button>
+              ) : (
+                <>
+                  <button style={{ ...btn, color: "#ed4245", borderColor: "#ed4245" }} onClick={unlink} disabled={busy}>
+                    {isNeo ? "[ТОЧНО ОТВЯЗАТЬ]" : "Точно отвязать"}
+                  </button>
+                  <button style={btn} onClick={() => setConfirmUnlink(false)}>
+                    {isNeo ? "[ОТМЕНА]" : "Отмена"}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div style={{ background: "var(--bg-secondary)", borderRadius: isNeo ? 0 : 6, border: isNeo ? "1px solid var(--border)" : "none", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+          <span style={{ ...mono, color: "var(--text-muted)", fontSize: 12.5, lineHeight: 1.5 }}>
+            Привяжи Steam — в профиле появится звание, а катки начнут засчитываться в Гандолиум ⛽
+          </span>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input
+              style={{ flex: 1, background: "var(--bg-tertiary)", border: `1px solid ${isNeo ? "var(--accent)" : "var(--border)"}`, borderRadius: isNeo ? 0 : 4, padding: "8px 12px", fontSize: 13, color: "var(--text-primary)", ...mono }}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") link(); }}
+              placeholder={isNeo ? "> ссылка_на_профиль_или_friend_id" : "Ссылка на Steam-профиль или Friend ID"}
+              disabled={busy}
+            />
+            <button
+              style={{ background: "var(--accent)", color: "var(--accent-text)", border: "none", borderRadius: isNeo ? 0 : 4, padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer", ...mono }}
+              onClick={link}
+              disabled={busy}
+            >
+              {busy ? "..." : isNeo ? "[ПРИВЯЗАТЬ]" : "Привязать"}
+            </button>
+          </div>
+          <span style={{ ...mono, color: "var(--text-muted)", fontSize: 11 }}>
+            Подойдёт: steamcommunity.com/profiles/…, ссылка Dotabuff/OpenDota или Friend ID из Доты
+          </span>
+        </div>
+      )}
+      {err && <span style={{ color: "#ed4245", fontSize: 12, marginTop: 6, display: "block", ...mono }}>{err}</span>}
+    </div>
+  );
+}
+
 
 function AdminCleanup({ isNeo }: { isNeo: boolean }) {
   const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
