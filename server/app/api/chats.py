@@ -599,12 +599,18 @@ async def upload_file(
     async with aiofiles.open(path, "wb") as f:
         await f.write(content)
 
+    # Карточки компендиума создаёт только поллер — /quest_card в подписи файла
+    # отрисовался бы как настоящая ачивка (тот же щит, что в WS-обработчике).
+    clean_caption = caption.strip()
+    if clean_caption.startswith("/quest_card"):
+        clean_caption = ""
+
     msg = Message(
         chat_id=chat_id,
         sender_id=current_user.id,
         file_url=f"/uploads/files/{filename}",
         file_name=file.filename,
-        content=caption.strip() or None,
+        content=clean_caption or None,
         media_group_id=(media_group_id[:40] if media_group_id else None),
     )
     db.add(msg)

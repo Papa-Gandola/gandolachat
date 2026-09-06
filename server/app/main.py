@@ -46,8 +46,14 @@ async def lifespan(app: FastAPI):
         compendium_poller.refresh_ranks, "interval",
         hours=1, max_instances=1, coalesce=True,
     )
-    # Понедельник 03:25 МСК = 00:25 UTC — «Дно недели» (внутри проверка дня)
-    scheduler.add_job(compendium_poller.weekly_roast, "cron", hour=0, minute=25)
+    # Понедельник 03:25 МСК = 00:25 UTC — «Дно недели» (внутри проверка дня).
+    # misfire_grace_time: рестарт/даунтайм в понедельник утром не должен
+    # оставить чат без трибунала — джоба догонит в течение 20 часов
+    # (guard по дню недели в МСК не даст ей уехать на вторник).
+    scheduler.add_job(
+        compendium_poller.weekly_roast, "cron", hour=0, minute=25,
+        misfire_grace_time=20 * 3600, coalesce=True,
+    )
     scheduler.start()
 
     yield

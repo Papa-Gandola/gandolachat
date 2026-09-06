@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from pathlib import Path
 from datetime import datetime, timezone
 import aiofiles
@@ -177,6 +178,12 @@ async def link_steam(
     now = datetime.now(timezone.utc)
     relink_same = current_user.dota_account_id == account_id
     rank_tier, lb = opendota.extract_rank(player)
+    if not relink_same:
+        # Привязали ДРУГОЙ аккаунт: старые катки к нему не относятся — иначе
+        # марафоны/стрики сезона смешали бы игры двух разных дота-аккаунтов.
+        # Заработанные выполнения и газ остаются (заслужено — заслужено).
+        from app.models import DotaMatch
+        await db.execute(DotaMatch.__table__.delete().where(DotaMatch.user_id == current_user.id))
     current_user.dota_account_id = account_id
     current_user.steam_id64 = str(account_id + opendota.STEAM64_OFFSET)
     current_user.dota_rank_tier = rank_tier
@@ -193,7 +200,13 @@ async def link_steam(
     if prof.start_rank_tier is None and rank_tier is not None:
         prof.start_rank_tier = rank_tier
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Гонка двух одновременных привязок одного аккаунта — уникальный
+        # индекс ловит то, что проскочило мимо проверки выше
+        await db.rollback()
+        raise HTTPException(400, "Этот Steam-аккаунт уже привязан к другому пользователю")
     await db.refresh(current_user)
     await _broadcast_profile(db, current_user)
     return current_user

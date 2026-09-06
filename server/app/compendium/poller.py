@@ -39,6 +39,12 @@ PARSE_MAX_ATTEMPTS = 8
 PARSE_WINDOW_HOURS = 36
 ROWS_WINDOW_DAYS = 60
 
+# Все джобы компендиума ходят в одни и те же таблицы (газ — read-modify-write,
+# выполнения — уникальные ключи). Интервалы 15/20/60 минут кратны и пересекаются
+# каждый час; без сериализации это lost update по газу и IntegrityError на
+# дублях. Джобы живут в одном event loop — asyncio.Lock решает всё разом.
+_JOB_LOCK = asyncio.Lock()
+
 
 def _log(msg: str) -> None:
     print(f"[compendium] {msg}")
@@ -257,7 +263,11 @@ async def _handle_team(db, row: DotaMatch, user: User) -> None:
         await db.commit()
 
     users_res = await db.execute(select(User).where(User.id.in_(ids)))
-    users = {u.id: u for u in users_res.scalars().all()}
+    # Отвязавшиеся в командных не участвуют: их строки могли остаться от
+    # старой привязки, и начислять им газ/светить в карточках нельзя.
+    users = {u.id: u for u in users_res.scalars().all() if u.dota_account_id is not None}
+    if len(users) < 2:
+        return
     names = [users[i].username for i in ids if i in users]
 
     # Каждому участнику — свои командные выполнения (у кого-то дуо уже закрыто)
@@ -267,7 +277,7 @@ async def _handle_team(db, row: DotaMatch, user: User) -> None:
         if not u:
             continue
         ctx = await _build_ctx(db, u, r.season)
-        tc = TeamCtx(m=r, size=len(ids), lineup_key=lineup, ctx=ctx)
+        tc = TeamCtx(m=r, size=len(users), lineup_key=lineup, ctx=ctx)
         comps = engine.evaluate_team(tc)
         if comps:
             per_user_comps[u.id] = comps
@@ -275,8 +285,9 @@ async def _handle_team(db, row: DotaMatch, user: User) -> None:
     if not per_user_comps:
         return
 
-    # газ + строки — каждому своё
-    season = current_season()
+    # газ + строки — каждому своё. Сезон берём у самой катки (а не «сейчас»),
+    # чтобы на стыке месяца ключ периода и сезон начисления не разъехались.
+    season = row.season
     for uid, comps in per_user_comps.items():
         for c in comps:
             db.add(QuestCompletion(
@@ -317,6 +328,10 @@ async def _handle_team(db, row: DotaMatch, user: User) -> None:
 
 async def _process_new_match(db, user: User, match_id: int) -> bool:
     """Скачать полный матч, записать строку, прогнать задания. True = записан."""
+    # Без привязки матчить не по чему: account_id=None сравнялся бы с
+    # анонимными игроками матча (account_id: null).
+    if user.dota_account_id is None:
+        return False
     match = await opendota.get_match(match_id)
     players = match.get("players") or []
     player = next((p for p in players if p.get("account_id") == user.dota_account_id), None)
@@ -344,153 +359,207 @@ async def _process_new_match(db, user: User, match_id: int) -> bool:
 
 
 async def poll_matches() -> None:
-    """Основной цикл: новые рейтинговые катки всех привязанных игроков."""
-    async with AsyncSessionLocal() as db:
-        users = await _linked_users(db)
-        for user in users:
-            try:
-                recent = await opendota.get_recent_matches(user.dota_account_id)
-            except Exception as e:
-                _log(f"recentMatches failed for {user.username}: {type(e).__name__}")
-                continue
+    """Основной цикл: новые рейтинговые катки всех привязанных игроков.
 
-            linked_at = user.dota_linked_at or datetime.now(timezone.utc)
-            candidates = []
-            for rm in recent:
-                if rm.get("lobby_type") != 7:
-                    continue
-                st = datetime.fromtimestamp(int(rm.get("start_time") or 0), tz=timezone.utc)
-                if st < linked_at:
-                    continue
-                candidates.append((int(rm["match_id"]), st))
-            if not candidates:
-                continue
+    ORM-объекты здесь нарочно не переживают границы try: rollback экспайрит
+    всю сессию, и обращение к атрибуту протухшего объекта в async-контексте
+    роняет MissingGreenlet (в т.ч. внутри except при формировании лога).
+    Поэтому цикл ходит по снапшоту простых значений, а User перечитывается
+    свежим select-ом перед каждой каткой."""
+    async with _JOB_LOCK:
+        async with AsyncSessionLocal() as db:
+            users = await _linked_users(db)
+            snapshot = [
+                (u.id, u.username, u.dota_account_id, u.dota_linked_at)
+                for u in users
+            ]
 
-            existing_res = await db.execute(
-                select(DotaMatch.match_id).where(
-                    DotaMatch.user_id == user.id,
-                    DotaMatch.match_id.in_([mid for mid, _ in candidates]),
-                )
-            )
-            known = {r[0] for r in existing_res.all()}
-            fresh = sorted(
-                [(mid, st) for mid, st in candidates if mid not in known],
-                key=lambda x: x[1],
-            )[:MAX_NEW_MATCHES_PER_CYCLE]
-
-            for mid, _st in fresh:
+        async with AsyncSessionLocal() as db:
+            for uid, uname, account_id, linked_at in snapshot:
                 try:
-                    await _process_new_match(db, user, mid)
+                    recent = await opendota.get_recent_matches(account_id)
                 except Exception as e:
-                    _log(f"match {mid} failed for {user.username}: {type(e).__name__}: {e}")
-                    await db.rollback()
-                await asyncio.sleep(1.0)  # бережём лимиты OpenDota
-            await asyncio.sleep(0.5)
+                    _log(f"recentMatches failed for {uname}: {type(e).__name__}")
+                    continue
+
+                linked_at = linked_at or datetime.now(timezone.utc)
+                candidates = []
+                for rm in recent:
+                    if rm.get("lobby_type") != 7:
+                        continue
+                    st = datetime.fromtimestamp(int(rm.get("start_time") or 0), tz=timezone.utc)
+                    if st < linked_at:
+                        continue
+                    candidates.append((int(rm["match_id"]), st))
+                if not candidates:
+                    continue
+
+                existing_res = await db.execute(
+                    select(DotaMatch.match_id).where(
+                        DotaMatch.user_id == uid,
+                        DotaMatch.match_id.in_([mid for mid, _ in candidates]),
+                    )
+                )
+                known = {r[0] for r in existing_res.all()}
+                fresh = sorted(
+                    [(mid, st) for mid, st in candidates if mid not in known],
+                    key=lambda x: x[1],
+                )[:MAX_NEW_MATCHES_PER_CYCLE]
+
+                for mid, _st in fresh:
+                    try:
+                        user = (
+                            await db.execute(select(User).where(User.id == uid))
+                        ).scalar_one_or_none()
+                        if user is None or user.dota_account_id != account_id:
+                            break  # отвязался/перепривязался прямо во время цикла
+                        await _process_new_match(db, user, mid)
+                    except Exception as e:
+                        _log(f"match {mid} failed for {uname}: {type(e).__name__}: {e}")
+                        await db.rollback()
+                    await asyncio.sleep(1.0)  # бережём лимиты OpenDota
+                await asyncio.sleep(0.5)
 
 
 async def recheck_parses() -> None:
-    """Дотянуть реплей-парс по свежим строкам и допрогнать 📼-задания."""
-    async with AsyncSessionLocal() as db:
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=PARSE_WINDOW_HOURS)
-        res = await db.execute(
-            select(DotaMatch).where(
-                DotaMatch.is_parsed.is_(False),
-                DotaMatch.parse_attempts < PARSE_MAX_ATTEMPTS,
-                DotaMatch.started_at >= cutoff,
-            )
-        )
-        rows = list(res.scalars().all())
-        if not rows:
-            return
+    """Дотянуть реплей-парс по свежим строкам и допрогнать 📼-задания.
 
-        users_res = await db.execute(
-            select(User).where(User.id.in_({r.user_id for r in rows}))
-        )
-        users = {u.id: u for u in users_res.scalars().all()}
+    Как и в poll_matches — снапшоты вместо долгоживущих ORM-объектов:
+    один rollback иначе экспайрит всё, и следующая итерация падает.
+    Отвязанные пользователи отфильтрованы сразу — иначе их account_id=None
+    сматчился бы с анонимными игроками матча (account_id: null) и чужие
+    цифры затёрли бы строку."""
+    async with _JOB_LOCK:
+        async with AsyncSessionLocal() as db:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=PARSE_WINDOW_HOURS)
+            res = await db.execute(
+                select(DotaMatch.id, DotaMatch.match_id, DotaMatch.user_id).where(
+                    DotaMatch.is_parsed.is_(False),
+                    DotaMatch.parse_attempts < PARSE_MAX_ATTEMPTS,
+                    DotaMatch.started_at >= cutoff,
+                )
+            )
+            pending = res.all()
+            if not pending:
+                return
+
+            users_res = await db.execute(
+                select(User.id, User.username, User.dota_account_id).where(
+                    User.id.in_({p.user_id for p in pending}),
+                    User.dota_account_id.is_not(None),
+                )
+            )
+            accounts = {uid: (uname, acc) for uid, uname, acc in users_res.all()}
 
         # Один матч могли записать несколько игроков — качаем его один раз.
-        by_match: dict[int, list[DotaMatch]] = {}
-        for r in rows:
-            by_match.setdefault(r.match_id, []).append(r)
+        by_match: dict[int, list[tuple[int, int]]] = {}  # match_id -> [(row_id, user_id)]
+        for p in pending:
+            by_match.setdefault(p.match_id, []).append((p.id, p.user_id))
 
-        for mid, match_rows in by_match.items():
-            try:
-                match = await opendota.get_match(mid)
-            except Exception:
-                continue
-            parsed = match.get("version") is not None
-            for r in match_rows:
-                r.parse_attempts += 1
-                if not parsed:
+        async with AsyncSessionLocal() as db:
+            for mid, row_refs in by_match.items():
+                try:
+                    match = await opendota.get_match(mid)
+                except Exception:
                     continue
-                user = users.get(r.user_id)
-                if not user:
-                    continue
-                player = next(
-                    (p for p in (match.get("players") or []) if p.get("account_id") == user.dota_account_id),
-                    None,
-                )
-                if player is None:
-                    continue
-                facts = engine.extract_player_facts(match, player)
-                for k, v in facts.items():
-                    setattr(r, k, v)
-            await db.commit()
+                parsed = match.get("version") is not None
+                players = match.get("players") or []
 
-            if parsed:
-                for r in match_rows:
-                    user = users.get(r.user_id)
-                    if not user:
-                        continue
+                for row_id, row_uid in row_refs:
+                    uname, account_id = accounts.get(row_uid, (None, None))
+                    if account_id is None:
+                        continue  # отвязался — строку не трогаем
                     try:
-                        ctx = await _build_ctx(db, user, r.season)
-                        comps = engine.evaluate_match(r, ctx)
-                        await _apply_and_announce(db, user, comps, r.season)
+                        r = (
+                            await db.execute(select(DotaMatch).where(DotaMatch.id == row_id))
+                        ).scalar_one_or_none()
+                        if r is None:
+                            continue
+                        r.parse_attempts += 1
+                        if parsed:
+                            player = next(
+                                (p for p in players if p.get("account_id") == account_id), None
+                            )
+                            if player is not None:
+                                facts = engine.extract_player_facts(match, player)
+                                for k, v in facts.items():
+                                    setattr(r, k, v)
+                        await db.commit()
+
+                        if parsed:
+                            user = (
+                                await db.execute(select(User).where(User.id == row_uid))
+                            ).scalar_one_or_none()
+                            if user is None or user.dota_account_id != account_id:
+                                continue
+                            ctx = await _build_ctx(db, user, r.season)
+                            comps = engine.evaluate_match(r, ctx)
+                            await _apply_and_announce(db, user, comps, r.season)
                     except Exception as e:
-                        _log(f"re-eval after parse failed for {user.username}: {type(e).__name__}")
+                        _log(f"re-eval after parse failed for {uname}: {type(e).__name__}: {e}")
                         await db.rollback()
-            await asyncio.sleep(1.0)
+                await asyncio.sleep(1.0)
 
 
 async def refresh_ranks() -> None:
     """Обновить звание всех привязанных + марафон «Восхождение»."""
-    async with AsyncSessionLocal() as db:
-        users = await _linked_users(db)
-        season = current_season()
-        for user in users:
-            try:
-                player = await opendota.get_player(user.dota_account_id)
-            except Exception:
-                continue
-            rank_tier, lb = opendota.extract_rank(player)
-            user.dota_rank_tier = rank_tier
-            user.dota_leaderboard_rank = lb
-            user.dota_rank_updated_at = datetime.now(timezone.utc)
+    async with _JOB_LOCK:
+        async with AsyncSessionLocal() as db:
+            snapshot = [
+                (u.id, u.username, u.dota_account_id)
+                for u in await _linked_users(db)
+            ]
 
-            prof = await _get_or_create_profile(db, user.id, season)
-            if prof.start_rank_tier is None and rank_tier is not None:
-                prof.start_rank_tier = rank_tier
-            await db.commit()
+        async with AsyncSessionLocal() as db:
+            season = current_season()
+            for uid, uname, account_id in snapshot:
+                try:
+                    player = await opendota.get_player(account_id)
+                except Exception:
+                    continue
+                try:
+                    rank_tier, lb = opendota.extract_rank(player)
+                    user = (
+                        await db.execute(select(User).where(User.id == uid))
+                    ).scalar_one_or_none()
+                    if user is None or user.dota_account_id != account_id:
+                        continue
+                    # Пустой rank_tier (профиль скрыли/АПИ мигнул) не затирает
+                    # уже известное звание — лучше слегка устаревшая медаль,
+                    # чем мигающая.
+                    if rank_tier is not None:
+                        user.dota_rank_tier = rank_tier
+                        user.dota_leaderboard_rank = lb
+                    user.dota_rank_updated_at = datetime.now(timezone.utc)
 
-            # «Восхождение»: медаль выросла относительно старта сезона
-            if (
-                rank_tier is not None
-                and prof.start_rank_tier is not None
-                and rank_tier > prof.start_rank_tier
-            ):
-                exists = await db.execute(
-                    select(QuestCompletion.id).where(
-                        QuestCompletion.user_id == user.id,
-                        QuestCompletion.quest_id == "s38",
-                        QuestCompletion.period_key == season,
-                    )
-                )
-                if exists.scalar_one_or_none() is None:
-                    q = BY_ID["s38"]
-                    await _apply_and_announce(
-                        db, user, [Completion("s38", season, q.gas, None)], season
-                    )
-            await asyncio.sleep(0.5)
+                    prof = await _get_or_create_profile(db, user.id, season)
+                    if prof.start_rank_tier is None and rank_tier is not None:
+                        prof.start_rank_tier = rank_tier
+                    await db.commit()
+
+                    # «Восхождение»: выросла именно МЕДАЛЬ (десятки rank_tier),
+                    # +1 звезда в рамках медали марафон не закрывает.
+                    if (
+                        rank_tier is not None
+                        and prof.start_rank_tier is not None
+                        and rank_tier // 10 > prof.start_rank_tier // 10
+                    ):
+                        exists = await db.execute(
+                            select(QuestCompletion.id).where(
+                                QuestCompletion.user_id == user.id,
+                                QuestCompletion.quest_id == "s38",
+                                QuestCompletion.period_key == season,
+                            )
+                        )
+                        if exists.scalar_one_or_none() is None:
+                            q = BY_ID["s38"]
+                            await _apply_and_announce(
+                                db, user, [Completion("s38", season, q.gas, None)], season
+                            )
+                except Exception as e:
+                    _log(f"rank refresh failed for {uname}: {type(e).__name__}: {e}")
+                    await db.rollback()
+                await asyncio.sleep(0.5)
 
 
 async def weekly_roast() -> None:
@@ -506,12 +575,15 @@ async def weekly_roast() -> None:
     prev_week = week_key_of(week_start_msk.astimezone(timezone.utc))
     season = season_of((week_end_msk - timedelta(seconds=1)).astimezone(timezone.utc))
 
-    async with AsyncSessionLocal() as db:
+    async with _JOB_LOCK, AsyncSessionLocal() as db:
         res = await db.execute(
             select(DotaMatch.user_id, func.count(DotaMatch.id), func.sum(cast(DotaMatch.is_win, Integer)))
+            .join(User, User.id == DotaMatch.user_id)
             .where(
                 DotaMatch.started_at >= week_start_msk.astimezone(timezone.utc),
                 DotaMatch.started_at < week_end_msk.astimezone(timezone.utc),
+                # Отвязавшиеся в трибунале не участвуют
+                User.dota_account_id.is_not(None),
             )
             .group_by(DotaMatch.user_id)
         )

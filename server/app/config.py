@@ -15,7 +15,9 @@ class Settings(BaseSettings):
     # and only needed to resolve steamcommunity.com/id/<vanity> links.
     OPENDOTA_API_KEY: str = ""
     STEAM_API_KEY: str = ""
-    DOTA_POLL_MINUTES: int = 15
+    # 20 минут держат ~15-20 привязанных игроков в бесплатном лимите OpenDota
+    # (2000 запросов/день) вместе с допарсом и ежечасными рангами.
+    DOTA_POLL_MINUTES: int = 20
 
     class Config:
         env_file = ".env"

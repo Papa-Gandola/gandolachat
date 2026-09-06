@@ -639,6 +639,11 @@ async def handle_edit_message(data: dict, user_id: int, db: AsyncSession):
     if not msg_id or not new_content:
         return
 
+    # Тот же щит, что и на новых сообщениях: карточку компендиума нельзя
+    # получить и через «отправил безобидное — отредактировал в /quest_card».
+    if new_content.startswith("/quest_card"):
+        return
+
     result = await db.execute(select(Message).where(Message.id == msg_id, Message.sender_id == user_id))
     msg = result.scalar_one_or_none()
     if not msg:

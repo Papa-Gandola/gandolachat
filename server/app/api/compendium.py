@@ -123,19 +123,24 @@ async def my_compendium(
         _quest_dict(q, done=(q.id, season) in keys)
         for q in QUESTS if q.category == "team"
     ]
-    # Анти-ачивки показываем списком — пусть боятся. Пасхалки не светим.
-    anti = [
-        _quest_dict(q, done=any(k[0] == q.id for k in keys))
-        for q in QUESTS if q.category == "anti"
-    ]
 
     comp_res = await db.execute(
         select(QuestCompletion)
         .where(QuestCompletion.user_id == current_user.id, QuestCompletion.season == season)
         .order_by(QuestCompletion.completed_at.desc())
     )
+    season_completions = list(comp_res.scalars().all())
+    season_qids = {c.quest_id for c in season_completions}
+
+    # Анти-ачивки показываем списком — пусть боятся. Пасхалки не светим.
+    # «done» — только по ТЕКУЩЕМУ сезону (прошлогодний «Донор крови» не в счёт).
+    anti = [
+        _quest_dict(q, done=q.id in season_qids)
+        for q in QUESTS if q.category == "anti"
+    ]
+
     trophies = []
-    for c in comp_res.scalars().all():
+    for c in season_completions:
         q = BY_ID.get(c.quest_id)
         if not q:
             continue

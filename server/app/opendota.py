@@ -74,18 +74,6 @@ async def request_parse(match_id: int) -> None:
         pass
 
 
-async def count_ranked_matches(account_id: int) -> int | None:
-    """GET /players/{id}/wl?lobby_type=7 — lifetime ranked count (for the
-    «Юбилейная» easter egg baseline). None when the API has nothing."""
-    try:
-        data = await _get(f"/players/{account_id}/wl", {"lobby_type": 7})
-        if isinstance(data, dict):
-            return int(data.get("win", 0)) + int(data.get("lose", 0))
-    except Exception:
-        pass
-    return None
-
-
 async def _resolve_vanity(vanity: str) -> int | None:
     """steamcommunity.com/id/<vanity> → steamID64 via the Steam Web API.
     Needs STEAM_API_KEY; returns None when unavailable or not found."""
@@ -117,7 +105,12 @@ async def resolve_link_input(raw: str) -> int:
 
     m = re.search(r"steamcommunity\.com/profiles/(\d{15,20})", s)
     if m:
-        return int(m.group(1)) - STEAM64_OFFSET
+        id64 = int(m.group(1))
+        if id64 <= STEAM64_OFFSET:
+            # 15-значное число меньше базы steamID64 дало бы отрицательный
+            # account_id и вечное «OpenDota не отвечает» — лучше честная ошибка
+            raise LinkError("Ссылка битая: число в /profiles/… не похоже на steamID64")
+        return id64 - STEAM64_OFFSET
 
     m = re.search(r"steamcommunity\.com/id/([\w.\-]+)", s)
     if m:

@@ -30,7 +30,9 @@ class User(Base):
     # steam_id64 kept as a string: the value exceeds JS Number.MAX_SAFE_INTEGER,
     # so it must travel as a string end-to-end anyway.
     steam_id64: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    dota_account_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # BigInteger: свежие аккаунты Steam уже около 1.9 млрд — порог signed
+    # int32 (2.147 млрд) близко. Unique — один дота-аккаунт на одного юзера.
+    dota_account_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True, unique=True)
     dota_rank_tier: Mapped[int | None] = mapped_column(Integer, nullable=True)
     dota_leaderboard_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
     dota_rank_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
