@@ -114,6 +114,22 @@ async def upload_avatar(
     return current_user
 
 
+def _opendota_error(tag: str, account_id: int, e: Exception) -> HTTPException:
+    """Одна точка перевода сетевых ошибок OpenDota в честный ответ клиенту.
+    Раньше всё схлопывалось в «не отвечает» и настоящая причина (429, блок,
+    таймаут) не попадала даже в логи — диагностировать было нечем."""
+    import httpx
+    print(f"[{tag}] OpenDota error for {account_id}: {type(e).__name__}: {e}")
+    if isinstance(e, httpx.HTTPStatusError):
+        code = e.response.status_code
+        if code == 429:
+            return HTTPException(502, "OpenDota перегружен (лимит запросов) — попробуй через минуту")
+        return HTTPException(502, f"OpenDota вернул ошибку {code} — попробуй позже")
+    if isinstance(e, httpx.TimeoutException):
+        return HTTPException(502, "OpenDota не отвечает (таймаут) — попробуй ещё раз")
+    return HTTPException(502, f"Не достучались до OpenDota ({type(e).__name__}) — попробуй ещё раз")
+
+
 async def _broadcast_profile(db: AsyncSession, user: User) -> None:
     """Разослать profile_updated во все чаты пользователя (одна форма payload
     на все три места, где профиль меняется)."""
@@ -163,8 +179,8 @@ async def link_steam(
 
     try:
         player = await opendota.get_player(account_id)
-    except Exception:
-        raise HTTPException(502, "OpenDota не отвечает — попробуй ещё раз через минуту")
+    except Exception as e:
+        raise _opendota_error("steam-link", account_id, e)
     if not opendota.profile_exists(player):
         raise HTTPException(400, "Профиль не найден в OpenDota — проверь ссылку или ID")
 
@@ -243,8 +259,8 @@ async def refresh_steam(
         raise HTTPException(400, "Steam не привязан")
     try:
         player = await opendota.get_player(current_user.dota_account_id)
-    except Exception:
-        raise HTTPException(502, "OpenDota не отвечает — попробуй ещё раз через минуту")
+    except Exception as e:
+        raise _opendota_error("steam-refresh", current_user.dota_account_id, e)
     rank_tier, lb = opendota.extract_rank(player)
     current_user.dota_rank_tier = rank_tier
     current_user.dota_leaderboard_rank = lb
