@@ -730,6 +730,13 @@ export function ChatScreen({ navigation, route }: Props) {
               />
             );
           }
+          if (m.content?.startsWith("/quest_card ")) {
+            let qp: any = null;
+            try { qp = JSON.parse(m.content.slice(12)); } catch { /* покажем как текст */ }
+            if (qp) {
+              return <QuestCardMobile key={m.id} theme={theme} mine={mine} payload={qp} />;
+            }
+          }
           const audio = isAudio(m.file_url) ? fileUrl(m.file_url) : null;
           const img = !audio && isImage(m.file_url) ? fileUrl(m.file_url) : null;
           const text = m.content ?? (m.file_url && !img && !audio ? `📎 ${m.file_name ?? "файл"}` : "");
@@ -1354,6 +1361,72 @@ function PokerInviteCard({
             {theme.decorate ? "[сесть]" : "Сесть"}
           </Text>
         </Pressable>
+      </View>
+    </View>
+  );
+}
+
+// Карточка Гандолиума ("/quest_card {json}" от поллера): закрытые задания,
+// прожарки, командные, рампаги. Компакт-версия — экран компендиума пока
+// только на десктопе.
+function QuestCardMobile({ theme, mine, payload }: {
+  theme: ThemeT;
+  mine: boolean;
+  payload: any;
+}) {
+  const BLOOD = "#ff6a5e";
+  const GOLD = "#ffd24a";
+  const kind: string = payload.kind || "quest";
+  const special: string | undefined = payload.special;
+  const isAnti = kind === "anti";
+  const edge = special === "rampage" ? BLOOD : special === "fullstack" ? GOLD : isAnti ? BLOOD : theme.colors.accent;
+  const header = special === "rampage" ? "🚨 РАМПАГА!!!"
+    : special === "fullstack" ? "🏆 СТАК ПОБЕДИЛ"
+    : isAnti ? "💀 ПРОЖАРКА"
+    : kind === "team" ? "🤝 КОМАНДНОЕ"
+    : "⛽ ЗАДАНИЕ ЗАКРЫТО";
+  const who = kind === "team"
+    ? (payload.who || payload.names || []).join(" + ")
+    : (payload.username || "");
+  const items: Array<{ name: string; gas: number }> = payload.items || [];
+
+  return (
+    <View style={{ flexDirection: "row", justifyContent: mine ? "flex-end" : "flex-start", paddingHorizontal: 14, paddingVertical: 4 }}>
+      <View
+        style={{
+          maxWidth: "85%",
+          padding: 10,
+          borderRadius: theme.radius.bubble,
+          borderWidth: 1,
+          borderLeftWidth: 3,
+          borderColor: edge,
+          backgroundColor: theme.colors.bgElev,
+        }}
+      >
+        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "800", color: edge, letterSpacing: 0.5 }}>
+          {header}
+        </Text>
+        {!!who && (
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkDim, marginTop: 1 }}>
+            {who}
+          </Text>
+        )}
+        {items.map((it, i) => (
+          <View key={i} style={{ flexDirection: "row", justifyContent: "space-between", gap: 12, marginTop: i === 0 ? 6 : 3 }}>
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 13, fontWeight: "700", color: theme.colors.ink, flexShrink: 1 }}>
+              {it.name}
+            </Text>
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "800", color: isAnti ? BLOOD : theme.colors.accent }}>
+              +{it.gas} ⛽
+            </Text>
+          </View>
+        ))}
+        {(payload.new_level || payload.gas_total != null) && (
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted, marginTop: 6 }}>
+            {payload.new_level ? `🆙 УРОВЕНЬ ${payload.new_level} · ` : ""}
+            {payload.gas_total != null ? `всего: ${payload.gas_total} ⛽` : ""}
+          </Text>
+        )}
       </View>
     </View>
   );
