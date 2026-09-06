@@ -10,6 +10,7 @@ import VideoCall from "../components/VideoCall";
 import ProfilePage from "../components/ProfilePage";
 import GroupInfoPage from "../components/GroupInfoPage";
 import Poker from "../components/Poker";
+import CompendiumPage from "../components/CompendiumPage";
 import { useTheme } from "../services/theme";
 
 interface Props {
@@ -42,8 +43,9 @@ export default function Main({ token, user, onLogout }: Props) {
   const [connQuality, setConnQuality] = useState<string>("good");
   const [connPing, setConnPing] = useState(0);
   const [showCloseDialog, setShowCloseDialog] = useState(false);
-  const [appMode, setAppMode] = useState<"chat" | "poker">(() => {
-    return (localStorage.getItem("gandola-mode") as "chat" | "poker") || "chat";
+  const [appMode, setAppMode] = useState<"chat" | "poker" | "compendium">(() => {
+    const saved = localStorage.getItem("gandola-mode");
+    return saved === "poker" || saved === "compendium" ? saved : "chat";
   });
   const [showModeMenu, setShowModeMenu] = useState(false);
 
@@ -79,14 +81,34 @@ export default function Main({ token, user, onLogout }: Props) {
     wsService.on("message_deleted", (_data) => { /* sidebar updated via chat-last-message-changed event from ChatArea */ });
 
     wsService.on("profile_updated", (data) => {
+      const merge = (m: UserOut): UserOut => ({
+        ...m,
+        username: data.username,
+        avatar_url: data.avatar_url,
+        status: data.status,
+        // Данные Доты приходят не из каждого источника profile_updated —
+        // затираем только когда поле реально прислали
+        ...(data.dota_rank_tier !== undefined ? {
+          dota_rank_tier: data.dota_rank_tier,
+          dota_leaderboard_rank: data.dota_leaderboard_rank,
+          dota_account_id: data.dota_account_id,
+        } : {}),
+        ...(data.comp_max_level !== undefined ? {
+          comp_max_level: data.comp_max_level,
+          comp_badge: data.comp_badge,
+          comp_title: data.comp_title,
+          comp_color: data.comp_color,
+          comp_frame: data.comp_frame,
+        } : {}),
+      });
       setChats((prev) => prev.map((c) => ({
         ...c,
-        members: c.members.map((m) => m.id === data.user_id ? { ...m, username: data.username, avatar_url: data.avatar_url, status: data.status } : m),
+        members: c.members.map((m) => m.id === data.user_id ? merge(m) : m),
       })));
       if (data.user_id === user.id) {
-        setCurrentUser((prev) => ({ ...prev, username: data.username, avatar_url: data.avatar_url, status: data.status }));
+        setCurrentUser((prev) => merge(prev));
       }
-      setViewingProfile((prev) => prev && prev.id === data.user_id ? { ...prev, username: data.username, avatar_url: data.avatar_url, status: data.status } : prev);
+      setViewingProfile((prev) => prev && prev.id === data.user_id ? merge(prev) : prev);
     });
 
     wsService.on("chat_deleted", (data) => {
@@ -98,9 +120,11 @@ export default function Main({ token, user, onLogout }: Props) {
     wsService.on("chat_updated", (data) => {
       const updated: ChatOut = data.chat;
       if (!updated) return;
-      setChats((prev) => prev.map((c) => c.id === updated.id ? { ...c, ...updated } : c));
-      setActiveChat((prev) => prev && prev.id === updated.id ? { ...prev, ...updated } : prev);
-      setViewingGroupInfo((prev) => prev && prev.id === updated.id ? { ...prev, ...updated } : prev);
+      // PATCH-и чата приходят без last_message — не затираем превью в сайдбаре
+      const merge = (c: ChatOut): ChatOut => ({ ...c, ...updated, last_message: updated.last_message ?? c.last_message });
+      setChats((prev) => prev.map((c) => c.id === updated.id ? merge(c) : c));
+      setActiveChat((prev) => prev && prev.id === updated.id ? merge(prev) : prev);
+      setViewingGroupInfo((prev) => prev && prev.id === updated.id ? merge(prev) : prev);
     });
 
     wsService.on("call_signal", (data) => {
@@ -125,13 +149,25 @@ export default function Main({ token, user, onLogout }: Props) {
     return () => clearInterval(interval);
   }, [incomingCalls.length]);
 
+  // Из Гандолиума нет чатов на экране — любой «открой чат» возвращает в chat-режим
+  function leaveCompendiumForChat() {
+    setAppMode((m) => {
+      if (m !== "compendium") return m;
+      localStorage.setItem("gandola-mode", "chat");
+      return "chat";
+    });
+  }
+
   // Switch to a chat when a notification is clicked (dispatched from ChatArea)
   useEffect(() => {
     const handler = (e: Event) => {
       const chatId = (e as CustomEvent<{ chatId: number }>).detail?.chatId;
       if (!chatId) return;
       const target = chats.find((c) => c.id === chatId);
-      if (target) setActiveChat(target);
+      if (target) {
+        setActiveChat(target);
+        leaveCompendiumForChat();
+      }
     };
     window.addEventListener("switch-chat", handler as EventListener);
     return () => window.removeEventListener("switch-chat", handler as EventListener);
@@ -150,8 +186,8 @@ export default function Main({ token, user, onLogout }: Props) {
   // Allow other components (e.g. PokerInviteCard) to switch app mode
   useEffect(() => {
     const handler = (e: Event) => {
-      const mode = (e as CustomEvent<{ mode: "chat" | "poker" }>).detail?.mode;
-      if (mode === "chat" || mode === "poker") setAppMode(mode);
+      const mode = (e as CustomEvent<{ mode: "chat" | "poker" | "compendium" }>).detail?.mode;
+      if (mode === "chat" || mode === "poker" || mode === "compendium") setAppMode(mode);
     };
     window.addEventListener("set-app-mode", handler as EventListener);
     return () => window.removeEventListener("set-app-mode", handler as EventListener);
@@ -171,14 +207,19 @@ export default function Main({ token, user, onLogout }: Props) {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setActiveChat(null);
-        setViewingProfile(null);
+      if (e.key !== "Escape") return;
+      // В Гандолиуме Escape закрывает сам Гандолиум, не трогая выбранный чат
+      if (appMode === "compendium") {
+        setAppMode("chat");
+        localStorage.setItem("gandola-mode", "chat");
+        return;
       }
+      setActiveChat(null);
+      setViewingProfile(null);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [appMode]);
 
   useEffect(() => {
     if (!resizing) return;
@@ -268,7 +309,11 @@ export default function Main({ token, user, onLogout }: Props) {
             }}
             title="Переключить режим"
           >
-            <span>Gandola{isNeo ? <span style={{ color: "var(--accent)" }}>{appMode === "chat" ? "Chat" : "Poker"}</span> : (appMode === "chat" ? "Chat" : "Poker")}</span>
+            <span>
+              {appMode === "compendium"
+                ? (isNeo ? <span style={{ color: "var(--accent)" }}>Гандолиум</span> : "Гандолиум")
+                : <>Gandola{isNeo ? <span style={{ color: "var(--accent)" }}>{appMode === "chat" ? "Chat" : "Poker"}</span> : (appMode === "chat" ? "Chat" : "Poker")}</>}
+            </span>
             <span style={{ fontSize: 10, opacity: 0.7 }}>▾</span>
           </button>
           {showModeMenu && (
@@ -287,7 +332,7 @@ export default function Main({ token, user, onLogout }: Props) {
                 padding: 4,
                 fontFamily: isNeo ? "var(--font-mono)" : undefined,
               }}>
-                {(["chat", "poker"] as const).map((m) => (
+                {(["chat", "poker", "compendium"] as const).map((m) => (
                   <button
                     key={m}
                     onClick={() => { setAppMode(m); localStorage.setItem("gandola-mode", m); setShowModeMenu(false); }}
@@ -305,13 +350,13 @@ export default function Main({ token, user, onLogout }: Props) {
                       fontFamily: "inherit",
                     }}
                   >
-                    Gandola{m === "chat" ? "Chat" : "Poker"}
+                    {m === "compendium" ? "Гандолиум ⛽" : `Gandola${m === "chat" ? "Chat" : "Poker"}`}
                   </button>
                 ))}
               </div>
             </>
           )}
-          <span style={{ ...s.titleText, fontSize: 10, opacity: 0.6 }}>v2.2.0</span>
+          <span style={{ ...s.titleText, fontSize: 10, opacity: 0.6 }}>v2.3.0</span>
           <span
             style={{
               width: 8, height: 8, borderRadius: "50%", marginLeft: 4,
@@ -370,7 +415,7 @@ export default function Main({ token, user, onLogout }: Props) {
           chats={chats}
           currentUser={currentUser}
           activeChatId={activeChat?.id ?? null}
-          onSelectChat={(c) => { setActiveChat(c); setViewingProfile(null); setViewingGroupInfo(null); }}
+          onSelectChat={(c) => { setActiveChat(c); setViewingProfile(null); setViewingGroupInfo(null); leaveCompendiumForChat(); }}
           onChatsUpdate={setChats}
           onLogout={handleLogout}
           onAvatarUpdate={setCurrentUser}
@@ -397,6 +442,14 @@ export default function Main({ token, user, onLogout }: Props) {
               onOpenSearch={() => { setPendingChatSearch(viewingGroupInfo.id); setViewingGroupInfo(null); }}
               onAddMember={() => { setPendingAddMember(viewingGroupInfo.id); setViewingGroupInfo(null); }}
               onOpenUserProfile={(u) => { setViewingGroupInfo(null); setViewingProfile(u); }}
+            />
+          </div>
+        ) : appMode === "compendium" ? (
+          <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
+            <CompendiumPage
+              currentUser={currentUser}
+              onClose={() => { setAppMode("chat"); localStorage.setItem("gandola-mode", "chat"); }}
+              onOpenProfile={() => setViewingProfile(currentUser)}
             />
           </div>
         ) : activeChat && appMode === "poker" ? (

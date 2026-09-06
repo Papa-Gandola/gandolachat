@@ -374,3 +374,18 @@ body.theme-neo .date-divider .label {
   pointer-events: none;
   user-select: none;
 }
+
+/* Гандолиум: переливающаяся рамка аватарки (разблокировка ур.12) */
+@keyframes comp-frame-hue {
+  0%   { border-color: #c6ff3d; box-shadow: 0 0 12px rgba(198, 255, 61, 0.5); }
+  25%  { border-color: #57f287; box-shadow: 0 0 12px rgba(87, 242, 135, 0.5); }
+  50%  { border-color: #00b0f4; box-shadow: 0 0 12px rgba(0, 176, 244, 0.5); }
+  75%  { border-color: #eb459e; box-shadow: 0 0 12px rgba(235, 69, 158, 0.5); }
+  100% { border-color: #c6ff3d; box-shadow: 0 0 12px rgba(198, 255, 61, 0.5); }
+}
+.comp-frame-animated {
+  animation: comp-frame-hue 4s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .comp-frame-animated { animation: none; }
+}

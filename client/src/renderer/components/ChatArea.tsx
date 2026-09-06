@@ -4,6 +4,8 @@ import { wsService } from "../services/ws";
 import { playMessageSound } from "../services/sounds";
 import EmojiPicker from "./EmojiPicker";
 import FormattedText from "./FormattedText";
+import { CompBadge } from "./cosmetics";
+import { markerPreview } from "../services/markers";
 import { useTheme } from "../services/theme";
 
 interface Props {
@@ -146,7 +148,9 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
         const isMuted = JSON.parse(localStorage.getItem("mutedChats") || "[]").includes(chat.id);
         if (!isMuted) {
           playMessageSound();
-          showNotification(data.sender_username, data.content || "Sent a file");
+          // Служебные маркеры (карточки компендиума и т.п.) — человеческим текстом
+          const body = data.content ? (markerPreview(data.content) ?? data.content) : "Sent a file";
+          showNotification(data.sender_username, body);
         }
         // Only auto-mark-read if the new message is going to be visible (we're at the bottom
         // and the window has focus). Otherwise leave it unread — IntersectionObserver will
@@ -1004,6 +1008,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
             {group.messages.map((msg, i) => {
               const prev = group.messages[i - 1];
               const isMine = msg.sender_id === currentUser.id;
+              const senderMember = chat.members.find((m) => m.id === msg.sender_id);
               const isPending = msg.id < 0;
               const inSamePack = prev && msg.media_group_id && prev.media_group_id === msg.media_group_id;
               const isGrouped = (prev && prev.sender_id === msg.sender_id &&
@@ -1077,7 +1082,11 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                               ? "rgba(10,10,10,0.85)"
                               : (!isNeo && isMine
                                 ? "rgba(255,255,255,0.95)"
-                                : (isMine ? "var(--accent)" : "var(--text-header)")),
+                                : (isMine
+                                  ? "var(--accent)"
+                                  // Косметика Гандолиума: цвет ника (ур.6) — только
+                                  // на чужих сообщениях, свой пузырь и так цветной
+                                  : (senderMember?.comp_color || "var(--text-header)"))),
                             cursor: isMine ? "default" : "pointer",
                             ...(isNeo ? mono : {}),
                           }}
@@ -1088,6 +1097,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                           }}
                         >
                           {isMine ? "Вы" : msg.sender_username}
+                          {!isMine && <CompBadge user={senderMember} />}
                         </span>
                         <span style={{
                           ...s.msgTime,
@@ -1171,7 +1181,15 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
                               senderName={msg.sender_username}
                               ready={dotaReady[msg.id] || []}
                               myId={currentUser.id}
+                              gold={(senderMember?.comp_max_level ?? 0) >= 10}
                             />;
+                          }
+                          if (msg.content.startsWith("/quest_card ")) {
+                            let qp: any = null;
+                            try { qp = JSON.parse(msg.content.slice(12)); } catch { /* покажем как текст */ }
+                            if (qp) {
+                              return <QuestCardMsg payload={qp} isNeo={isNeo} isMine={isMine} senderName={msg.sender_username} />;
+                            }
                           }
                           const callMatch = msg.content.match(/^\/call_record (completed|missed|declined|cancelled)\|(\d+)\|(\d+)\|(\d+)$/);
                           if (callMatch) {
@@ -1813,7 +1831,112 @@ function CallRecordCard({ kind, durationSec, participants, initiatorId, currentU
   );
 }
 
-function DotaInviteCard({ msgId, chatId, isNeo, isMine, senderName, ready, myId }: {
+// Карточка Гандолиума: "/quest_card {json}" от поллера — закрытые задания,
+// прожарки, командные и рампаги. Клик ведёт на экран компендиума.
+function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
+  payload: any;
+  isNeo: boolean;
+  isMine: boolean;
+  senderName: string;
+}) {
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
+  const BLOOD = "#ff6a5e";
+  const GOLD = "#ffd24a";
+  const kind: string = payload.kind || "quest";
+  const special: string | undefined = payload.special;
+  const isAnti = kind === "anti";
+  const isTeam = kind === "team";
+  // Карточка лежит внутри пузыря сообщения, а поллер постит её от имени
+  // самого игрока — то есть «герой» всегда видит её как СВОЁ сообщение.
+  // Поэтому цвета считаем по всем четырём комбинациям тема × своё/чужое:
+  //   neo + mine    → лаймовый пузырь → тёмный текст
+  //   discord + mine → blurple-пузырь → белый текст (accent сливался бы!)
+  //   чужое          → тёмный пузырь → акцентные цвета
+  const darkOnLime = isNeo && isMine;
+  const lightOnBlurple = !isNeo && isMine;
+  const edgeHue = special === "rampage" ? BLOOD : special === "fullstack" ? GOLD : isAnti ? BLOOD : null;
+  const edge = darkOnLime
+    ? "rgba(0,0,0,0.55)"
+    : (edgeHue ?? (lightOnBlurple ? "rgba(255,255,255,0.7)" : "var(--accent)"));
+
+  const cardBg = isNeo
+    ? (isMine ? "rgba(0,0,0,0.18)" : "transparent")
+    : (isMine ? "rgba(255,255,255,0.16)" : "rgba(88,101,242,0.08)");
+  const titleColor = isNeo
+    ? (isMine ? "#0a0a0a" : "var(--text-header)")
+    : (isMine ? "#fff" : "var(--text-header)");
+  const subColor = isNeo
+    ? (isMine ? "rgba(0,0,0,0.65)" : "var(--text-muted)")
+    : (isMine ? "rgba(255,255,255,0.75)" : "var(--text-muted)");
+  const headerColor = darkOnLime ? "#0a0a0a" : (edgeHue ?? titleColor);
+  const gasColor = darkOnLime ? "#0a0a0a" : lightOnBlurple ? "#fff" : (isAnti ? BLOOD : "var(--accent)");
+  const levelColor = darkOnLime ? "#0a0a0a" : lightOnBlurple ? "#fff" : "var(--accent)";
+  const titleGold = darkOnLime ? "rgba(10,10,10,0.8)" : GOLD;
+
+  const header = special === "rampage" ? "🚨 РАМПАГА!!!"
+    : special === "fullstack" ? "🏆 СТАК ПОБЕДИЛ"
+    : isAnti ? "💀 ПРОЖАРКА"
+    : isTeam ? "🤝 КОМАНДНОЕ"
+    : "⛽ ЗАДАНИЕ ЗАКРЫТО";
+
+  const who = isTeam
+    ? (payload.who || payload.names || []).join(" + ")
+    : (payload.username || senderName);
+
+  const items: Array<{ name: string; gas: number; title?: string }> = payload.items || [];
+
+  const openCompendium = () => {
+    window.dispatchEvent(new CustomEvent("set-app-mode", { detail: { mode: "compendium" } }));
+  };
+
+  return (
+    <div
+      onClick={openCompendium}
+      title="Открыть Гандолиум"
+      style={{
+        padding: "10px 12px",
+        background: cardBg,
+        border: `1px solid ${edge}`,
+        borderLeft: `3px solid ${edge}`,
+        borderRadius: isNeo ? 0 : 8,
+        margin: "4px 0",
+        maxWidth: 380,
+        cursor: "pointer",
+      }}
+    >
+      <div style={{ ...mono, fontWeight: 800, fontSize: 12.5, letterSpacing: "0.06em", color: headerColor }}>
+        {header}
+      </div>
+      <div style={{ ...mono, color: subColor, fontSize: 12, marginTop: 2 }}>{who}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 8 }}>
+        {items.map((it, i) => (
+          <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
+            <span style={{ ...mono, fontSize: 13, fontWeight: 700, color: titleColor }}>
+              {it.name}
+              {it.title && <span style={{ color: titleGold, fontSize: 11, marginLeft: 6 }}>титул «{it.title}»</span>}
+            </span>
+            <span style={{ ...mono, fontSize: 12.5, fontWeight: 800, color: gasColor, whiteSpace: "nowrap" }}>
+              +{it.gas} ⛽
+            </span>
+          </div>
+        ))}
+      </div>
+      {(payload.new_level || payload.gas_total != null) && (
+        <div style={{ ...mono, fontSize: 11.5, color: subColor, marginTop: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>
+          {payload.new_level && (
+            <span style={{ color: levelColor, fontWeight: 800 }}>
+              🆙 УРОВЕНЬ {payload.new_level}
+            </span>
+          )}
+          {payload.gas_total != null && <span>всего: {payload.gas_total} ⛽ · ур. {payload.level}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function DotaInviteCard({ msgId, chatId, isNeo, isMine, senderName, ready, myId, gold }: {
   msgId: number;
   chatId: number;
   isNeo: boolean;
@@ -1821,6 +1944,7 @@ function DotaInviteCard({ msgId, chatId, isNeo, isMine, senderName, ready, myId 
   senderName: string;
   ready: Array<{ user_id: number; username: string }>;
   myId: number;
+  gold?: boolean; // Гандолиум ур.10: золотой зов
 }) {
   const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
   // Same palette juggling as PokerInviteCard — the card sits inside a message
@@ -1828,9 +1952,10 @@ function DotaInviteCard({ msgId, chatId, isNeo, isMine, senderName, ready, myId 
   const cardBg = isNeo
     ? (isMine ? "rgba(0,0,0,0.18)" : "transparent")
     : (isMine ? "rgba(255,255,255,0.16)" : "rgba(88,101,242,0.08)");
-  const cardBorder = isNeo
+  let cardBorder = isNeo
     ? (isMine ? "1px solid rgba(0,0,0,0.55)" : "1px solid var(--accent)")
     : (isMine ? "1px solid rgba(255,255,255,0.55)" : "1px solid rgba(88,101,242,0.4)");
+  if (gold) cardBorder = "1.5px solid #ffd24a";
   const titleColor = isNeo
     ? (isMine ? "#0a0a0a" : "var(--text-header)")
     : (isMine ? "#fff" : "var(--text-header)");
@@ -1874,9 +1999,9 @@ function DotaInviteCard({ msgId, chatId, isNeo, isMine, senderName, ready, myId 
       maxWidth: 360,
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={{ fontSize: 28 }}>⚔️</div>
+        <div style={{ fontSize: 28 }}>{gold ? "👑" : "⚔️"}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ ...mono, color: titleColor, fontWeight: 700, fontSize: 14 }}>
+          <div style={{ ...mono, color: gold ? "#ffd24a" : titleColor, fontWeight: 700, fontSize: 14 }}>
             {isNeo ? "// ГАЗУЕМ_В_ДОТАН" : "Газуем в дотан"}
           </div>
           <div style={{ ...mono, color: subColor, fontSize: 12, marginTop: 2 }}>

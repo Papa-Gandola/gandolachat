@@ -88,7 +88,7 @@ async def get_chats(
             created_by=chat.created_by,
             members=[UserOut.model_validate(m) for m in chat.members],
             last_message=last,
-            allow_all_write=chat.allow_all_write,
+            allow_all_write=chat.allow_all_write, compendium_enabled=chat.compendium_enabled,
             avatar_url=chat.avatar_url,
             description=chat.description,
             admin_ids=_parse_admin_ids(chat),
@@ -126,7 +126,7 @@ async def create_dm(
                 created_by=chat.created_by,
                 members=[UserOut.model_validate(m) for m in chat.members],
                 last_message=await _get_last_message(chat.id, db),
-                allow_all_write=chat.allow_all_write,
+                allow_all_write=chat.allow_all_write, compendium_enabled=chat.compendium_enabled,
                 avatar_url=chat.avatar_url,
                 description=chat.description,
                 admin_ids=_parse_admin_ids(chat),
@@ -157,7 +157,7 @@ async def create_dm(
         created_by=chat.created_by,
         members=[UserOut.model_validate(m) for m in chat.members],
         last_message=None,
-        allow_all_write=chat.allow_all_write,
+        allow_all_write=chat.allow_all_write, compendium_enabled=chat.compendium_enabled,
         avatar_url=chat.avatar_url,
     )
 
@@ -206,7 +206,7 @@ async def create_group(
         created_by=chat.created_by,
         members=[UserOut.model_validate(m) for m in chat.members],
         last_message=None,
-        allow_all_write=chat.allow_all_write,
+        allow_all_write=chat.allow_all_write, compendium_enabled=chat.compendium_enabled,
         avatar_url=chat.avatar_url,
         description=chat.description,
         admin_ids=_parse_admin_ids(chat),
@@ -286,6 +286,9 @@ async def update_chat(
         member_ids = {m.id for m in chat.members}
         clean = [uid for uid in data.admin_ids if uid in member_ids and uid != chat.created_by]
         chat.admin_ids = json.dumps(sorted(set(clean)))
+    if data.compendium_enabled is not None:
+        # Куда поллер Гандолиума постит карточки заданий
+        chat.compendium_enabled = bool(data.compendium_enabled)
     await db.commit()
     await db.refresh(chat)
     payload = ChatOut(
@@ -293,7 +296,7 @@ async def update_chat(
         created_by=chat.created_by,
         members=[UserOut.model_validate(m) for m in chat.members],
         last_message=None,
-        allow_all_write=chat.allow_all_write,
+        allow_all_write=chat.allow_all_write, compendium_enabled=chat.compendium_enabled,
         avatar_url=chat.avatar_url,
         description=chat.description,
         admin_ids=_parse_admin_ids(chat),
@@ -343,7 +346,7 @@ async def kick_member(
         created_by=chat.created_by,
         members=[UserOut.model_validate(m) for m in chat.members],
         last_message=None,
-        allow_all_write=chat.allow_all_write,
+        allow_all_write=chat.allow_all_write, compendium_enabled=chat.compendium_enabled,
         avatar_url=chat.avatar_url,
         description=chat.description,
         admin_ids=_parse_admin_ids(chat),
@@ -409,7 +412,7 @@ async def upload_group_avatar(
         created_by=chat.created_by,
         members=[UserOut.model_validate(m) for m in chat.members],
         last_message=None,
-        allow_all_write=chat.allow_all_write,
+        allow_all_write=chat.allow_all_write, compendium_enabled=chat.compendium_enabled,
         avatar_url=chat.avatar_url,
         description=chat.description,
         admin_ids=_parse_admin_ids(chat),
@@ -596,12 +599,18 @@ async def upload_file(
     async with aiofiles.open(path, "wb") as f:
         await f.write(content)
 
+    # Карточки компендиума создаёт только поллер — /quest_card в подписи файла
+    # отрисовался бы как настоящая ачивка (тот же щит, что в WS-обработчике).
+    clean_caption = caption.strip()
+    if clean_caption.startswith("/quest_card"):
+        clean_caption = ""
+
     msg = Message(
         chat_id=chat_id,
         sender_id=current_user.id,
         file_url=f"/uploads/files/{filename}",
         file_name=file.filename,
-        content=caption.strip() or None,
+        content=clean_caption or None,
         media_group_id=(media_group_id[:40] if media_group_id else None),
     )
     db.add(msg)

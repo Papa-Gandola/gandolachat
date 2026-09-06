@@ -24,6 +24,28 @@ function colorFor(id: number): string {
   return PALETTE[id % PALETTE.length];
 }
 
+// Служебные маркеры → человеческое превью (иначе в списке чатов светился бы
+// сырой "/quest_card {json}" от поллера Гандолиума). Зеркало десктопного
+// client/src/renderer/services/markers.ts.
+function markerPreview(content: string): string | null {
+  if (content.startsWith("/quest_card ")) {
+    try {
+      const p = JSON.parse(content.slice(12));
+      if (p.special === "rampage") return `🚨 РАМПАГА: ${p.username}!`;
+      if (p.special === "fullstack") return "🏆 СТАК ПОБЕДИЛ";
+      if (p.kind === "anti") return `💀 Прожарка: ${p.username}`;
+      if (p.kind === "team") return `🤝 ${(p.who || p.names || []).join(" + ")}`;
+      return `⛽ ${p.username} закрыл задание`;
+    } catch {
+      return "⛽ Компендиум";
+    }
+  }
+  if (content === "/dota_call") return "⚔️ Газуем в дотан";
+  if (/^\/poker_table \d+$/.test(content)) return "🃏 Покерный стол";
+  if (/^\/call_record (completed|missed|declined|cancelled)\|/.test(content)) return "📞 Звонок";
+  return null;
+}
+
 function letterFor(name: string | null): string {
   if (!name) return "?";
   const first = name.trim()[0] ?? "?";
@@ -189,7 +211,7 @@ export function useChats(): ChatsState {
       const avatarUrl = isGroup ? c.avatar_url ?? null : counterpart?.avatar_url ?? null;
       const last = c.last_message;
       const lastText = last?.content
-        ? last.content
+        ? (markerPreview(last.content) ?? last.content)
         : last?.file_name
           ? `📎 ${last.file_name}`
           : "";

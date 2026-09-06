@@ -24,6 +24,17 @@ export interface UserOut {
   grammar_errors?: number;
   is_admin?: boolean;
   last_seen?: string | null;
+  // Steam/Dota (компендиум); steam_id64 строкой — в number не влезает
+  steam_id64?: string | null;
+  dota_account_id?: number | null;
+  dota_rank_tier?: number | null;
+  dota_leaderboard_rank?: number | null;
+  // Косметика Гандолиума (разблокировки навсегда по comp_max_level)
+  comp_max_level?: number;
+  comp_badge?: boolean;
+  comp_title?: string | null;
+  comp_color?: string | null;
+  comp_frame?: string | null; // "lime" | "animated"
 }
 
 export interface MessageOut {
@@ -54,6 +65,7 @@ export interface ChatOut {
   avatar_url?: string | null;
   description?: string | null;
   admin_ids?: number[];
+  compendium_enabled?: boolean;
 }
 
 export interface ChatStats {
@@ -91,6 +103,93 @@ export const userApi = {
     form.append("file", file);
     return api.post<UserOut>("/api/users/avatar", form);
   },
+  // Steam/Dota: принимает ссылку на профиль, steamID64 или Friend ID
+  linkSteam: (input: string) => api.post<UserOut>("/api/users/me/steam", { input }),
+  unlinkSteam: () => api.delete<UserOut>("/api/users/me/steam"),
+  refreshSteam: () => api.post<UserOut>("/api/users/me/steam/refresh"),
+};
+
+// ==== Компендиум (Гандолиум) ====
+export interface CompendiumQuest {
+  id: string;
+  num: number;
+  name: string;
+  desc: string;
+  gas: number;
+  cat: "daily" | "weekly" | "season" | "team" | "anti" | "secret";
+  needs_parse: boolean;
+  done: boolean;
+  progress?: number;
+  target?: number;
+  title?: string;
+}
+
+export interface CompendiumTrophy {
+  quest_id: string;
+  name: string;
+  cat: string;
+  gas: number;
+  completed_at: string;
+  title?: string;
+}
+
+export interface CompendiumCosmetics {
+  max_level: number;
+  badge: boolean;
+  title: string | null;
+  color: string | null;
+  frame: string | null;
+  earned_titles: string[];
+  palette: string[];
+  unlocks: Record<string, number>;
+}
+
+export interface CompendiumMe {
+  linked: boolean;
+  cosmetics?: CompendiumCosmetics;
+  season: string;
+  gas?: number;
+  level?: number;
+  level_progress?: number;
+  level_target?: number;
+  matches?: number;
+  wins?: number;
+  rank_tier?: number | null;
+  leaderboard_rank?: number | null;
+  daily?: CompendiumQuest[];
+  weekly?: CompendiumQuest[];
+  season_quests?: CompendiumQuest[];
+  team?: CompendiumQuest[];
+  anti?: CompendiumQuest[];
+  trophies?: CompendiumTrophy[];
+}
+
+export interface CompendiumSeasonRow {
+  user_id: number;
+  username: string;
+  avatar_url: string | null;
+  gas: number;
+  level: number;
+  quests_done: number;
+  anti_count: number;
+  rank_tier: number | null;
+  leaderboard_rank: number | null;
+  comp_title?: string | null;
+  comp_color?: string | null;
+  comp_frame?: string | null;
+  comp_badge?: boolean;
+}
+
+export const compendiumApi = {
+  me: () => api.get<CompendiumMe>("/api/compendium/me"),
+  // ""/false = снять; надеть можно только открытое уровнем
+  updateCosmetics: (data: { badge?: boolean; title?: string; color?: string; frame?: string }) =>
+    api.patch<CompendiumCosmetics>("/api/compendium/cosmetics", data),
+  season: () => api.get<{ season: string; rows: CompendiumSeasonRow[]; me: number }>("/api/compendium/season"),
+  user: (userId: number) =>
+    api.get<{ user_id: number; username: string; season: string; gas: number; level: number; trophies: CompendiumTrophy[]; rank_tier: number | null; leaderboard_rank: number | null }>(
+      `/api/compendium/user/${userId}`
+    ),
 };
 
 export const chatApi = {
@@ -125,7 +224,7 @@ export const chatApi = {
     return api.post<ChatOut>(`/api/chats/${chatId}/avatar`, form);
   },
   stats: (chatId: number) => api.get<ChatStats>(`/api/chats/${chatId}/stats`),
-  update: (chatId: number, data: { name?: string; description?: string; admin_ids?: number[] }) =>
+  update: (chatId: number, data: { name?: string; description?: string; admin_ids?: number[]; compendium_enabled?: boolean }) =>
     api.patch<ChatOut>(`/api/chats/${chatId}`, data),
   kickMember: (chatId: number, userId: number) =>
     api.delete<ChatOut>(`/api/chats/${chatId}/members/${userId}`),

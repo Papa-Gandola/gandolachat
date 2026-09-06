@@ -513,6 +513,11 @@ async def handle_message(data: dict, sender_id: int, db: AsyncSession):
     if not chat_id or not content:
         return
 
+    # Карточки компендиума создаёт только поллер. Руками набитый /quest_card
+    # отрисовался бы как настоящая ачивка — фейковые достижения режем на входе.
+    if content.startswith("/quest_card"):
+        return
+
     result = await db.execute(
         select(Chat).join(Chat.members).where(Chat.id == chat_id, User.id == sender_id)
     )
@@ -632,6 +637,11 @@ async def handle_edit_message(data: dict, user_id: int, db: AsyncSession):
     msg_id = data.get("message_id")
     new_content = data.get("content", "").strip()
     if not msg_id or not new_content:
+        return
+
+    # Тот же щит, что и на новых сообщениях: карточку компендиума нельзя
+    # получить и через «отправил безобидное — отредактировал в /quest_card».
+    if new_content.startswith("/quest_card"):
         return
 
     result = await db.execute(select(Message).where(Message.id == msg_id, Message.sender_id == user_id))
