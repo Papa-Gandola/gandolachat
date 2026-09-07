@@ -40,6 +40,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
   const [data, setData] = useState<CompendiumMe | null>(null);
   const [tab, setTab] = useState<"quests" | "season" | "trophies" | "cosmetics">("quests");
   const [seasonRows, setSeasonRows] = useState<CompendiumSeasonRow[] | null>(null);
+  const [seasonError, setSeasonError] = useState(false);
   const [expandedUser, setExpandedUser] = useState<number | null>(null);
   const [userTrophies, setUserTrophies] = useState<Record<number, CompendiumTrophy[]>>({});
   const [resetLeft, setResetLeft] = useState(msToDailyReset());
@@ -77,7 +78,13 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
     try {
       const res = await compendiumApi.season();
       setSeasonRows(res.data.rows);
-    } catch { /* таблица просто не обновится */ }
+      setSeasonError(false);
+    } catch {
+      // Старые строки не трогаем — покажем их с пометкой «не обновилось».
+      // Раньше неудачная загрузка выглядела как «никто не привязал Steam»
+      // и пугала народ пустой таблицей.
+      setSeasonError(true);
+    }
   }
 
   useEffect(() => {
@@ -215,7 +222,13 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
               {([["quests", "ЗАДАНИЯ"], ["season", "СЕЗОН"], ["trophies", "ТРОФЕИ"], ["cosmetics", "КОСМЕТИКА"]] as const).map(([key, label]) => (
                 <button
                   key={key}
-                  onClick={() => setTab(key)}
+                  onClick={() => {
+                    setTab(key);
+                    // Клик по вкладке заодно освежает данные — дешёвый способ
+                    // восстановиться после неудачной загрузки
+                    if (key === "season") loadSeason();
+                    else load();
+                  }}
                   style={{
                     ...mono,
                     background: tab === key ? "var(--accent)" : "var(--bg-secondary)",
@@ -246,7 +259,17 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
 
             {tab === "season" && (
               <div style={s.panel(isNeo)}>
-                {!seasonRows?.length && (
+                {seasonError && (
+                  <p style={{ ...mono, color: BLOOD, fontSize: 12, margin: "0 0 10px" }}>
+                    ⚠ Не удалось обновить таблицу — показываю что есть, тыкни вкладку ещё раз
+                  </p>
+                )}
+                {!seasonRows && !seasonError && (
+                  <p style={{ ...mono, color: "var(--text-muted)", fontSize: 13, margin: 0 }}>
+                    Загружаю таблицу…
+                  </p>
+                )}
+                {seasonRows && !seasonRows.length && (
                   <p style={{ ...mono, color: "var(--text-muted)", fontSize: 13, margin: 0 }}>
                     Пока никто не привязал Steam — таблица пустая
                   </p>
