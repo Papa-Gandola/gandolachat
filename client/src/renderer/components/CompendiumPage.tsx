@@ -10,11 +10,10 @@ import { frameClass, frameStyle } from "./cosmetics";
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 const BLOOD = "#ff6a5e";
 const GOLD = "#ffd24a";
-// Тизер: крутится при первом заходе в Гандолиум. Файл кладём на сервер в
-// uploads/compendium/intro.mp4 — пока его нет, оверлей молча закрывается
-// (без установки флага, чтобы показать позже, когда видео зальют).
+// Тизер: крутится при КАЖДОМ заходе в Гандолиум (по многочисленным просьбам
+// трудящихся), по кругу — пока не нажали «Пропустить». Файл раздаёт сервер;
+// если его вдруг нет — оверлей молча закрывается.
 const INTRO_URL = `${BASE_URL}/uploads/compendium/intro.mp4`;
-const INTRO_SEEN_KEY = "gandolium.introSeen";
 
 // До полуночи по МСК (UTC+3) — момент ротации ежедневок
 function msToDailyReset(): number {
@@ -45,13 +44,10 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
   const [userTrophies, setUserTrophies] = useState<Record<number, CompendiumTrophy[]>>({});
   const [resetLeft, setResetLeft] = useState(msToDailyReset());
   const [error, setError] = useState("");
-  const [showIntro, setShowIntro] = useState(() => {
-    try { return localStorage.getItem(INTRO_SEEN_KEY) !== "1"; } catch { return false; }
-  });
+  const [showIntro, setShowIntro] = useState(true);
   const introRef = useRef<HTMLVideoElement>(null);
 
   function introDone() {
-    try { localStorage.setItem(INTRO_SEEN_KEY, "1"); } catch { /* приватный режим */ }
     setShowIntro(false);
   }
 
