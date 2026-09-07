@@ -1,102 +1,92 @@
 # GandolaChat
 
-Discord-подобный мессенджер для общения с друзьями.
+Свой мессенджер для чата друзей: Discord-подобный, со звонками, покером и
+сезонным компендиумом по Dota 2. Живёт на собственном VPS, данные — только у нас.
 
 ## Возможности
-- Личные сообщения и групповые чаты (до 7 человек)
-- Видеозвонки (до 7 человек) через WebRTC
-- Загрузка файлов и аватарок
-- Тёмная тема в стиле Discord
-- Сообщения хранятся 2 дня
 
----
+- Личные сообщения и групповые чаты (группы до 7 человек), реакции, ответы,
+  редактирование, пересылка, поиск, «печатает…», прочитанность
+- Сообщения хранятся **вечно** (чистка — только вручную админом)
+- Видеозвонки до 7 человек (WebRTC + свой TURN), шаринг экрана
+- Файлы и картинки до 50 МБ (альбомы-мозаики), аватарки
+- **Покер** — sit-and-go турниры прямо в чате, со шпаргалкой комбинаций
+  и подсказчиком шансов банка
+- **/dota** — карточка «Газуем в дотан» с кнопкой запуска игры и списком готовых
+- **Гандолиум** — сезонный компендиум по рейтинговым каткам Dota 2:
+  привязка Steam, звание в профиле, 70 авто-заданий (ежедневки, еженедельки,
+  марафоны, командные, анти-ачивки, пасхалки), газ ⛽, уровни, косметика
+  (титулы, цвета ников, рамки), таблица сезона и полка трофеев
+- Две темы: Discord-стайл и «neo» (моно-шрифт, кастомные цвета)
+- Регистрация с одобрением админа; пуш-уведомления на телефон
+- Клиенты: Windows (.exe), веб, iPhone/Android как PWA («На экран Домой»)
 
 ## Быстрый старт (разработка)
 
-### 1. Запуск сервера
-
 ```bash
-cd server
-pip install -r requirements.txt
-# Нужен PostgreSQL. Запусти через Docker:
-docker run -d --name pg -e POSTGRES_USER=gandola -e POSTGRES_PASSWORD=gandola -e POSTGRES_DB=gandolachat -p 5432:5432 postgres:16-alpine
-uvicorn app.main:app --reload
+# Сервер (нужен PostgreSQL)
+docker run -d --name pg -e POSTGRES_USER=gandola -e POSTGRES_PASSWORD=gandola \
+  -e POSTGRES_DB=gandolachat -p 5432:5432 postgres:16-alpine
+cd server && pip install -r requirements.txt && uvicorn app.main:app --reload
+
+# Десктоп-клиент
+cd client && npm install && npm run dev
+
+# Мобилка (Expo)
+cd mobile && npm install && npm start
 ```
 
-### 2. Запуск клиента
+Миграции БД накатываются сами при старте сервера.
+
+## Прод
+
+VPS + Docker Compose (`db` + `server`), сверху — хостовый **nginx с
+Let's Encrypt**: наружу только `https://…` / `wss://…`, порт 8000 закрыт.
+Звонки ходят через системный **coturn** (диапазон портов должен совпадать
+с правилами ufw). Секрет: `SECRET_KEY` в окружении (менять нельзя —
+разлогинит всех).
+
+Обновление сервера:
 
 ```bash
-cd client
-npm install
-npm run dev
+git pull && docker compose build server && docker compose up -d server
 ```
 
----
+Обновление PWA: `cd mobile && npm run build:web` → содержимое `mobile/dist/`
+скопировать в `server/web/` (bind-mount, рестарт не нужен).
 
-## Деплой на VPS (продакшн)
+## Релизы десктопа
 
-### На сервере:
+Версия задаётся в `client/package.json` (и в шапке `Main.tsx`). После мержа
+в main:
 
 ```bash
-# Установить Docker и Docker Compose
-curl -fsSL https://get.docker.com | sh
-
-# Клонировать/залить проект
-git clone <your-repo> gandola-chat
-cd gandola-chat
-
-# Задать секретный ключ
-export SECRET_KEY="your-super-secret-key-min-32-chars"
-
-# Запустить
-docker-compose up -d
+git tag v2.x.x && git push origin v2.x.x
 ```
 
-Сервер будет доступен на порту **8000**.
-
----
-
-## Сборка .exe для Windows
-
-1. Отредактируй `client/.env`:
-   ```
-   VITE_API_URL=http://YOUR_VPS_IP:8000
-   VITE_WS_URL=ws://YOUR_VPS_IP:8000
-   ```
-
-2. Собери установщик:
-   ```bash
-   cd client
-   npm install
-   npm run dist
-   ```
-
-3. Установщик появится в `client/release/GandolaChat Setup.exe`
-
-Раздай `.exe` друзьям — они просто устанавливают и заходят!
-
----
+GitHub Actions соберёт **черновик** релиза (Linux создаёт, Windows докладывает
+.exe) — останется нажать *Publish release*. Автообновление подхватит само.
+Нативный Android собирается тегом `mobile-v*` (EAS), версия у мобилки своя.
 
 ## Структура проекта
 
 ```
-gandola-chat/
-├── server/                 # FastAPI бэкенд
+gandolachat/
+├── server/                 # FastAPI + SQLAlchemy async + PostgreSQL
 │   ├── app/
-│   │   ├── main.py         # Точка входа
-│   │   ├── models.py       # БД модели
-│   │   ├── schemas.py      # Pydantic схемы
-│   │   ├── auth.py         # JWT авторизация
-│   │   ├── api/            # REST роуты
-│   │   └── ws/             # WebSocket + WebRTC сигналинг
-│   └── Dockerfile
-├── client/                 # Electron + React
-│   ├── src/
-│   │   ├── main/           # Electron процесс
-│   │   └── renderer/       # React UI
-│   │       ├── pages/      # Auth, Main
-│   │       ├── components/ # Sidebar, ChatArea, VideoCall...
-│   │       └── services/   # api.ts, ws.ts, webrtc.ts
-│   └── package.json
+│   │   ├── main.py         # Точка входа, статика, планировщик джоб
+│   │   ├── models.py       # БД: юзеры, чаты, покер, компендиум
+│   │   ├── api/            # REST: auth, users, chats, poker, dota, compendium
+│   │   ├── ws/             # WebSocket: чат, звонки, покер, сигналинг
+│   │   ├── compendium/     # Гандолиум: задания, движок, поллер OpenDota
+│   │   ├── poker_*.py      # Покерный движок
+│   │   └── opendota.py     # Клиент OpenDota API
+│   ├── alembic/            # Миграции
+│   └── assets/             # Видео-тизер Гандолиума
+├── client/                 # Десктоп: Electron + React + Vite
+│   └── src/renderer/       # pages/, components/, services/
+├── mobile/                 # Android + веб-PWA: Expo / React Native
 └── docker-compose.yml
 ```
+
+Подробная карта проекта для разработки — в `CLAUDE.md`.
