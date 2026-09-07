@@ -124,13 +124,14 @@ async def _compendium_chats_for(db, user_id: int) -> list[Chat]:
 async def _post_card(db, chat: Chat, sender: User, payload: dict,
                      push_title: str | None = None, push_body: str | None = None) -> None:
     """Карточка = обычное сообщение с маркером /quest_card + JSON. Клиенты
-    рендерят её красиво; старые — как текст. Живёт по обычному TTL чата."""
+    рендерят её красиво; старые — как текст. Без expires_at — обычные
+    сообщения в Гандоле вечные (TTL давно снят, чистка только ручная
+    админом), и «СТАК ПОБЕДИЛ» не должен испаряться раньше переписки."""
     content = f"{QUEST_CARD_MARKER} {json.dumps(payload, ensure_ascii=False)}"
     msg = Message(
         chat_id=chat.id,
         sender_id=sender.id,
         content=content,
-        expires_at=datetime.now(timezone.utc) + timedelta(days=settings.MESSAGE_TTL_DAYS),
     )
     db.add(msg)
     await db.commit()
