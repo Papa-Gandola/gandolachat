@@ -27,14 +27,17 @@ def _get_client() -> httpx.AsyncClient:
     global _client
     if _client is None:
         _client = httpx.AsyncClient(
-            timeout=15.0,
+            # Бесплатный OpenDota бывает задумчивым: коннект должен падать
+            # быстро (мёртвая сеть — 5с, не 15), а вот ответа ждём терпеливо —
+            # медленный ответ лучше, чем «таймаут» на живом API.
+            timeout=httpx.Timeout(connect=5.0, read=25.0, write=10.0, pool=10.0),
             headers={"User-Agent": "GandolaChat compendium"},
             # OpenDota живёт за Cloudflare и резолвится в IPv6 первым. VPS с
-            # настроенным, но неработающим IPv6 — классика: коннект висит до
-            # таймаута, хотя IPv4-хосты (Expo и т.п.) прекрасно работают.
-            # Привязка локального адреса к 0.0.0.0 заставляет httpx ходить
-            # только по IPv4; retries=1 сглаживает разовые сетевые чихи.
-            transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=1),
+            # настроенным, но неработающим IPv6 — классика: коннект виснет,
+            # хотя IPv4-хосты (Expo и т.п.) прекрасно работают. Привязка
+            # локального адреса к 0.0.0.0 заставляет httpx ходить только по
+            # IPv4; retries=2 сглаживает разовые сетевые чихи на коннекте.
+            transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=2),
         )
     return _client
 
