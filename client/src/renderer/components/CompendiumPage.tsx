@@ -10,10 +10,17 @@ import { frameClass, frameStyle } from "./cosmetics";
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 const BLOOD = "#ff6a5e";
 const GOLD = "#ffd24a";
-// Тизер: крутится при КАЖДОМ заходе в Гандолиум (по многочисленным просьбам
-// трудящихся), по кругу — пока не нажали «Пропустить». Файл раздаёт сервер;
+// Тизер: по умолчанию крутится при КАЖДОМ заходе в Гандолиум (по
+// многочисленным просьбам трудящихся), по кругу — пока не нажали
+// «Пропустить». Чек-бокс «отключить заставку» (на оверлее и в строке
+// вкладок) убирает её насовсем — и так же возвращает. Файл раздаёт сервер;
 // если его вдруг нет — оверлей молча закрывается.
 const INTRO_URL = `${BASE_URL}/uploads/compendium/intro.mp4`;
+const INTRO_OFF_KEY = "gandolium.introOff";
+
+function readIntroOff(): boolean {
+  try { return localStorage.getItem(INTRO_OFF_KEY) === "1"; } catch { return false; }
+}
 
 // До полуночи по МСК (UTC+3) — момент ротации ежедневок
 function msToDailyReset(): number {
@@ -45,11 +52,20 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
   const [userTrophies, setUserTrophies] = useState<Record<number, CompendiumTrophy[]>>({});
   const [resetLeft, setResetLeft] = useState(msToDailyReset());
   const [error, setError] = useState("");
-  const [showIntro, setShowIntro] = useState(true);
+  const [introOff, setIntroOffState] = useState(readIntroOff);
+  const [showIntro, setShowIntro] = useState(() => !readIntroOff());
   const introRef = useRef<HTMLVideoElement>(null);
 
   function introDone() {
     setShowIntro(false);
+  }
+
+  function setIntroOff(off: boolean) {
+    setIntroOffState(off);
+    try {
+      if (off) localStorage.setItem(INTRO_OFF_KEY, "1");
+      else localStorage.removeItem(INTRO_OFF_KEY);
+    } catch { /* приватный режим — переживём */ }
   }
 
   // Автоплей со звуком: клик по пункту меню даёт user activation, но если
@@ -151,12 +167,23 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
             onError={() => setShowIntro(false)}
             style={{ maxWidth: "100%", maxHeight: "82vh", outline: "none" }}
           />
-          <button
-            onClick={introDone}
-            style={{ ...mono, background: "transparent", color: "var(--accent)", border: "1px solid var(--accent)", borderRadius: isNeo ? 0 : 6, padding: "8px 18px", fontSize: 13, fontWeight: 700, letterSpacing: "0.06em", cursor: "pointer" }}
-          >
-            ПРОПУСТИТЬ →
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap", justifyContent: "center" }}>
+            <button
+              onClick={introDone}
+              style={{ ...mono, background: "transparent", color: "var(--accent)", border: "1px solid var(--accent)", borderRadius: isNeo ? 0 : 6, padding: "8px 18px", fontSize: 13, fontWeight: 700, letterSpacing: "0.06em", cursor: "pointer" }}
+            >
+              ПРОПУСТИТЬ →
+            </button>
+            <label style={{ ...mono, display: "flex", alignItems: "center", gap: 7, color: "rgba(255,255,255,0.75)", fontSize: 12, cursor: "pointer", userSelect: "none" }}>
+              <input
+                type="checkbox"
+                checked={introOff}
+                onChange={(e) => setIntroOff(e.target.checked)}
+                style={{ accentColor: "var(--accent)", width: 14, height: 14, cursor: "pointer" }}
+              />
+              больше не показывать
+            </label>
+          </div>
         </div>
       )}
       <div style={{ ...s.header, ...(isNeo ? { borderBottomColor: "var(--accent)" } : {}) }}>
@@ -241,6 +268,18 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                   {label}
                 </button>
               ))}
+              <label
+                title="Заставка при входе в Гандолиум"
+                style={{ ...mono, display: "flex", alignItems: "center", gap: 6, marginLeft: "auto", color: "var(--text-muted)", fontSize: 11.5, cursor: "pointer", userSelect: "none" }}
+              >
+                <input
+                  type="checkbox"
+                  checked={introOff}
+                  onChange={(e) => setIntroOff(e.target.checked)}
+                  style={{ accentColor: "var(--accent)", width: 13, height: 13, cursor: "pointer" }}
+                />
+                🎬 отключить заставку
+              </label>
             </div>
 
             {tab === "quests" && (
