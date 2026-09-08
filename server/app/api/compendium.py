@@ -97,14 +97,30 @@ async def my_compendium(
     ctx = await poller._build_ctx(db, current_user, season)
     keys = ctx.completion_keys
 
+    daily_active = daily_rotation(today)
+    weekly_active = weekly_rotation(this_week)
     daily = [
         _quest_dict(BY_ID[qid], done=(qid, today) in keys)
-        for qid in daily_rotation(today)
+        for qid in daily_active
     ]
     weekly = [
         _quest_dict(BY_ID[qid], done=(qid, this_week) in keys)
-        for qid in weekly_rotation(this_week)
+        for qid in weekly_active
     ]
+
+    # Полные пулы (для разворота «показать все»): активные помечены. Отдаём
+    # отдельными полями — старые клиенты продолжают видеть только тройки.
+    def _pool(pool_ids: list[str], active_ids: list[str], period_key: str) -> list[dict]:
+        out = []
+        for qid in sorted(pool_ids, key=lambda i: BY_ID[i].num):
+            d = _quest_dict(BY_ID[qid], done=(qid, period_key) in keys)
+            d["active"] = qid in active_ids
+            out.append(d)
+        return out
+
+    from app.compendium.quests import DAILY_POOL, WEEKLY_POOL
+    daily_pool = _pool(DAILY_POOL, daily_active, today)
+    weekly_pool = _pool(WEEKLY_POOL, weekly_active, this_week)
 
     season_quests = []
     for q in QUESTS:
@@ -175,6 +191,8 @@ async def my_compendium(
         "leaderboard_rank": current_user.dota_leaderboard_rank,
         "daily": daily,
         "weekly": weekly,
+        "daily_pool": daily_pool,
+        "weekly_pool": weekly_pool,
         "season_quests": season_quests,
         "team": team,
         "anti": anti,

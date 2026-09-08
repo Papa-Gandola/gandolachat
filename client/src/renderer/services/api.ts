@@ -122,6 +122,7 @@ export interface CompendiumQuest {
   progress?: number;
   target?: number;
   title?: string;
+  active?: boolean; // для элементов *_pool: в сегодняшней/этой недели ротации
 }
 
 export interface CompendiumTrophy {
@@ -158,6 +159,9 @@ export interface CompendiumMe {
   leaderboard_rank?: number | null;
   daily?: CompendiumQuest[];
   weekly?: CompendiumQuest[];
+  // Полные пулы с флагом active — для разворота «показать все»
+  daily_pool?: CompendiumQuest[];
+  weekly_pool?: CompendiumQuest[];
   season_quests?: CompendiumQuest[];
   team?: CompendiumQuest[];
   anti?: CompendiumQuest[];
