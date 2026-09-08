@@ -284,8 +284,8 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
 
             {tab === "quests" && (
               <>
-                <QuestGroup isNeo={isNeo} title="ЕЖЕДНЕВКИ" meta={`ротация через ${fmtLeft(resetLeft)}`} quests={data.daily || []} />
-                <QuestGroup isNeo={isNeo} title="ЕЖЕНЕДЕЛЬКИ" meta="сброс в понедельник" quests={data.weekly || []} />
+                <QuestGroup isNeo={isNeo} title="ЕЖЕДНЕВКИ" meta={`ротация через ${fmtLeft(resetLeft)}`} quests={data.daily || []} pool={data.daily_pool} />
+                <QuestGroup isNeo={isNeo} title="ЕЖЕНЕДЕЛЬКИ" meta="сброс в понедельник" quests={data.weekly || []} pool={data.weekly_pool} />
                 <QuestGroup isNeo={isNeo} title="МАРАФОНЫ СЕЗОНА" meta="висят весь месяц" quests={data.season_quests || []} />
                 <QuestGroup isNeo={isNeo} title="КОМАНДНЫЕ" meta="катки с людьми из чата — газ всем" quests={data.team || []} accent />
                 <QuestGroup isNeo={isNeo} title="АНТИ-АЧИВКИ" meta="выдаются сами, отказаться нельзя" quests={data.anti || []} blood />
@@ -571,17 +571,22 @@ function TrophyChip({ t, isNeo }: { t: CompendiumTrophy; isNeo: boolean }) {
   );
 }
 
-function QuestGroup({ isNeo, title, meta, quests, blood, accent }: {
+function QuestGroup({ isNeo, title, meta, quests, pool, blood, accent }: {
   isNeo: boolean;
   title: string;
   meta: string;
   quests: CompendiumQuest[];
+  pool?: CompendiumQuest[]; // полный пул с active-флагами → появляется разворот
   blood?: boolean;
   accent?: boolean;
 }) {
   const mono = { fontFamily: "var(--font-mono)" };
   const edge = blood ? BLOOD : "var(--accent)";
+  const [expanded, setExpanded] = useState(false);
   if (!quests.length) return null;
+  const hasPool = !!pool?.length && pool.length > quests.length;
+  // Свёрнуто — активная тройка; развёрнуто — весь пул (неактивные приглушены)
+  const rows = hasPool && expanded ? pool! : quests;
   return (
     <div style={{
       border: "1px solid var(--border)", marginBottom: 18,
@@ -592,33 +597,52 @@ function QuestGroup({ isNeo, title, meta, quests, blood, accent }: {
         <span style={{ ...mono, fontWeight: 800, fontSize: 12.5, letterSpacing: "0.08em", color: blood ? BLOOD : "var(--accent)" }}>
           // {title}
         </span>
-        <span style={{ ...mono, fontSize: 11, color: "var(--text-muted)" }}>{meta}</span>
+        <span style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
+          <span style={{ ...mono, fontSize: 11, color: "var(--text-muted)" }}>{meta}</span>
+          {hasPool && (
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              style={{ ...mono, background: "none", border: "none", color: "var(--accent)", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: "0.04em", padding: 0 }}
+            >
+              {expanded ? "свернуть ▴" : `весь пул (${pool!.length}) ▾`}
+            </button>
+          )}
+        </span>
       </div>
-      {quests.map((q) => (
-        <div key={q.id} style={{ display: "flex", gap: 12, padding: "9px 14px", borderBottom: "1px solid var(--border)", alignItems: "baseline", opacity: q.done ? 0.75 : 1 }}>
-          <span style={{ ...mono, fontSize: 12, width: 18, color: q.done ? "var(--accent)" : "var(--text-muted)" }}>
-            {q.done ? "✓" : String(q.num).padStart(2, "0")}
-          </span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ ...mono, fontWeight: 700, fontSize: 13, color: "var(--text-primary)", textDecoration: q.done ? "line-through" : "none" }}>
-              {q.name}{q.needs_parse ? <span style={{ fontSize: 10.5, marginLeft: 6, opacity: 0.7 }}>📼</span> : null}
-              {q.title && <span style={{ color: GOLD, marginLeft: 8, fontSize: 11 }}>титул</span>}
-            </div>
-            <div style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 1 }}>{q.desc}</div>
-            {typeof q.progress === "number" && typeof q.target === "number" && !q.done && (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5 }}>
-                <div style={{ flex: 1, maxWidth: 220, height: 5, background: "var(--bg-tertiary)", borderRadius: isNeo ? 0 : 3, overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${Math.min(100, (q.progress / q.target) * 100)}%`, background: "var(--accent)" }} />
-                </div>
-                <span style={{ ...mono, fontSize: 10.5, color: "var(--text-muted)" }}>{q.progress}/{q.target}</span>
+      {rows.map((q) => {
+        const inactive = expanded && hasPool && q.active === false;
+        return (
+          <div key={q.id} style={{ display: "flex", gap: 12, padding: "9px 14px", borderBottom: "1px solid var(--border)", alignItems: "baseline", opacity: inactive ? 0.45 : q.done ? 0.75 : 1 }}>
+            <span style={{ ...mono, fontSize: 12, width: 18, color: q.done ? "var(--accent)" : "var(--text-muted)" }}>
+              {q.done ? "✓" : String(q.num).padStart(2, "0")}
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ ...mono, fontWeight: 700, fontSize: 13, color: "var(--text-primary)", textDecoration: q.done ? "line-through" : "none" }}>
+                {q.name}{q.needs_parse ? <span style={{ fontSize: 10.5, marginLeft: 6, opacity: 0.7 }}>📼</span> : null}
+                {q.title && <span style={{ color: GOLD, marginLeft: 8, fontSize: 11 }}>титул</span>}
+                {expanded && hasPool && q.active && !q.done && (
+                  <span style={{ color: "var(--accent)", marginLeft: 8, fontSize: 10.5, letterSpacing: "0.05em" }}>● активно</span>
+                )}
+                {inactive && (
+                  <span style={{ color: "var(--text-muted)", marginLeft: 8, fontSize: 10.5 }}>не в ротации</span>
+                )}
               </div>
-            )}
+              <div style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 1 }}>{q.desc}</div>
+              {typeof q.progress === "number" && typeof q.target === "number" && !q.done && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5 }}>
+                  <div style={{ flex: 1, maxWidth: 220, height: 5, background: "var(--bg-tertiary)", borderRadius: isNeo ? 0 : 3, overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${Math.min(100, (q.progress / q.target) * 100)}%`, background: "var(--accent)" }} />
+                  </div>
+                  <span style={{ ...mono, fontSize: 10.5, color: "var(--text-muted)" }}>{q.progress}/{q.target}</span>
+                </div>
+              )}
+            </div>
+            <span style={{ ...mono, fontWeight: 800, fontSize: 12.5, color: blood ? BLOOD : "var(--accent)", whiteSpace: "nowrap" }}>
+              {blood ? "+" : ""}{q.gas} ⛽
+            </span>
           </div>
-          <span style={{ ...mono, fontWeight: 800, fontSize: 12.5, color: blood ? BLOOD : "var(--accent)", whiteSpace: "nowrap" }}>
-            {blood ? "+" : ""}{q.gas} ⛽
-          </span>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
