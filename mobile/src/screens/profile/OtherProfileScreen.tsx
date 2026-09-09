@@ -4,6 +4,7 @@ import { ActivityIndicator, ScrollView, Text, View } from "react-native";
 
 import { AppBar } from "../../components/AppBar";
 import { Avatar } from "../../components/Avatar";
+import { DotaRankBadge } from "../../components/DotaRankBadge";
 import { ChevronLeftIcon } from "../../components/icons";
 import { IconBtn } from "../../components/IconBtn";
 import { ScreenContainer } from "../../components/ScreenContainer";
@@ -90,12 +91,22 @@ export function OtherProfileScreen({ navigation, route }: Props) {
                 fontFamily: theme.fonts.mono,
                 fontSize: 18,
                 fontWeight: "700",
-                color: theme.colors.ink,
+                color: user.comp_color || theme.colors.ink,
                 marginTop: 12,
               }}
             >
-              {user.username}
+              {user.username}{user.comp_badge ? " ⛽" : ""}
             </Text>
+            {user.comp_title ? (
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: "#ffd24a", marginTop: 3 }}>
+                «{user.comp_title}»
+              </Text>
+            ) : null}
+            {user.dota_rank_tier ? (
+              <View style={{ marginTop: 8 }}>
+                <DotaRankBadge rankTier={user.dota_rank_tier} leaderboardRank={user.dota_leaderboard_rank} />
+              </View>
+            ) : null}
             {user.status ? (
               <Text
                 style={{

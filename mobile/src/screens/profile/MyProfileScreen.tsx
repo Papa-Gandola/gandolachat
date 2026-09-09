@@ -5,6 +5,7 @@ import { ActivityIndicator, Alert, Pressable, ScrollView, Text, TextInput, View 
 
 import { AppBar } from "../../components/AppBar";
 import { Avatar } from "../../components/Avatar";
+import { DotaRankBadge } from "../../components/DotaRankBadge";
 import { SettingsIcon } from "../../components/icons";
 import { IconBtn } from "../../components/IconBtn";
 import { NeoButton } from "../../components/NeoButton";
@@ -112,6 +113,9 @@ export function MyProfileScreen({ navigation }: Props) {
           <StatCard theme={theme} value={String(u?.grammar_errors ?? 0)} label="ошибок грамотности" />
           <StatCard theme={theme} value={u?.is_admin ? "да" : "нет"} label="админ" />
         </View>
+
+        <Section>DOTA 2</Section>
+        <DotaSection theme={theme} />
 
         <Section>БЕЗОПАСНОСТЬ</Section>
         <PasswordChange theme={theme} />
@@ -271,6 +275,144 @@ function EditableRow({
           </Text>
         </Pressable>
       )}
+    </View>
+  );
+}
+
+function DotaSection({ theme }: { theme: ThemeT }) {
+  const auth = useAuth();
+  const u = auth.user;
+  const linked = !!u?.dota_account_id;
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [confirmUnlink, setConfirmUnlink] = useState(false);
+
+  const run = async (fn: () => Promise<{ data: import("../../services/api").UserOut }>) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fn();
+      auth.updateUser(res.data);
+      setInput("");
+      setConfirmUnlink(false);
+    } catch (e) {
+      setErr(apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const inputStyle = {
+    fontFamily: theme.fonts.mono,
+    fontSize: 13,
+    color: theme.colors.ink,
+    backgroundColor: theme.colors.bgInput,
+    borderRadius: theme.radius.sm,
+    borderWidth: 1,
+    borderColor: theme.colors.accent,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  } as const;
+
+  const btn = (bg: string, fg: string, border?: string) =>
+    ({
+      paddingHorizontal: 13,
+      paddingVertical: 8,
+      borderRadius: theme.radius.sm,
+      backgroundColor: bg,
+      borderWidth: border ? 1 : 0,
+      borderColor: border,
+      opacity: busy ? 0.6 : 1,
+    }) as const;
+
+  if (!linked) {
+    return (
+      <View style={{ paddingHorizontal: 16, paddingVertical: 10, gap: 8 }}>
+        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11.5, color: theme.colors.inkDim, lineHeight: 17 }}>
+          Привяжи Steam — появится звание, а катки начнут засчитываться в Гандолиум ⛽
+        </Text>
+        <TextInput
+          value={input}
+          onChangeText={setInput}
+          placeholder="Ссылка на Steam-профиль или Friend ID"
+          placeholderTextColor={theme.colors.inkMuted}
+          autoCapitalize="none"
+          autoCorrect={false}
+          style={inputStyle}
+        />
+        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: theme.colors.inkMuted }}>
+          Подойдёт: steamcommunity.com/profiles/…, ссылка Dotabuff/OpenDota или Friend ID из Доты
+        </Text>
+        {err ? (
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.danger }}>{err}</Text>
+        ) : null}
+        <Pressable
+          onPress={() => input.trim() && run(() => userApi.linkSteam(input.trim()))}
+          disabled={busy || !input.trim()}
+          style={btn(theme.colors.accent, theme.colors.accentText)}
+        >
+          {busy ? (
+            <ActivityIndicator size="small" color={theme.colors.accentText} />
+          ) : (
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "700", color: theme.colors.accentText, textAlign: "center" }}>
+              {theme.decorate ? "[ПРИВЯЗАТЬ]" : "Привязать"}
+            </Text>
+          )}
+        </Pressable>
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ paddingHorizontal: 16, paddingVertical: 10, gap: 10 }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        {u?.dota_rank_tier ? (
+          <DotaRankBadge rankTier={u.dota_rank_tier} leaderboardRank={u.dota_leaderboard_rank} />
+        ) : (
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.inkMuted, fontStyle: "italic" }}>
+            звание пока не видно
+          </Text>
+        )}
+        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted }}>
+          ID {u?.dota_account_id}
+        </Text>
+      </View>
+      {!u?.dota_rank_tier ? (
+        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted, lineHeight: 15 }}>
+          Проверь в Доте: Настройки → Приватность → «Сделать общедоступной статистику матчей», сыграй катку и жми «Обновить»
+        </Text>
+      ) : null}
+      {err ? (
+        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.danger }}>{err}</Text>
+      ) : null}
+      <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+        <Pressable onPress={() => run(() => userApi.refreshSteam())} disabled={busy} style={btn(theme.colors.bgElev, theme.colors.ink, theme.colors.border)}>
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.ink }}>
+            {busy ? "…" : theme.decorate ? "[обновить]" : "Обновить"}
+          </Text>
+        </Pressable>
+        {!confirmUnlink ? (
+          <Pressable onPress={() => setConfirmUnlink(true)} disabled={busy} style={btn("transparent", theme.colors.inkDim, theme.colors.border)}>
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.inkDim }}>
+              {theme.decorate ? "[отвязать]" : "Отвязать"}
+            </Text>
+          </Pressable>
+        ) : (
+          <>
+            <Pressable onPress={() => run(() => userApi.unlinkSteam())} disabled={busy} style={btn("transparent", theme.colors.danger, theme.colors.danger)}>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.danger }}>
+                {theme.decorate ? "[точно отвязать]" : "Точно отвязать"}
+              </Text>
+            </Pressable>
+            <Pressable onPress={() => setConfirmUnlink(false)} style={btn("transparent", theme.colors.inkDim, theme.colors.border)}>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.inkDim }}>
+                {theme.decorate ? "[отмена]" : "Отмена"}
+              </Text>
+            </Pressable>
+          </>
+        )}
+      </View>
     </View>
   );
 }

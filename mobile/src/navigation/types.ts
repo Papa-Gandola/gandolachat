@@ -50,6 +50,7 @@ export type ProfileStackParamList = {
 
 export type MainTabsParamList = {
   Chats: NavigatorScreenParams<ChatsStackParamList>;
+  Compendium: undefined;
   Profile: NavigatorScreenParams<ProfileStackParamList>;
 };
 
