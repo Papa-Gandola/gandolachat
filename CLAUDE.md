@@ -81,9 +81,12 @@ Discord-подобный мессенджер для чата друзей (~50 
   user_online/offline, typing, new_chat, chat_updated/deleted,
   profile_updated, new_pending_user, dota_ready_update, poker_table_
   created/updated/removed, poker_state, call_signal/call_end.
-- `app/push.py` — Expo push (native Android). Троттлинг 15с/чат для обычных
-  сообщений; /dota и рампага/фулл-стак — без троттлинга. Web Push для PWA
-  НЕ подключён (sw.js зарегистрирован «на будущее»).
+- `app/push.py` — send_push бьёт в ОБА канала: Expo (native Android) и
+  Web Push (`app/webpush.py`, PWA/айфоны — VAPID-ключи генерятся сами в
+  uploads/vapid/, pywebpush в тредпуле, мёртвые подписки 404/410
+  вычищаются; подписки в web_push_subscriptions, миграция 0006; ручки
+  /api/users/web-push*). Троттлинг 15с/чат для обычных сообщений; /dota и
+  рампага/фулл-стак — без троттлинга.
 - Покер: `poker_engine.py` (колода, оценка 7→5), `poker_game.py`
   (síт-энд-гоу: блайнды растут по времени, сайд-поты, шоудаун, GameStore —
   **in-memory**, рестарт сервера убивает раздачу), `api/poker.py` (столы в
@@ -137,8 +140,8 @@ Discord-подобный мессенджер для чата друзей (~50 
   копирует в uploads-том → `/uploads/compendium/intro.mp4`. Замена видео =
   замена файла в репо.
 - Миграции `alembic/versions/`: 0001 базовая, 0002 push_tokens,
-  0003 компендиум, 0004 косметика, 0005 BIGINT+unique на dota_account_id.
-  Только добавления; прогоняются сами на старте.
+  0003 компендиум, 0004 косметика, 0005 BIGINT+unique на dota_account_id,
+  0006 web_push_subscriptions. Только добавления; прогоняются сами на старте.
 
 ## Клиент десктоп (`client/`, Electron + React + Vite)
 
@@ -196,7 +199,11 @@ Discord-подобный мессенджер для чата друзей (~50 
 привязкой Steam, DotaRankBadge). PWA-обвязка: public/manifest.webmanifest +
 icon-192/512 + статические apple-теги инжектятся постбилдом в index.html
 (scripts/postbuild-web.js) — НЕ полагаться на рантайм-инжект webPwa.ts.
-sw.js без кэша (нарочно). Пуши: Expo (native); web push НЕ подключён.
+sw.js без кэша (нарочно). Пуши: Expo (native) + **Web Push для PWA**
+(services/webPush.ts: включение — кнопкой «Уведомления» в профиле, iOS
+требует жест; на старте молчаливая переподписка). ws.ts: pong-надзор (3
+безответных пинга → close → реконнект) + мгновенный реконнект на AppState
+active/visibilitychange — иначе после разворота телефона сокет «полумёртв».
 Версия своя (0.7.x, app.json+package.json).
 
 ## Локальная проверка (как я гоняю без окружения хозяина)
@@ -241,6 +248,5 @@ sw.js без кэша (нарочно). Пуши: Expo (native); web push НЕ �
 
 Финал сезона: авто-подиум в последний день месяца (🥇 рамка, аватарка
 позора голосованием, соц-ставки) + рамки gold/silver/bronze зарезервированы
-в косметике. Web Push для PWA (sw.js и push-хендлер уже готовы, нужен
-сервер: VAPID + pywebpush + таблица подписок). Покер-ассист на мобилке.
-«Страховка от дна» (сжечь 300⛽ — стереть анти-ачивку), фонд сезона.
+в косметике. Покер-ассист на мобилке. «Страховка от дна» (сжечь 300⛽ —
+стереть анти-ачивку), фонд сезона.

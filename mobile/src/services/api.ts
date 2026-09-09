@@ -209,6 +209,12 @@ export const userApi = {
     getInstance().post("/api/users/push-token", { token, platform }),
   unregisterPushToken: (token: string) =>
     getInstance().delete("/api/users/push-token", { data: { token } }),
+  // Web Push (PWA/айфоны)
+  webPushKey: () => getInstance().get<{ key: string }>("/api/users/web-push/key"),
+  registerWebPush: (sub: { endpoint: string; keys: { p256dh: string; auth: string } }) =>
+    getInstance().post("/api/users/web-push", sub),
+  unregisterWebPush: (endpoint: string) =>
+    getInstance().delete("/api/users/web-push", { data: { endpoint, keys: {} } }),
   uploadAvatar: async (file: { uri: string; name: string; type: string }): Promise<UserOut> => {
     // Multipart via fetch (RN's fetch builds the boundary correctly for file parts).
     const token = await SecureStore.getItemAsync(TOKEN_KEY);

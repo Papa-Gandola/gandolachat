@@ -1,7 +1,7 @@
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as ImagePicker from "expo-image-picker";
-import { useState } from "react";
-import { ActivityIndicator, Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { useEffect, useState } from "react";
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
 import { AppBar } from "../../components/AppBar";
 import { Avatar } from "../../components/Avatar";
@@ -121,6 +121,7 @@ export function MyProfileScreen({ navigation }: Props) {
         <PasswordChange theme={theme} />
 
         <Section>НАСТРОЙКИ</Section>
+        <WebPushRow theme={theme} />
         <SettingsRow
           theme={theme}
           label="Тема"
@@ -415,6 +416,47 @@ function DotaSection({ theme }: { theme: ThemeT }) {
       </View>
     </View>
   );
+}
+
+// Тумблер Web Push — только в вебе (PWA). Первичное включение обязано идти
+// от жеста пользователя (правило iOS для requestPermission), поэтому кнопка,
+// а не авто-подписка.
+function WebPushRow({ theme }: { theme: ThemeT }) {
+  const [state, setState] = useState<import("../../services/webPush").WebPushState | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    import("../../services/webPush").then((m) => m.webPushState().then(setState)).catch(() => {});
+  }, []);
+
+  if (Platform.OS !== "web" || state === null || state === "unsupported") return null;
+
+  const label = "Уведомления";
+  const value = state === "on" ? "вкл" : state === "denied" ? "запрещены в Safari" : "выкл";
+
+  const toggle = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const m = await import("../../services/webPush");
+      if (state === "on") {
+        await m.webPushDisable();
+        setState("off");
+      } else if (state === "off") {
+        setState(await m.webPushEnable());
+      } else {
+        Alert.alert(
+          "Уведомления запрещены",
+          "Разреши их для этого сайта в настройках Safari (или переустанови ярлык) и попробуй снова.",
+        );
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return <SettingsRow theme={theme} label={label} value={busy ? "…" : value} onPress={toggle} />;
 }
 
 function PasswordChange({ theme }: { theme: ThemeT }) {
