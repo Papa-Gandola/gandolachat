@@ -26,7 +26,7 @@ Discord-подобный мессенджер для чата друзей (~50 
 |---|---|
 | `server/` | VPS: `git pull && docker compose build server && docker compose up -d server`. Миграции и синк ассетов — сами при старте. Релиз НЕ нужен |
 | `client/` | Бамп версии в **двух** местах: `client/package.json` + строка `v2.x.x` в `client/src/renderer/pages/Main.tsx` (+`npm i --package-lock-only`). После мержа: `git tag v2.x.x && git push origin v2.x.x` → Actions собирает **черновик** релиза (Linux создаёт, Windows докладывает — последовательно, гонку уже чинили) → хозяин жмёт Publish release |
-| `mobile/` | PWA: на VPS `cd mobile && npm run build:web` → скопировать `mobile/dist/*` в `server/web/` (bind-mount, рестарт не нужен). Скрипт `postbuild-web.js` префиксует пути `/app`. Нативный Android — тег `mobile-v*` (EAS), версия mobile своя (0.6.x) |
+| `mobile/` | PWA: на VPS `cd mobile && npm run build:web` → скопировать `mobile/dist/*` в `server/web/` (bind-mount, рестарт не нужен; Node 20 на VPS стоит). Скрипт `postbuild-web.js` префиксует пути `/app`. Нативный Android: изменение mobile/app.json\|package.json\|eas.json в main (или тег `mobile-v*`) → Actions ждёт сборку EAS и сам публикует APK в скользящий релиз **mobile-latest** — постоянная ссылка `releases/download/mobile-latest/gandolachat.apk` (на неё смотрит QR в профиле десктопа). При новом APK поднимать И version, И versionCode (appVersionSource: local). Версия mobile своя (0.7.x) |
 | только docs | ничего |
 
 Ошибся тегом: удалить И черновик релиза на GitHub, И тег
@@ -174,7 +174,10 @@ Discord-подобный мессенджер для чата друзей (~50 
   ошибка сезона ≠ «никто не привязал».
 - `ProfilePage.tsx` — профиль+редакт, секция DOTA 2 (привязка/обновить/
   отвязать, бейдж звания, подсказка про «общедоступную статистику» только
-  своему), рамка/титул/значок косметики, админ-чистка сообщений.
+  своему), рамка/титул/значок косметики, админ-чистка сообщений; в СВОЁМ
+  профиле — секция «МОБИЛЬНАЯ ВЕРСИЯ»: QR на вечный APK-линк mobile-latest
+  (версия сборки подтягивается из GitHub API, 404 = «сборка готовится») +
+  QR на PWA `${BASE_URL}/app/`. QR всегда чёрный-на-белом в обеих темах.
 - `DotaRankBadge.tsx` (медали Рекрут…Титан, tier=rank_tier//10, звёзды %10),
   `cosmetics.tsx` (nameColor/CompBadge/CompTitle/frameStyle; анимированная
   рамка — класс comp-frame-animated в global.css), `PokerAssistPanel.tsx` +
@@ -243,6 +246,11 @@ active/visibilitychange — иначе после разворота телеф�
 10. **Мобильный /me при старте**: сетевые/5xx ошибки НЕ разлогинивают —
     токен выкидывается только на 401/403 (AuthContext). Иначе PWA с ярлыка
     разлогинивала людей при секундном отсутствии сети («не могу зайти»).
+11. **OTA не пересекает версию**: runtimeVersion=appVersion, поэтому
+    eas update долетает только до приложений ТОЙ ЖЕ version. Бамп version
+    в app.json = всем нужен новый APK (QR в профиле), OTA до старых больше
+    не дойдут. Внутри одной version JS-правки едут по воздуху сами
+    (workflow Mobile OTA на пуш в main).
 
 ## Бэклог (обсуждалось, не сделано)
 
