@@ -370,6 +370,12 @@ class WebRTCService {
       this.earlyCandidates.delete(fromId);
       return;
     }
+    if (data.timeout) {
+      // Сервер закрыл звонок ЦЕЛИКОМ по 60с-таймауту «не взяли» — сворачиваем
+      // всё, а не одного участника (иначе звонящий гудит вечно).
+      this._teardown();
+      return;
+    }
     this.pending.delete(fromId);
     this.earlyCandidates.delete(fromId);
     this.remoteStreams.delete(fromId);

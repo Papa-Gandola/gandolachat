@@ -25,11 +25,9 @@ export function WhatsNewModal() {
       try {
         const seen = await SecureStore.getItemAsync(KEY);
         if (seen === CHANGELOG_ID) return;
-        if (seen == null) {
-          // Первый запуск вообще — молча запоминаем, без окошка.
-          await SecureStore.setItemAsync(KEY, CHANGELOG_ID);
-          return;
-        }
+        // Показываем и когда метки ещё нет: отличить свежую установку от
+        // «обновился в релиз, где фича дебютирует» нельзя — проверка на
+        // null молча съела дебютный показ у всех.
         if (alive && CHANGELOG.length > 0) setVisible(true);
       } catch {
         // не критично — покажем в следующий раз
