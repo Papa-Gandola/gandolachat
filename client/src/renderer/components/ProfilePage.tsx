@@ -3,8 +3,13 @@ import { UserOut, userApi, chatApi } from "../services/api";
 import { useTheme } from "../services/theme";
 import DotaRankBadge from "./DotaRankBadge";
 import { CompBadge, CompTitle, frameStyle, frameClass } from "./cosmetics";
+import QRCode from "qrcode";
 
-const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const BASE_URL = import.meta.env.VITE_API_URL || "https://2-26-117-77.sslip.io";
+
+// Скользящий релиз mobile-latest: workflow Mobile Release кладёт свежий APK
+// под этим же адресом после каждой сборки, поэтому QR-код вечный.
+const APK_URL = "https://github.com/Papa-Gandola/gandolachat/releases/download/mobile-latest/gandolachat.apk";
 
 interface Props {
   user: UserOut;
@@ -237,9 +242,77 @@ export default function ProfilePage({ user: initialUser, currentUser, onClose, o
           </div>
         </div>
 
+        {isOwn && <MobileAppSection isNeo={isNeo} />}
+
         {isOwn && user.is_admin && (
           <AdminCleanup isNeo={isNeo} />
         )}
+      </div>
+    </div>
+  );
+}
+
+function QrImg({ text, alt }: { text: string; alt: string }) {
+  const [src, setSrc] = useState("");
+  useEffect(() => {
+    let alive = true;
+    QRCode.toDataURL(text, { width: 264, margin: 1, color: { dark: "#000000", light: "#ffffff" } })
+      .then((url) => { if (alive) setSrc(url); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [text]);
+  if (!src) return <div style={{ width: 132, height: 132 }} />;
+  return <img src={src} alt={alt} width={132} height={132} style={{ display: "block" }} />;
+}
+
+function MobileAppSection({ isNeo }: { isNeo: boolean }) {
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
+  const [apkInfo, setApkInfo] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    fetch("https://api.github.com/repos/Papa-Gandola/gandolachat/releases/tags/mobile-latest")
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((rel) => {
+        if (!alive) return;
+        const when = rel?.assets?.[0]?.updated_at;
+        const date = when ? new Date(when).toLocaleDateString("ru-RU") : "";
+        const line = [rel?.name, date && `от ${date}`].filter(Boolean).join(" · ");
+        if (line) setApkInfo(line);
+      })
+      .catch((code) => {
+        if (alive && code === 404) setApkInfo("сборка ещё готовится — QR заработает чуть позже");
+      });
+    return () => { alive = false; };
+  }, []);
+
+  const card: React.CSSProperties = {
+    flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 8,
+    background: "var(--bg-secondary)", borderRadius: isNeo ? 0 : 6, padding: "14px 12px",
+    ...(isNeo ? { border: "1px solid var(--border)" } : {}),
+  };
+  // QR остаётся чёрным на белом в любой теме — иначе камеры его не читают.
+  const qrBox: React.CSSProperties = { background: "#fff", padding: 8, borderRadius: isNeo ? 0 : 4 };
+  const cardTitle: React.CSSProperties = { ...mono, color: "var(--text-primary)", fontSize: 13, fontWeight: 700 };
+  const hint: React.CSSProperties = { ...mono, color: "var(--text-muted)", fontSize: 11, textAlign: "center", lineHeight: 1.5 };
+
+  return (
+    <div style={s.field}>
+      <label style={{ ...s.label, ...mono, ...(isNeo ? { color: "var(--accent)" } : {}) }}>
+        {isNeo ? "// МОБИЛЬНАЯ_ВЕРСИЯ" : "МОБИЛЬНАЯ ВЕРСИЯ"}
+      </label>
+      <div style={{ display: "flex", gap: 12, alignItems: "stretch" }}>
+        <div style={card}>
+          <span style={cardTitle}>🤖 Андроид</span>
+          <div style={qrBox}><QrImg text={APK_URL} alt="QR: скачать APK" /></div>
+          <span style={hint}>Наведи камеру — скачается свежий APK.<br />Ставится поверх старого, ничего не сотрётся.</span>
+          {apkInfo && <span style={{ ...hint, opacity: 0.8 }}>{apkInfo}</span>}
+        </div>
+        <div style={card}>
+          <span style={cardTitle}>🍏 Айфон</span>
+          <div style={qrBox}><QrImg text={`${BASE_URL}/app/`} alt="QR: открыть веб-версию" /></div>
+          <span style={hint}>Открой в Safari, дальше «Поделиться» → «На экран „Домой“».</span>
+        </div>
       </div>
     </div>
   );

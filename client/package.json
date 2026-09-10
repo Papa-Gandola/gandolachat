@@ -1,6 +1,6 @@
 {
   "name": "gandola-chat",
-  "version": "2.3.3",
+  "version": "2.3.4",
   "description": "GandolaChat — a simple Discord-like desktop messenger",
   "homepage": "https://github.com/Papa-Gandola/gandolachat",
   "author": {
@@ -17,8 +17,10 @@
     "lint": "eslint src --ext .ts,.tsx"
   },
   "dependencies": {
+    "@types/qrcode": "^1.5.6",
     "axios": "^1.7.2",
     "electron-updater": "^6.8.3",
+    "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "simple-peer": "^9.11.1"
@@ -64,7 +66,10 @@
       "shortcutName": "GandolaChat"
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "icon": "assets/icon.png",
       "category": "Network",
       "artifactName": "GandolaChat-${version}.${ext}"

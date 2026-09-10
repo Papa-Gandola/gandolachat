@@ -16,12 +16,17 @@ on:
       - "mobile/google-services.json"
   workflow_dispatch:
 
+# Publishes the finished APK to the rolling "mobile-latest" release so the
+# permanent URL below always serves the newest build (desktop profile shows
+# it as a QR code):
+#   https://github.com/Papa-Gandola/gandolachat/releases/download/mobile-latest/gandolachat.apk
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-android:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     defaults:
       run:
         working-directory: mobile
@@ -38,7 +43,29 @@ jobs:
       - name: Setup EAS CLI
         run: npm install -g eas-cli
 
-      - name: Build preview APK (cloud)
-        run: eas build --profile preview --platform android --non-interactive --no-wait
+      - name: Build preview APK (cloud, wait for finish)
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          eas build --profile preview --platform android --non-interactive --json > build.json
+          APK_URL=$(jq -r '.[0].artifacts.buildUrl // .[0].artifacts.applicationArchiveUrl // empty' build.json)
+          if [ -z "$APK_URL" ]; then
+            echo "eas build produced no artifact URL:"; cat build.json; exit 1
+          fi
+          curl -fL --retry 3 -o gandolachat.apk "$APK_URL"
+          ls -lh gandolachat.apk
+
+      - name: Publish rolling release mobile-latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(jq -r '.expo.version' app.json)
+          VCODE=$(jq -r '.expo.android.versionCode' app.json)
+          # prerelease keeps it out of the repo's "latest" slot, which belongs
+          # to desktop releases (v2.x.x).
+          gh release delete mobile-latest --yes --cleanup-tag || true
+          gh release create mobile-latest gandolachat.apk \
+            --prerelease \
+            --target "${{ github.sha }}" \
+            --title "GandolaChat Android ${VERSION} (сборка ${VCODE})" \
+            --notes "Постоянная ссылка на свежий APK: https://github.com/${{ github.repository }}/releases/download/mobile-latest/gandolachat.apk"
