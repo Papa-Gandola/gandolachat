@@ -49,15 +49,47 @@ def _meta_path() -> Path:
 
 
 def _client() -> httpx.Client:
+    # read=30: провайдер душит соединение молча — короткий read-таймаут
+    # быстро выявляет застрявшую закачку, дальше докачиваем через Range.
     return httpx.Client(
         transport=httpx.HTTPTransport(local_address="0.0.0.0", retries=2),
-        timeout=httpx.Timeout(120.0, connect=10.0),
+        timeout=httpx.Timeout(30.0, connect=10.0),
         follow_redirects=True,
         headers={
             "User-Agent": "gandolachat-server",
             "Accept": "application/vnd.github+json",
         },
     )
+
+
+def _download_resumable(client: httpx.Client, url: str, tmp: Path, want: int) -> int:
+    """Скачивание, живучее при RU-глушении GitHub-CDN (грабли №12).
+
+    Два приёма, недоступных обычному браузеру:
+    - размер известен заранее → выходим, как только получены ВСЕ байты,
+      не дожидаясь закрытия соединения (именно его провайдер и душит);
+    - обрыв/стойло → следующая попытка докачивает с места обрыва (Range).
+    """
+    tmp.unlink(missing_ok=True)
+    got = 0
+    for attempt in range(1, 13):
+        try:
+            headers = {"Range": f"bytes={got}-"} if got else {}
+            with client.stream("GET", url, headers=headers) as r:
+                if got and r.status_code != 206:
+                    got = 0  # сервер не умеет Range — начинаем заново
+                r.raise_for_status()
+                with open(tmp, "ab" if got else "wb") as f:
+                    for chunk in r.iter_bytes(1 << 16):
+                        f.write(chunk)
+                        got += len(chunk)
+                        if got >= want:
+                            return got  # всё на месте — close не ждём
+        except httpx.HTTPError as e:
+            print(f"[apk-mirror] attempt {attempt}: {type(e).__name__} at {got}/{want}")
+        if got >= want:
+            return got
+    return got
 
 
 def _sync_impl() -> None:
@@ -89,15 +121,19 @@ def _sync_impl() -> None:
 
         _apk_dir().mkdir(parents=True, exist_ok=True)
         tmp = _apk_path().with_suffix(".part")
-        with client.stream("GET", asset["browser_download_url"]) as r:
-            r.raise_for_status()
-            with open(tmp, "wb") as f:
-                for chunk in r.iter_bytes(1 << 16):
-                    f.write(chunk)
-        got = tmp.stat().st_size
-        if meta["size"] and got != meta["size"]:
+        want = int(meta["size"] or 0)
+        if want:
+            got = _download_resumable(client, asset["browser_download_url"], tmp, want)
+        else:  # размера в API нет (не должно случаться) — одиночная попытка
+            with client.stream("GET", asset["browser_download_url"]) as r:
+                r.raise_for_status()
+                with open(tmp, "wb") as f:
+                    for chunk in r.iter_bytes(1 << 16):
+                        f.write(chunk)
+            got = want = tmp.stat().st_size
+        if got != want:
             tmp.unlink(missing_ok=True)
-            raise RuntimeError(f"size mismatch: got {got}, want {meta['size']}")
+            raise RuntimeError(f"size mismatch: got {got}, want {want}")
         os.replace(tmp, _apk_path())
         _meta_path().write_text(json.dumps(meta))
         print(f"[apk-mirror] synced {meta['release_name']} ({got} bytes)")
