@@ -9,6 +9,9 @@ interface Props {
   chat: ChatOut;
   currentUser: UserOut;
   initiator: boolean;
+  // Кто реально начал звонок (из call_signal). Без него responder целился в
+  // «первого участника чата» — в группах слот занимал не тот юзер.
+  initiatorUserId?: number | null;
   onEnd: () => void;
 }
 
@@ -25,7 +28,7 @@ function neoCtrl(activeColor?: string): React.CSSProperties {
   };
 }
 
-export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props) {
+export default function VideoCall({ chat, currentUser, initiator, initiatorUserId, onEnd }: Props) {
   const theme = useTheme();
   const isNeo = theme === "neo";
   const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
@@ -244,7 +247,7 @@ export default function VideoCall({ chat, currentUser, initiator, onEnd }: Props
       if (initiator) {
         localStream = await webrtcService.startCall(chat.id, memberIds, !videoOff);
       } else {
-        const initiatorId = memberIds.find((id) => id !== currentUser.id)!;
+        const initiatorId = initiatorUserId ?? memberIds.find((id) => id !== currentUser.id)!;
         localStream = await webrtcService.joinCall(chat.id, initiatorId, !videoOff);
       }
       if (localVideoRef.current) {
@@ -1195,7 +1198,10 @@ const s: Record<string, React.CSSProperties> = {
     background: "#18191c", transition: "all 0.3s",
     width: 280, height: 210, minWidth: 280, minHeight: 210,
   },
-  enlarged: { width: "50%", maxWidth: "50%" },
+  // height: auto ОБЯЗАТЕЛЕН: базовый videoWrap фиксирует height/minHeight 210,
+  // без переопределения фокусная плитка росла только в ширину, а картинка
+  // резалась по вертикали (overflow: hidden).
+  enlarged: { width: "50%", maxWidth: "50%", height: "auto", minHeight: 210 },
   video: { width: 280, height: 210, objectFit: "cover", display: "block" },
   videoEnlarged: { width: "100%", height: "auto", maxHeight: "60vh", objectFit: "contain" as const, display: "block" },
   videoLabel: {

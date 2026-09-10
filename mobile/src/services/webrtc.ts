@@ -54,7 +54,13 @@ class WebRTCService {
   // ICE candidates that arrived before setRemoteDescription completed for that
   // peer. Held here until the SDP lands, then drained.
   private earlyCandidates = new Map<number, unknown[]>();
-  private inited = false;
+  // Канонический MediaStream на каждого собеседника: дорожки, приходящие без
+  // привязки к потоку (десктопный transceiver без msid), докладываем сюда.
+  private remoteStreams = new Map<number, MediaStream>();
+  // RTCRtpSender видеодорожки на каждого peer'а — для replaceTrack при
+  // выключении/включении камеры без полной ренегосиации.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private videoSenders = new Map<number, any>();
 
   onStream: StreamCb | null = null;
   onPeerLeft: LeftCb | null = null;
@@ -62,8 +68,12 @@ class WebRTCService {
 
   init(myId: number) {
     this.myId = myId;
-    if (this.inited) return;
-    this.inited = true;
+    // wsService.disconnect() (логаут) стирает ВСЕ хендлеры разом. Поэтому
+    // перевешиваем свои при каждом init (off → on = идемпотентно) — иначе
+    // после перелогина в том же процессе входящие звонки мертвы.
+    wsService.off("call_signal", this._onSignal);
+    wsService.off("call_end", this._onEnd);
+    wsService.off("call_active", this._onCallActive);
     wsService.on("call_signal", this._onSignal);
     wsService.on("call_end", this._onEnd);
     // Group calls: the server broadcasts the full participant list on each
@@ -138,7 +148,10 @@ class WebRTCService {
     this.peers.set(uid, pc);
 
     if (this.localStream) {
-      for (const track of this.localStream.getTracks()) pc.addTrack(track, this.localStream);
+      for (const track of this.localStream.getTracks()) {
+        const sender = pc.addTrack(track, this.localStream);
+        if (track.kind === "video") this.videoSenders.set(uid, sender);
+      }
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -153,14 +166,50 @@ class WebRTCService {
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     pc.addEventListener("track", (e: any) => {
-      const stream = e.streams && e.streams[0];
-      if (stream) this.onStream?.(uid, stream);
+      // Дорожка может прийти БЕЗ привязки к потоку (десктоп добавляет видео-
+      // transceiver без msid, когда стартует с выключенной камерой). Раньше
+      // такие выбрасывались — из-за этого включённая позже вебка с компа не
+      // появлялась на телефоне. Держим свой поток на собеседника и докладываем
+      // осиротевшие дорожки в него.
+      let stream: MediaStream | undefined = e.streams && e.streams[0];
+      if (stream) {
+        this.remoteStreams.set(uid, stream);
+      } else {
+        stream = this.remoteStreams.get(uid);
+        if (!stream) {
+          stream = new MediaStream(undefined as unknown as MediaStream);
+          this.remoteStreams.set(uid, stream);
+        }
+        try {
+          stream.addTrack(e.track);
+        } catch {
+          // дубликат дорожки — не страшно
+        }
+      }
+      this.onStream?.(uid, stream);
+    });
+    // Ренегосиация: стреляет, когда дорожку добавили ПОСРЕДИ звонка (включили
+    // камеру). Шлём свежий оффер, но только когда первичный обмен уже прошёл —
+    // иначе на старте улетел бы двойной оффер (ручной + этот).
+    pc.addEventListener("negotiationneeded", async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const p = pc as any;
+      if (!p.remoteDescription || p.signalingState !== "stable") return;
+      try {
+        const offer = await pc.createOffer({});
+        await pc.setLocalDescription(offer);
+        this._send(uid, { type: pc.localDescription?.type, sdp: pc.localDescription?.sdp });
+      } catch (err) {
+        console.warn("[webrtc] renegotiate failed", err);
+      }
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     pc.addEventListener("connectionstatechange", () => {
       const st = (pc as unknown as { connectionState?: string }).connectionState;
       if (st === "failed" || st === "closed") {
         this.peers.delete(uid);
+        this.remoteStreams.delete(uid);
+        this.videoSenders.delete(uid);
         this.onPeerLeft?.(uid);
         if (this.peers.size === 0) this._teardown();
       }
@@ -272,8 +321,18 @@ class WebRTCService {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private _onEnd = (data: any) => {
     const fromId = data.from_user_id as number;
+    // Вне звонка (входящий ещё не принят, или это эхо собственного call_end
+    // с другого нашего устройства) — только чистим очереди этого юзера,
+    // чтобы протухшие сигналы отменённого звонка не всплыли в следующем.
+    if (!this.localStream) {
+      this.pending.delete(fromId);
+      this.earlyCandidates.delete(fromId);
+      return;
+    }
     this.pending.delete(fromId);
     this.earlyCandidates.delete(fromId);
+    this.remoteStreams.delete(fromId);
+    this.videoSenders.delete(fromId);
     const pc = this.peers.get(fromId);
     if (pc) {
       try {
@@ -290,8 +349,70 @@ class WebRTCService {
   setMuted(muted: boolean) {
     this.localStream?.getAudioTracks().forEach((t) => (t.enabled = !muted));
   }
-  setVideoOff(off: boolean) {
-    this.localStream?.getVideoTracks().forEach((t) => (t.enabled = !off));
+
+  /** Включить камеру посреди звонка. Дорожки может ещё не быть (звонок
+   *  стартует аудио-онли): тогда берём её у getUserMedia и раздаём peer'ам —
+   *  через replaceTrack, где видеослот уже согласован, и через addTrack +
+   *  ренегосиацию, где его не было. Возвращает false, если камера не дана. */
+  async enableCamera(): Promise<boolean> {
+    const ls = this.localStream;
+    if (!ls) return false;
+    const existing = ls.getVideoTracks()[0];
+    if (existing) {
+      existing.enabled = true;
+      return true;
+    }
+    try {
+      await ensurePermissions(true);
+      const cam = await mediaDevices.getUserMedia({ audio: false, video: true });
+      const track = cam.getVideoTracks()[0];
+      if (!track) return false;
+      ls.addTrack(track);
+      for (const [uid, pc] of this.peers) {
+        const sender = this.videoSenders.get(uid);
+        try {
+          if (sender) {
+            await sender.replaceTrack(track);
+          } else {
+            this.videoSenders.set(uid, pc.addTrack(track, ls));
+            // negotiationneeded дошлёт свежий оффер сам
+          }
+        } catch (err) {
+          console.warn("[webrtc] attach camera failed", err);
+        }
+      }
+      return true;
+    } catch (err) {
+      console.warn("[webrtc] enableCamera failed", err);
+      return false;
+    }
+  }
+
+  /** Выключить камеру ПОЛНОСТЬЮ (гаснет LED, не греет телефон) — не просто
+   *  enabled=false. Слот в соединениях остаётся, включение обратно — через
+   *  replaceTrack без ренегосиации. */
+  disableCamera() {
+    const ls = this.localStream;
+    if (!ls) return;
+    for (const sender of this.videoSenders.values()) {
+      try {
+        sender.replaceTrack(null);
+      } catch {
+        // ignore
+      }
+    }
+    for (const track of ls.getVideoTracks()) {
+      try {
+        track.stop();
+      } catch {
+        // ignore
+      }
+      try {
+        ls.removeTrack(track);
+      } catch {
+        // ignore
+      }
+    }
   }
 
   endCall() {
@@ -310,6 +431,8 @@ class WebRTCService {
     this.peers.clear();
     this.pending.clear();
     this.earlyCandidates.clear();
+    this.remoteStreams.clear();
+    this.videoSenders.clear();
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.localStream = null;
     this.chatId = null;

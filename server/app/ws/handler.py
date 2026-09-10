@@ -378,6 +378,15 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                     meta["all_participants"].add(user_id)
                     if is_new_to_call and user_id != meta["initiator"]:
                         meta["answered"] = True
+                    if is_new_to_call:
+                        # Этот юзер теперь В звонке на каком-то устройстве —
+                        # его ОСТАЛЬНЫЕ устройства должны перестать звонить и
+                        # игнорировать дальнейший трафик этого звонка (иначе
+                        # у них до конца разговора висит «входящий»).
+                        await manager.send_to_user(user_id, {
+                            "type": "call_taken",
+                            "chat_id": chat_id,
+                        })
                     # If this was the very first signal of the call, schedule a 60-sec
                     # "missed" timeout — finalises the call as missed if nobody picks up.
                     if just_created_meta:
@@ -404,13 +413,13 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                             async with _ASL() as session:
                                 await _missed_timeout(chat_id, session)
                         _spawn(_wrap())
-                    # Always broadcast updated participants
-                    if chat_obj and chat_obj.is_group:
-                        await manager.broadcast_to_chat(chat_id, {
-                            "type": "call_active",
-                            "chat_id": chat_id,
-                            "participants": list(manager.active_calls[chat_id]),
-                        })
+                    # Always broadcast updated participants — и для ЛС тоже:
+                    # клиенты по этому списку лечат недособранный mesh.
+                    await manager.broadcast_to_chat(chat_id, {
+                        "type": "call_active",
+                        "chat_id": chat_id,
+                        "participants": list(manager.active_calls[chat_id]),
+                    })
                     # Surface what kind of signal we're forwarding + whether
                     # the target actually has any active sockets — invaluable
                     # for debugging "ICE stuck on checking" reports.
@@ -440,6 +449,15 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                     "from_user_id": user_id,
                     "chat_id": chat_id,
                 }, exclude_user=user_id)
+                # exclude_user выше отсекает ВСЕ сокеты завершившего — а его
+                # другим устройствам событие тоже нужно (отклонил звонок на
+                # одном — входящий должен погаснуть везде). Шлём адресно; своё
+                # же эхо устройство-отправитель игнорирует (оно уже вне звонка).
+                await manager.send_to_user(user_id, {
+                    "type": "call_end",
+                    "from_user_id": user_id,
+                    "chat_id": chat_id,
+                })
 
     except WebSocketDisconnect:
         # Update last_seen

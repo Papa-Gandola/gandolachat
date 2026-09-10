@@ -34,6 +34,12 @@ export default function Main({ token, user, onLogout }: Props) {
   // webrtcService.isInCall() flips true (getUserMedia takes a beat).
   const callChatRef = useRef<ChatOut | null>(null);
   useEffect(() => { callChatRef.current = callChat; }, [callChat]);
+  // Кто реально позвал в звонок, который мы приняли, — VideoCall целится в
+  // него responder-соединением (раньше брался «первый участник чата», и в
+  // группах слот мог занять не тот юзер — «Марк не видит Яна»).
+  const [callFrom, setCallFrom] = useState<number | null>(null);
+  // Чаты, где звонок уже взят этим юзером (на любом устройстве).
+  const takenChatsRef = useRef<Set<number>>(new Set());
   const [viewingProfile, setViewingProfile] = useState<UserOut | null>(null);
   const [viewingGroupInfo, setViewingGroupInfo] = useState<ChatOut | null>(null);
   const [pendingChatSearch, setPendingChatSearch] = useState<number | null>(null);
@@ -132,10 +138,33 @@ export default function Main({ token, user, onLogout }: Props) {
       // (callChatRef is set the moment Accept is clicked, before getUserMedia
       // resolves and isInCall() flips true).
       if (webrtcService.isInCall() || callChatRef.current?.id === data.chat_id) return;
+      // Баннер поднимает только ОФФЕР: кандидаты/ансверы — трафик чужого
+      // разговора (например, к нашему же телефону, взявшему трубку) — раньше
+      // они перезапускали звонилку до бесконечности.
+      const sig = data.signal;
+      if (!sig || sig.type !== "offer") return;
+      // Звонок уже взят этим юзером на другом устройстве — молчим (в т.ч.
+      // на ре-офферы включения камеры посреди разговора).
+      if (takenChatsRef.current.has(data.chat_id)) return;
       setIncomingCalls((prev) => {
         if (prev.some((c) => c.chatId === data.chat_id)) return prev;
         return [...prev, { chatId: data.chat_id, fromUserId: data.from_user_id }];
       });
+    });
+
+    // Разговор кончился/отклонён/не взят — гасим входящий баннер этого чата.
+    // Раньше баннер call_end не слушал вовсе: отменённый звонок мог звонить
+    // на десктопе вечно.
+    wsService.on("call_end", (data) => {
+      takenChatsRef.current.delete(data.chat_id);
+      setIncomingCalls((prev) => prev.filter((c) => c.chatId !== data.chat_id));
+    });
+
+    // Трубку взяли на другом устройстве этого же аккаунта.
+    wsService.on("call_taken", (data) => {
+      takenChatsRef.current.add(data.chat_id);
+      if (webrtcService.isInCall()) return; // взяли именно здесь
+      setIncomingCalls((prev) => prev.filter((c) => c.chatId !== data.chat_id));
     });
 
     return () => wsService.disconnect();
@@ -258,6 +287,7 @@ export default function Main({ token, user, onLogout }: Props) {
   function startCall(chat: ChatOut) {
     setCallChat(chat);
     setCallInitiator(true);
+    setCallFrom(null);
   }
 
   function acceptCall(call: { chatId: number; fromUserId: number }) {
@@ -265,6 +295,7 @@ export default function Main({ token, user, onLogout }: Props) {
     if (chat) {
       setCallChat(chat);
       setCallInitiator(false);
+      setCallFrom(call.fromUserId);
       setActiveChat(chat);
     }
     setIncomingCalls((prev) => prev.filter((c) => c.chatId !== call.chatId));
@@ -279,6 +310,7 @@ export default function Main({ token, user, onLogout }: Props) {
   function endCall() {
     setCallChat(null);
     setCallInitiator(false);
+    setCallFrom(null);
     setIncomingCalls([]);
   }
 
@@ -356,7 +388,7 @@ export default function Main({ token, user, onLogout }: Props) {
               </div>
             </>
           )}
-          <span style={{ ...s.titleText, fontSize: 10, opacity: 0.6 }}>v2.3.5</span>
+          <span style={{ ...s.titleText, fontSize: 10, opacity: 0.6 }}>v2.3.6</span>
           <span
             style={{
               width: 8, height: 8, borderRadius: "50%", marginLeft: 4,
@@ -587,6 +619,7 @@ export default function Main({ token, user, onLogout }: Props) {
           chat={callChat}
           currentUser={currentUser}
           initiator={callInitiator}
+          initiatorUserId={callFrom}
           onEnd={endCall}
         />
       )}

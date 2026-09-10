@@ -79,10 +79,17 @@ print-логи видны в `docker compose logs` с опозданием (не
   status, edit_message (тоже режет `/quest_card`), delete_message,
   poker_action/poker_request_state, call_signal/call_end (WebRTC-сигналинг
   через сервер, mesh P2P ≤7; по завершении пишется `/call_record kind|dur|
-  n|initiator`). Исходящие: message, message_edited/deleted, reaction_*,
-  user_online/offline, typing, new_chat, chat_updated/deleted,
-  profile_updated, new_pending_user, dota_ready_update, poker_table_
-  created/updated/removed, poker_state, call_signal/call_end.
+  n|initiator`). Мультиустройство звонков: первый сигнал юзера в звонке →
+  его же сокетам летит `call_taken {chat_id}` (другие устройства гасят
+  входящий и молчат до call_end); call_end рассылается чату БЕЗ сокетов
+  отправителя + отдельным send_to_user самому отправителю (его другим
+  устройствам); call_active бродкастится для ВСЕХ чатов (и ЛС — клиенты
+  лечат mesh). Клиенты звонят ТОЛЬКО на signal.type=offer (кандидаты/
+  ансверы/ре-офферы камеры звонок не поднимают). Исходящие: message,
+  message_edited/deleted, reaction_*, user_online/offline, typing,
+  new_chat, chat_updated/deleted, profile_updated, new_pending_user,
+  dota_ready_update, poker_table_created/updated/removed, poker_state,
+  call_signal/call_end/call_taken/call_active.
 - `app/push.py` — send_push бьёт в ОБА канала: Expo (native Android) и
   Web Push (`app/webpush.py`, PWA/айфоны — VAPID-ключи генерятся сами в
   uploads/vapid/, pywebpush в тредпуле, мёртвые подписки 404/410
@@ -219,6 +226,17 @@ sw.js без кэша (нарочно). Пуши: Expo (native) + **Web Push д�
 требует жест; на старте молчаливая переподписка). ws.ts: pong-надзор (3
 безответных пинга → close → реконнект) + мгновенный реконнект на AppState
 active/visibilitychange — иначе после разворота телефона сокет «полумёртв».
+Звонки (CallContext.tsx + webrtc.ts, UI = модалка НАД навигатором): камера
+по умолчанию ВЫКЛ (аудио-старт; enableCamera лениво берёт камеру и делает
+addTrack+ренегосиацию через negotiationneeded, disableCamera глушит железо
+через replaceTrack(null)+stop); «назад» СВОРАЧИВАЕТ звонок (мини-бар
+сверху, тап=развернуть), НЕ кладёт трубку; RemoteTile рендерит RTCView
+ВСЕГДА (в вебе это <video> с ЗВУКОМ — иначе собеседник без камеры нем в
+PWA), аватар — оверлеем; дорожки без потока (десктопный transceiver без
+msid) докладываются в remoteStreams-карту — без этого вебка с компа не
+появлялась; webrtc.init перевешивает WS-хендлеры каждый раз (логаут
+стирает их — иначе после перелогина звонки мертвы); звонит только на
+offer + takenRef по call_taken.
 Версия своя (0.7.x, app.json+package.json).
 
 ## Локальная проверка (как я гоняю без окружения хозяина)

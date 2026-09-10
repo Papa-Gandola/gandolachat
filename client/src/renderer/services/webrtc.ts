@@ -418,6 +418,21 @@ class WebRTCService {
     this._videoSenders.forEach((sender) => {
       (sender as any).replaceTrack(newTrack).catch(() => {});
     });
+    // Транссивер, добавленный НЕ-инициатором при audio-only старте, ни разу
+    // не согласован (currentDirection === null): replaceTrack в него уходит
+    // в никуда, и собеседник (особенно телефон) кадров не получает. Такие
+    // соединения пересогласовываем — simple-peer дошлёт свежий оффер.
+    this.peers.forEach((peer, uid) => {
+      try {
+        const pc2: RTCPeerConnection | undefined = (peer as any)._pc;
+        const sender = this._videoSenders.get(uid);
+        if (!pc2 || !sender) return;
+        const tr = pc2.getTransceivers().find((t) => t.sender === sender);
+        if (tr && tr.currentDirection == null) (peer as any).negotiate();
+      } catch {
+        // best-effort — обычный replaceTrack уже сделан
+      }
+    });
   }
 
   // Inspect every active peer connection and report whether the selected ICE
