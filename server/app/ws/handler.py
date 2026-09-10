@@ -58,6 +58,21 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                 "user_id": user_id,
             }, exclude_user=user_id)
 
+    # Снимок идущих звонков по чатам юзера. Без него открывший приложение
+    # ПОСРЕДИ разговора не узнал бы о нём: call_active летит только на
+    # сигналах, а в устоявшемся звонке сигналов нет (медиа ходит P2P).
+    for cid in chat_ids:
+        parts = manager.active_calls.get(cid)
+        if parts:
+            try:
+                await websocket.send_json({
+                    "type": "call_active",
+                    "chat_id": cid,
+                    "participants": list(parts),
+                })
+            except Exception:
+                break
+
     try:
         while True:
             data = await websocket.receive_json()
@@ -436,6 +451,47 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                         "role": data.get("role"),
                     })
 
+            elif event == "call_join":
+                # Присоединение к УЖЕ идущему звонку: плашка «в созвоне» или
+                # кнопка звонка при живом созвоне (в т.ч. после 20с тишины
+                # входящего). Сервер лишь регистрирует участника и рассылает
+                # call_active — mesh дособирают клиенты обычным tie-break'ом
+                # (меньший id офферит), глейр исключён.
+                chat_id = data.get("chat_id")
+                active = manager.active_calls.get(chat_id)
+                if not active:
+                    continue  # звонок уже кончился — клиент позвонит заново
+                member_res = await db.execute(
+                    select(Chat.id).join(Chat.members).where(Chat.id == chat_id, User.id == user_id)
+                )
+                if member_res.first() is None:
+                    continue
+                chat_result = await db.execute(select(Chat).where(Chat.id == chat_id))
+                chat_obj = chat_result.scalar_one_or_none()
+                if chat_obj and not chat_obj.is_group and len(active) >= 2 and user_id not in active:
+                    continue  # ЛС-звонок полон
+                active.add(user_id)
+                meta = manager.call_meta.get(chat_id)
+                if meta is None:
+                    import time as _t
+                    manager.call_meta[chat_id] = meta = {
+                        "started_at": _t.time(),
+                        "initiator": user_id,
+                        "all_participants": set(),
+                        "answered": True,
+                    }
+                meta["all_participants"].add(user_id)
+                meta["answered"] = True
+                await manager.send_to_user(user_id, {
+                    "type": "call_taken",
+                    "chat_id": chat_id,
+                })
+                await manager.broadcast_to_chat(chat_id, {
+                    "type": "call_active",
+                    "chat_id": chat_id,
+                    "participants": list(active),
+                })
+
             elif event == "call_end":
                 chat_id = data.get("chat_id")
                 declined = bool(data.get("declined"))
@@ -457,6 +513,13 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                     "type": "call_end",
                     "from_user_id": user_id,
                     "chat_id": chat_id,
+                })
+                # Актуальный состав созвона для плашки «в созвоне» (пустой
+                # список = звонок кончился, плашка гаснет).
+                await manager.broadcast_to_chat(chat_id, {
+                    "type": "call_active",
+                    "chat_id": chat_id,
+                    "participants": list(manager.active_calls.get(chat_id, set())),
                 })
 
     except WebSocketDisconnect:
@@ -485,6 +548,11 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                     "from_user_id": user_id,
                     "chat_id": cid,
                 }, exclude_user=user_id)
+                await manager.broadcast_to_chat(cid, {
+                    "type": "call_active",
+                    "chat_id": cid,
+                    "participants": list(manager.active_calls.get(cid, set())),
+                })
             # Broadcast offline status
             last_seen_iso = user_obj.last_seen.isoformat() if user_obj and user_obj.last_seen else None
             for cid in chat_ids:

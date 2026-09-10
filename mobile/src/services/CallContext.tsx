@@ -30,10 +30,25 @@ interface PeerInfo {
 
 interface CallState {
   inCall: boolean;
+  /** id чата, в котором идёт НАШ текущий звонок (null — не в звонке). */
+  callChatId: number | null;
+  /** Кто сейчас в созвоне по чатам: chat_id → [user_id] (по call_active). */
+  activeCalls: Map<number, number[]>;
   startCall: (chatId: number, name: string, targetIds: number[], video?: boolean) => Promise<void>;
+  /** Подключиться к уже идущему созвону этого чата. */
+  joinOngoing: (chatId: number, name: string) => Promise<void>;
+  /** Развернуть свёрнутый звонок. */
+  expand: () => void;
 }
 
-const CallContext = createContext<CallState>({ inCall: false, startCall: async () => {} });
+const CallContext = createContext<CallState>({
+  inCall: false,
+  callChatId: null,
+  activeCalls: new Map(),
+  startCall: async () => {},
+  joinOngoing: async () => {},
+  expand: () => {},
+});
 export function useCall(): CallState {
   return useContext(CallContext);
 }
@@ -56,6 +71,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const [videoOff, setVideoOff] = useState(false);
   const [minimized, setMinimized] = useState(false);
   const [callSec, setCallSec] = useState(0);
+  const [callChatId, setCallChatId] = useState<number | null>(null);
+  const [activeCalls, setActiveCalls] = useState<Map<number, number[]>>(new Map());
   const [peerInfo, setPeerInfo] = useState<Map<number, PeerInfo>>(new Map());
   const [peerVideoOff, setPeerVideoOff] = useState<Set<number>>(new Set());
   const activeRef = useRef(false);
@@ -127,6 +144,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       activeRef.current = false;
       setInCall(false);
       setMinimized(false);
+      setCallChatId(null);
       setLocalStream(null);
       setRemotes([]);
       setMuted(false);
@@ -171,6 +189,19 @@ export function CallProvider({ children }: { children: ReactNode }) {
       if (webrtcService.isInCall()) return; // взяли именно тут — не трогаем
       setIncoming((prev) => (prev && prev.chatId === chatId ? null : prev));
     };
+    // Реестр «кто в созвоне» для плашек в чатах. Сервер шлёт call_active на
+    // каждый сигнал, при коннекте (снимок) и после каждого выхода из звонка;
+    // пустой список = звонок кончился.
+    const onActive = (d: Record<string, unknown>) => {
+      const chatId = d.chat_id as number;
+      const parts = Array.isArray(d.participants) ? (d.participants as number[]) : [];
+      setActiveCalls((prev) => {
+        const n = new Map(prev);
+        if (parts.length === 0) n.delete(chatId);
+        else n.set(chatId, parts);
+        return n;
+      });
+    };
     const onVideoStatus = (d: Record<string, unknown>) => {
       const uid = d.user_id as number;
       const off = !!d.video_off;
@@ -184,47 +215,70 @@ export function CallProvider({ children }: { children: ReactNode }) {
     wsService.on("call_signal", onSignal);
     wsService.on("call_end", onEnd);
     wsService.on("call_taken", onTaken);
+    wsService.on("call_active", onActive);
     wsService.on("video_status", onVideoStatus);
     return () => {
       wsService.off("call_signal", onSignal);
       wsService.off("call_end", onEnd);
       wsService.off("call_taken", onTaken);
+      wsService.off("call_active", onActive);
       wsService.off("video_status", onVideoStatus);
     };
   }, []);
 
+  // Входящий живёт максимум 20 секунд: дальше плашка и звук гаснут сами.
+  // Сам звонок НЕ сбрасываем (никакого decline) — пока созвон жив, к нему
+  // можно подключиться кнопкой звонка в чате.
+  useEffect(() => {
+    if (!incoming) return;
+    const id = setTimeout(() => setIncoming(null), 20000);
+    return () => clearTimeout(id);
+  }, [incoming]);
+
   // Ringtone + vibration while a call is incoming OR while an outgoing call
-  // hasn't been picked up yet (matches desktop: ringback tone for the caller).
+  // hasn't been picked up yet (ringback for the caller).
+  // Мягкий режим «как на компе»: короткий сигнал раз в 5 секунд вместо
+  // непрерывной сирены, вибрация — один лёгкий импульс на сигнал (и только
+  // для входящего). Через 20с входящий гаснет сам (эффект выше).
   useEffect(() => {
     const isIncoming = !!incoming && !inCall;
     const isOutgoingWaiting = inCall && remotes.length === 0;
     const ringing = isIncoming || isOutgoingWaiting;
     if (!ringing) return;
-    if (isIncoming) {
-      // Vibrate only for incoming — outgoing caller doesn't need to feel their
-      // own phone buzz.
-      Vibration.vibrate([0, 700, 700], true);
-    }
     let cancelled = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const buzz = () => {
+      if (isIncoming) Vibration.vibrate(300);
+    };
     (async () => {
       try {
         await Audio.setAudioModeAsync({ playsInSilentModeIOS: true, shouldDuckAndroid: true });
         const { sound } = await Audio.Sound.createAsync(
           // eslint-disable-next-line @typescript-eslint/no-require-imports
           require("../../assets/ring.wav"),
-          { shouldPlay: true, isLooping: true, volume: 1.0 },
+          { shouldPlay: true, isLooping: false, volume: 0.6 },
         );
         if (cancelled) {
           sound.unloadAsync().catch(() => {});
           return;
         }
         ringRef.current = sound;
+        buzz();
+        interval = setInterval(() => {
+          ringRef.current?.replayAsync().catch(() => {});
+          buzz();
+        }, 5000);
       } catch {
-        // ignore — vibration still rings (incoming only)
+        // звук не завёлся — хотя бы вибрируем по тому же графику
+        if (!cancelled) {
+          buzz();
+          interval = setInterval(buzz, 5000);
+        }
       }
     })();
     return () => {
       cancelled = true;
+      if (interval) clearInterval(interval);
       Vibration.cancel();
       const s = ringRef.current;
       ringRef.current = null;
@@ -250,6 +304,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
     setVideoOff(!video);
     setMuted(false);
     setMinimized(false);
+    setCallChatId(chatId);
     try {
       afterMedia(await webrtcService.startCall(chatId, targetIds, video));
     } catch {
@@ -266,12 +321,35 @@ export function CallProvider({ children }: { children: ReactNode }) {
     setVideoOff(true);
     setMuted(false);
     setMinimized(false);
+    setCallChatId(inc.chatId);
     try {
       afterMedia(await webrtcService.joinCall(inc.chatId, inc.fromUserId, false));
     } catch {
       activeRef.current = false;
     }
   };
+
+  // Подключение к уже идущему созвону (плашка/кнопка в чате).
+  const joinOngoing = async (chatId: number, name: string) => {
+    if (activeRef.current || webrtcService.isInCall()) {
+      setMinimized(false);
+      return;
+    }
+    activeRef.current = true;
+    setIncoming(null);
+    setCallName(name);
+    setVideoOff(true);
+    setMuted(false);
+    setMinimized(false);
+    setCallChatId(chatId);
+    try {
+      afterMedia(await webrtcService.joinOngoing(chatId));
+    } catch {
+      activeRef.current = false;
+    }
+  };
+
+  const expand = () => setMinimized(false);
 
   const reject = () => {
     if (!incoming) return;
@@ -309,7 +387,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
   }));
 
   return (
-    <CallContext.Provider value={{ inCall, startCall }}>
+    <CallContext.Provider value={{ inCall, callChatId, activeCalls, startCall, joinOngoing, expand }}>
       {children}
 
       {/* Incoming-call prompt */}

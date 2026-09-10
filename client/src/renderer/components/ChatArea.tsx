@@ -12,6 +12,10 @@ interface Props {
   chat: ChatOut;
   currentUser: UserOut;
   onStartCall: () => void;
+  // Плашка «в созвоне»: кто сейчас в звонке этого чата + вход в него.
+  activeCallUsers?: number[];
+  onJoinCall?: () => void;
+  inCallHere?: boolean;
   allChats?: ChatOut[];
   onOpenProfile?: (user: UserOut) => void;
   onOpenChatInfo?: (chat: ChatOut) => void;
@@ -23,7 +27,7 @@ interface Props {
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-export default function ChatArea({ chat, currentUser, onStartCall, allChats = [], onOpenProfile, onOpenChatInfo, pendingOpenSearch, pendingAddMember, onPendingHandled }: Props) {
+export default function ChatArea({ chat, currentUser, onStartCall, activeCallUsers, onJoinCall, inCallHere, allChats = [], onOpenProfile, onOpenChatInfo, pendingOpenSearch, pendingAddMember, onPendingHandled }: Props) {
   const theme = useTheme();
   const isNeo = theme === "neo";
   const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
@@ -977,6 +981,51 @@ export default function ChatArea({ chat, currentUser, onStartCall, allChats = []
           </button>
         </div>
       </div>
+
+      {/* Плашка идущего созвона: имена участников + вход одной кнопкой */}
+      {(activeCallUsers?.length ?? 0) > 0 && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "6px 16px",
+            background: "rgba(80,200,120,0.12)",
+            borderBottom: "1px solid var(--border)",
+            fontSize: 13,
+            color: "var(--text-primary)",
+          }}
+        >
+          <span>📞</span>
+          <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            В созвоне:{" "}
+            {activeCallUsers!
+              .map((id) =>
+                id === currentUser.id ? "ты" : chat.members.find((m) => m.id === id)?.username ?? "кто-то",
+              )
+              .join(", ")}
+          </span>
+          {inCallHere ? (
+            <span style={{ color: "var(--text-muted)", fontSize: 12 }}>вы в звонке</span>
+          ) : (
+            <button
+              style={{
+                background: "#3ba55d",
+                color: "#fff",
+                border: "none",
+                borderRadius: 4,
+                padding: "4px 14px",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+              onClick={onJoinCall}
+            >
+              Войти
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Search bar */}
       {showSearch && (

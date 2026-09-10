@@ -125,6 +125,16 @@ class WebRTCService {
     return this.localStream;
   }
 
+  /** Присоединение к УЖЕ идущему звонку (плашка «в созвоне» / кнопка при
+   *  живом созвоне). Серверу шлём call_join — он рассылает call_active, и
+   *  mesh дособирается сам обычным tie-break'ом в _onCallActive. */
+  async joinOngoing(chatId: number): Promise<MediaStream> {
+    this.chatId = chatId;
+    this.localStream = await this._getMedia(false);
+    wsService.send({ type: "call_join", chat_id: chatId });
+    return this.localStream;
+  }
+
   private async _getMedia(video: boolean): Promise<MediaStream> {
     await ensurePermissions(video);
     try {

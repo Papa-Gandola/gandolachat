@@ -40,6 +40,10 @@ export default function Main({ token, user, onLogout }: Props) {
   const [callFrom, setCallFrom] = useState<number | null>(null);
   // Чаты, где звонок уже взят этим юзером (на любом устройстве).
   const takenChatsRef = useRef<Set<number>>(new Set());
+  // Кто сейчас в созвоне по чатам (call_active) — для плашки в шапке чата.
+  const [activeCalls, setActiveCalls] = useState<Map<number, number[]>>(new Map());
+  // Подключение к уже идущему созвону (call_join), а не по входящему офферу.
+  const [callJoinExisting, setCallJoinExisting] = useState(false);
   const [viewingProfile, setViewingProfile] = useState<UserOut | null>(null);
   const [viewingGroupInfo, setViewingGroupInfo] = useState<ChatOut | null>(null);
   const [pendingChatSearch, setPendingChatSearch] = useState<number | null>(null);
@@ -149,6 +153,25 @@ export default function Main({ token, user, onLogout }: Props) {
       setIncomingCalls((prev) => {
         if (prev.some((c) => c.chatId === data.chat_id)) return prev;
         return [...prev, { chatId: data.chat_id, fromUserId: data.from_user_id }];
+      });
+      // Плашка входящего живёт максимум 20 секунд — дальше гаснет сама.
+      // Звонок при этом НЕ сбрасываем: пока созвон жив, войти можно кнопкой
+      // звонка в чате (плашка «в созвоне»).
+      window.setTimeout(() => {
+        setIncomingCalls((prev) => prev.filter((c) => c.chatId !== data.chat_id));
+      }, 20000);
+    });
+
+    // Реестр «кто в созвоне» для плашки в шапке чата. Сервер шлёт call_active
+    // на каждом сигнале, при коннекте (снимок) и после каждого выхода;
+    // пустой список = звонок кончился.
+    wsService.on("call_active", (data) => {
+      const parts: number[] = Array.isArray(data.participants) ? data.participants : [];
+      setActiveCalls((prev) => {
+        const n = new Map(prev);
+        if (parts.length === 0) n.delete(data.chat_id);
+        else n.set(data.chat_id, parts);
+        return n;
       });
     });
 
@@ -285,9 +308,24 @@ export default function Main({ token, user, onLogout }: Props) {
   }
 
   function startCall(chat: ChatOut) {
+    // Если в чате уже идёт созвон — не начинаем новый, а входим в него.
+    const ongoing = activeCalls.get(chat.id);
+    if (ongoing && ongoing.length > 0 && !ongoing.includes(currentUser.id)) {
+      joinOngoingCall(chat);
+      return;
+    }
     setCallChat(chat);
     setCallInitiator(true);
     setCallFrom(null);
+    setCallJoinExisting(false);
+  }
+
+  function joinOngoingCall(chat: ChatOut) {
+    setCallChat(chat);
+    setCallInitiator(false);
+    setCallFrom(null);
+    setCallJoinExisting(true);
+    setActiveChat(chat);
   }
 
   function acceptCall(call: { chatId: number; fromUserId: number }) {
@@ -296,6 +334,7 @@ export default function Main({ token, user, onLogout }: Props) {
       setCallChat(chat);
       setCallInitiator(false);
       setCallFrom(call.fromUserId);
+      setCallJoinExisting(false);
       setActiveChat(chat);
     }
     setIncomingCalls((prev) => prev.filter((c) => c.chatId !== call.chatId));
@@ -311,6 +350,7 @@ export default function Main({ token, user, onLogout }: Props) {
     setCallChat(null);
     setCallInitiator(false);
     setCallFrom(null);
+    setCallJoinExisting(false);
     setIncomingCalls([]);
   }
 
@@ -496,6 +536,9 @@ export default function Main({ token, user, onLogout }: Props) {
                 chat={activeChat}
                 currentUser={currentUser}
                 onStartCall={() => startCall(activeChat)}
+                activeCallUsers={activeCalls.get(activeChat.id) ?? []}
+                onJoinCall={() => joinOngoingCall(activeChat)}
+                inCallHere={callChat?.id === activeChat.id}
                 allChats={chats}
                 onOpenProfile={(u) => setViewingProfile(u)}
                 onOpenChatInfo={(c) => setViewingGroupInfo(c)}
@@ -620,6 +663,7 @@ export default function Main({ token, user, onLogout }: Props) {
           currentUser={currentUser}
           initiator={callInitiator}
           initiatorUserId={callFrom}
+          joinExisting={callJoinExisting}
           onEnd={endCall}
         />
       )}

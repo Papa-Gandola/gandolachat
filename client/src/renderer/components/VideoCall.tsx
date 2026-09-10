@@ -12,6 +12,9 @@ interface Props {
   // Кто реально начал звонок (из call_signal). Без него responder целился в
   // «первого участника чата» — в группах слот занимал не тот юзер.
   initiatorUserId?: number | null;
+  // Подключение к уже идущему созвону (не по входящему звонку): call_join +
+  // mesh по call_active, оффера нам никто не шлёт.
+  joinExisting?: boolean;
   onEnd: () => void;
 }
 
@@ -28,7 +31,7 @@ function neoCtrl(activeColor?: string): React.CSSProperties {
   };
 }
 
-export default function VideoCall({ chat, currentUser, initiator, initiatorUserId, onEnd }: Props) {
+export default function VideoCall({ chat, currentUser, initiator, initiatorUserId, joinExisting, onEnd }: Props) {
   const theme = useTheme();
   const isNeo = theme === "neo";
   const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
@@ -246,6 +249,8 @@ export default function VideoCall({ chat, currentUser, initiator, initiatorUserI
       let localStream: MediaStream;
       if (initiator) {
         localStream = await webrtcService.startCall(chat.id, memberIds, !videoOff);
+      } else if (joinExisting) {
+        localStream = await webrtcService.joinOngoing(chat.id, !videoOff);
       } else {
         const initiatorId = initiatorUserId ?? memberIds.find((id) => id !== currentUser.id)!;
         localStream = await webrtcService.joinCall(chat.id, initiatorId, !videoOff);
