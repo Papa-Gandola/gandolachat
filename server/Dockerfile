@@ -1,5 +1,9 @@
 FROM python:3.12-slim
 
+# Без этого print-диагностика ([apk-mirror], [push], [steam-*]) копится в
+# буфере stdout и в `docker compose logs` появляется с опозданием на часы.
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
 COPY requirements.txt .

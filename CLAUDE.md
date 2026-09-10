@@ -34,7 +34,9 @@ Discord-подобный мессенджер для чата друзей (~50 
 
 ## Сервер (`server/`, FastAPI + SQLAlchemy 2.0 async + PostgreSQL)
 
-Запуск: `uvicorn app.main:app`. В lifespan: alembic upgrade → синк
+Запуск: `uvicorn app.main:app`. В Dockerfile PYTHONUNBUFFERED=1 — иначе
+print-логи видны в `docker compose logs` с опозданием (не убирать).
+В lifespan: alembic upgrade → синк
 `assets/compendium/intro.mp4` в uploads → APScheduler-джобы.
 
 - `app/main.py` — app, CORS, статика `/uploads` и `/app` (PWA), WS-роут
