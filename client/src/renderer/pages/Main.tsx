@@ -12,6 +12,7 @@ import GroupInfoPage from "../components/GroupInfoPage";
 import Poker from "../components/Poker";
 import CompendiumPage from "../components/CompendiumPage";
 import { useTheme } from "../services/theme";
+import { APP_VERSION, CHANGELOG } from "../changelog";
 
 interface Props {
   token: string;
@@ -65,6 +66,15 @@ export default function Main({ token, user, onLogout }: Props) {
     return saved === "poker" || saved === "compendium" ? saved : "chat";
   });
   const [showModeMenu, setShowModeMenu] = useState(false);
+  // «Что нового»: один раз после обновления версии (см. changelog.ts).
+  const [showWhatsNew, setShowWhatsNew] = useState(false);
+  useEffect(() => {
+    const last = localStorage.getItem("gandola-last-version");
+    if (last === APP_VERSION) return;
+    localStorage.setItem("gandola-last-version", APP_VERSION);
+    // Свежая установка (метки не было) окошко не видит — только обновления.
+    if (last !== null && (CHANGELOG[APP_VERSION]?.length ?? 0) > 0) setShowWhatsNew(true);
+  }, []);
 
   useEffect(() => {
     wsService.connect(token);
@@ -471,7 +481,7 @@ export default function Main({ token, user, onLogout }: Props) {
               </div>
             </>
           )}
-          <span style={{ ...s.titleText, fontSize: 10, opacity: 0.6 }}>v2.3.6</span>
+          <span style={{ ...s.titleText, fontSize: 10, opacity: 0.6 }}>{`v${APP_VERSION}`}</span>
           <span
             style={{
               width: 8, height: 8, borderRadius: "50%", marginLeft: 4,
@@ -700,6 +710,34 @@ export default function Main({ token, user, onLogout }: Props) {
       )}
 
       {/* Video call overlay — lives at top level, persists across chat switches */}
+      {/* «Что нового» после обновления */}
+      {showWhatsNew && (
+        <div style={s.whatsNewOverlay} onClick={() => setShowWhatsNew(false)}>
+          <div
+            style={{
+              ...s.whatsNewBox,
+              ...(isNeo ? { borderRadius: 0, border: "1px solid var(--accent)", fontFamily: "var(--font-mono)" } : {}),
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ ...s.whatsNewTitle, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.06em" } : {}) }}>
+              {isNeo ? `// ОБНОВЛЕНИЕ v${APP_VERSION}` : `Обновление v${APP_VERSION}`}
+            </div>
+            <div style={s.whatsNewList}>
+              {(CHANGELOG[APP_VERSION] ?? []).map((line, i) => (
+                <div key={i} style={s.whatsNewItem}>
+                  <span style={s.whatsNewNum}>{i + 1})</span>
+                  <span>{line}</span>
+                </div>
+              ))}
+            </div>
+            <button style={{ ...s.whatsNewBtn, ...(isNeo ? { borderRadius: 0 } : {}) }} onClick={() => setShowWhatsNew(false)}>
+              Понятно
+            </button>
+          </div>
+        </div>
+      )}
+
       {callChat && (
         <VideoCall
           key={`call-${callChat.id}`}
@@ -735,6 +773,25 @@ const s: Record<string, React.CSSProperties> = {
   closeDialogOverlay: { position: "fixed" as const, inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 500 },
   closeDialog: { background: "var(--bg-primary)", borderRadius: 8, padding: 24, width: 320, boxShadow: "0 8px 32px rgba(0,0,0,0.5)" },
   closeDialogBtn: { background: "var(--accent)", color: "var(--accent-text)", border: "none", borderRadius: 6, padding: "10px 16px", fontSize: 14, fontWeight: 600, cursor: "pointer" },
+  whatsNewOverlay: {
+    position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
+    display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000,
+  },
+  whatsNewBox: {
+    width: "min(460px, calc(100vw - 48px))", maxHeight: "70vh", overflowY: "auto",
+    background: "var(--bg-primary)", border: "1px solid var(--border)",
+    borderRadius: 12, padding: "20px 22px", boxShadow: "0 12px 40px rgba(0,0,0,0.5)",
+  },
+  whatsNewTitle: { color: "var(--text-header)", fontWeight: 700, fontSize: 16, marginBottom: 14 },
+  whatsNewList: { display: "flex", flexDirection: "column", gap: 9 },
+  whatsNewItem: {
+    display: "flex", gap: 8, color: "var(--text-primary)", fontSize: 13, lineHeight: 1.5,
+  },
+  whatsNewNum: { color: "var(--text-muted)", flexShrink: 0 },
+  whatsNewBtn: {
+    marginTop: 16, width: "100%", padding: "10px 0", border: "none", borderRadius: 8,
+    background: "var(--accent, #5865f2)", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer",
+  },
   incomingCallBanner: {
     background: "#5865f2", display: "flex", alignItems: "center",
     justifyContent: "space-between", padding: "10px 16px", color: "#fff", fontWeight: 600,
