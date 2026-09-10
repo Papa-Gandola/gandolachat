@@ -1007,6 +1007,8 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
           </span>
           {inCallHere ? (
             <span style={{ color: "var(--text-muted)", fontSize: 12 }}>вы в звонке</span>
+          ) : activeCallUsers!.includes(currentUser.id) ? (
+            <span style={{ color: "var(--text-muted)", fontSize: 12 }}>вы в звонке с другого устройства</span>
           ) : (
             <button
               style={{

@@ -38,12 +38,19 @@ export default function Main({ token, user, onLogout }: Props) {
   // него responder-соединением (раньше брался «первый участник чата», и в
   // группах слот мог занять не тот юзер — «Марк не видит Яна»).
   const [callFrom, setCallFrom] = useState<number | null>(null);
-  // Чаты, где звонок уже взят этим юзером (на любом устройстве).
-  const takenChatsRef = useRef<Set<number>>(new Set());
   // Кто сейчас в созвоне по чатам (call_active) — для плашки в шапке чата.
+  // Ref-зеркало нужно WS-хендлерам (их замыкание живёт от первого рендера).
+  // «Я уже в этом звонке (на любом устройстве)» выводится ИЗ ЭТОГО реестра
+  // (membership), а не из отдельного набора — реестр самоочищается сервером
+  // (call_active после каждого выхода + снапшот при коннекте), поэтому не
+  // бывает «вечной глушилки» после пропущенного call_end.
   const [activeCalls, setActiveCalls] = useState<Map<number, number[]>>(new Map());
+  const activeCallsRef = useRef<Map<number, number[]>>(new Map());
   // Подключение к уже идущему созвону (call_join), а не по входящему офферу.
   const [callJoinExisting, setCallJoinExisting] = useState(false);
+  // Таймеры 20-секундного самогашения баннеров: chatId → штамп постановки
+  // (гасим только «свой» баннер — редиал не убьётся старым таймером).
+  const bannerTsRef = useRef<Map<number, number>>(new Map());
   const [viewingProfile, setViewingProfile] = useState<UserOut | null>(null);
   const [viewingGroupInfo, setViewingGroupInfo] = useState<ChatOut | null>(null);
   const [pendingChatSearch, setPendingChatSearch] = useState<number | null>(null);
@@ -147,47 +154,66 @@ export default function Main({ token, user, onLogout }: Props) {
       // они перезапускали звонилку до бесконечности.
       const sig = data.signal;
       if (!sig || sig.type !== "offer") return;
-      // Звонок уже взят этим юзером на другом устройстве — молчим (в т.ч.
-      // на ре-офферы включения камеры посреди разговора).
-      if (takenChatsRef.current.has(data.chat_id)) return;
+      // Я уже в этом звонке на другом устройстве (реестр call_active) —
+      // молчим, в т.ч. на ре-офферы включения камеры посреди разговора.
+      if ((activeCallsRef.current.get(data.chat_id) ?? []).includes(user.id)) return;
+      const ts = Date.now();
+      bannerTsRef.current.set(data.chat_id, ts);
       setIncomingCalls((prev) => {
         if (prev.some((c) => c.chatId === data.chat_id)) return prev;
         return [...prev, { chatId: data.chat_id, fromUserId: data.from_user_id }];
       });
-      // Плашка входящего живёт максимум 20 секунд — дальше гаснет сама.
-      // Звонок при этом НЕ сбрасываем: пока созвон жив, войти можно кнопкой
-      // звонка в чате (плашка «в созвоне»).
+      // Баннер живёт максимум 20 секунд — дальше гаснет сам (звонок НЕ
+      // сбрасываем: пока созвон жив, войти можно кнопкой в чате). Штамп
+      // защищает от старого таймера: быстрый редиал ставит свежий, и чужой
+      // баннер 20-секундник не убьёт.
       window.setTimeout(() => {
+        if (bannerTsRef.current.get(data.chat_id) !== ts) return;
         setIncomingCalls((prev) => prev.filter((c) => c.chatId !== data.chat_id));
       }, 20000);
     });
 
-    // Реестр «кто в созвоне» для плашки в шапке чата. Сервер шлёт call_active
-    // на каждом сигнале, при коннекте (снимок) и после каждого выхода;
-    // пустой список = звонок кончился.
+    // Реестр «кто в созвоне». Сервер шлёт call_active при СМЕНЕ состава,
+    // снимком при коннекте и после каждого выхода/таймаута; пустой список =
+    // конец звонка (авторитетный) — заодно гасим баннер. Дедуп по составу,
+    // чтобы не дёргать ререндеры зря.
     wsService.on("call_active", (data) => {
       const parts: number[] = Array.isArray(data.participants) ? data.participants : [];
-      setActiveCalls((prev) => {
-        const n = new Map(prev);
-        if (parts.length === 0) n.delete(data.chat_id);
-        else n.set(data.chat_id, parts);
-        return n;
-      });
+      const prevParts = activeCallsRef.current.get(data.chat_id) ?? [];
+      if (parts.length === prevParts.length && parts.every((p) => prevParts.includes(p))) return;
+      const next = new Map(activeCallsRef.current);
+      if (parts.length === 0) next.delete(data.chat_id);
+      else next.set(data.chat_id, parts);
+      activeCallsRef.current = next;
+      setActiveCalls(next);
+      if (parts.length === 0) {
+        setIncomingCalls((prev) => prev.filter((c) => c.chatId !== data.chat_id));
+      }
     });
 
-    // Разговор кончился/отклонён/не взят — гасим входящий баннер этого чата.
-    // Раньше баннер call_end не слушал вовсе: отменённый звонок мог звонить
-    // на десктопе вечно.
+    // Гасим баннер по call_end ТОЛЬКО когда звонить дальше нечего: отбой
+    // сделал я сам (другое моё устройство) или сам ЗВОНЯЩИЙ отменил вызов.
+    // Выход/отказ третьего участника группы звонок НЕ заканчивает — баннер
+    // у остальных живёт (раньше любой call_end глушил звонилку всем).
     wsService.on("call_end", (data) => {
-      takenChatsRef.current.delete(data.chat_id);
-      setIncomingCalls((prev) => prev.filter((c) => c.chatId !== data.chat_id));
+      setIncomingCalls((prev) => prev.filter((c) =>
+        c.chatId !== data.chat_id ||
+        (data.from_user_id !== user.id && data.from_user_id !== c.fromUserId)
+      ));
     });
 
-    // Трубку взяли на другом устройстве этого же аккаунта.
+    // Трубку взяли на другом устройстве этого же аккаунта — мгновенно гасим.
     wsService.on("call_taken", (data) => {
-      takenChatsRef.current.add(data.chat_id);
       if (webrtcService.isInCall()) return; // взяли именно здесь
       setIncomingCalls((prev) => prev.filter((c) => c.chatId !== data.chat_id));
+    });
+
+    // Реконнект: реестр звонков мог протухнуть (звонок кончился, пока мы
+    // были оффлайн — пустой call_active мы пропустили). Сбрасываем; сервер
+    // тут же присылает свежий снимок живых звонков.
+    wsService.on("_ws_open", () => {
+      activeCallsRef.current = new Map();
+      setActiveCalls(new Map());
     });
 
     return () => wsService.disconnect();
@@ -308,9 +334,13 @@ export default function Main({ token, user, onLogout }: Props) {
   }
 
   function startCall(chat: ChatOut) {
-    // Если в чате уже идёт созвон — не начинаем новый, а входим в него.
-    const ongoing = activeCalls.get(chat.id);
-    if (ongoing && ongoing.length > 0 && !ongoing.includes(currentUser.id)) {
+    if (callChat) return; // уже в звонке на этом устройстве
+    const ongoing = activeCalls.get(chat.id) ?? [];
+    // Я уже в этом созвоне на другом устройстве — второй вход тем же юзером
+    // ломает mesh (соединения ключуются по user_id).
+    if (ongoing.includes(currentUser.id)) return;
+    // Созвон уже идёт — не начинаем новый, а входим в него.
+    if (ongoing.length > 0) {
       joinOngoingCall(chat);
       return;
     }
@@ -321,11 +351,24 @@ export default function Main({ token, user, onLogout }: Props) {
   }
 
   function joinOngoingCall(chat: ChatOut) {
+    if (callChat) return; // уже в звонке на этом устройстве — не «перелейбливаем»
+    if ((activeCalls.get(chat.id) ?? []).includes(currentUser.id)) return;
     setCallChat(chat);
     setCallInitiator(false);
     setCallFrom(null);
     setCallJoinExisting(true);
     setActiveChat(chat);
+    // Сторожок мёртвого входа: если за 12с сервер так и не зарегистрировал
+    // нас в созвоне (звонок умер в момент нажатия — call_join тихо
+    // проигнорирован), не сидим «в пустом звонке» с захваченным микро.
+    const chatId = chat.id;
+    window.setTimeout(() => {
+      const inRoster = (activeCallsRef.current.get(chatId) ?? []).includes(currentUser.id);
+      if (!inRoster && callChatRef.current?.id === chatId) {
+        webrtcService.endCall();
+        endCall();
+      }
+    }, 12000);
   }
 
   function acceptCall(call: { chatId: number; fromUserId: number }) {
@@ -659,6 +702,7 @@ export default function Main({ token, user, onLogout }: Props) {
       {/* Video call overlay — lives at top level, persists across chat switches */}
       {callChat && (
         <VideoCall
+          key={`call-${callChat.id}`}
           chat={callChat}
           currentUser={currentUser}
           initiator={callInitiator}

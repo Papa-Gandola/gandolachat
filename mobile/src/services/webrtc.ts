@@ -106,12 +106,17 @@ class WebRTCService {
     this.chatId = chatId;
     this.localStream = await this._getMedia(video);
     if (!this.peers.has(initiatorId)) this._createPeer(initiatorId, false);
-    // Flush every queued signal now that we have a peer + local media.
-    // Order matters: SDP (offer/answer) MUST land before any ICE candidate,
-    // otherwise addIceCandidate throws because remoteDescription is null and
-    // the candidate is lost — ICE never completes and the call sticks on
-    // "waiting for participant". Sort SDP-first and await each apply to keep
-    // them strictly sequential.
+    await this._flushPending();
+    return this.localStream;
+  }
+
+  // Flush every queued signal now that we have a peer + local media.
+  // Order matters: SDP (offer/answer) MUST land before any ICE candidate,
+  // otherwise addIceCandidate throws because remoteDescription is null and
+  // the candidate is lost — ICE never completes and the call sticks on
+  // "waiting for participant". Sort SDP-first and await each apply to keep
+  // them strictly sequential.
+  private async _flushPending() {
     for (const [uid, sigs] of Array.from(this.pending.entries())) {
       if (!this.peers.has(uid)) this._createPeer(uid, false);
       const ordered = [...sigs].sort((a, b) => {
@@ -122,15 +127,18 @@ class WebRTCService {
       for (const s of ordered) await this._applySignal(uid, s);
     }
     this.pending.clear();
-    return this.localStream;
   }
 
   /** Присоединение к УЖЕ идущему звонку (плашка «в созвоне» / кнопка при
    *  живом созвоне). Серверу шлём call_join — он рассылает call_active, и
-   *  mesh дособирается сам обычным tie-break'ом в _onCallActive. */
+   *  mesh дособирается сам обычным tie-break'ом в _onCallActive.
+   *  КРИТИЧНО: сначала применяем накопленные сигналы — если звонящий уже
+   *  слал нам оффер (мы «прозвонили» 20с и вошли позже), отвечаем ИМЕННО
+   *  ему, иначе его соединение навсегда зависло бы в have-local-offer. */
   async joinOngoing(chatId: number): Promise<MediaStream> {
     this.chatId = chatId;
     this.localStream = await this._getMedia(false);
+    await this._flushPending();
     wsService.send({ type: "call_join", chat_id: chatId });
     return this.localStream;
   }
@@ -201,17 +209,8 @@ class WebRTCService {
     // Ренегосиация: стреляет, когда дорожку добавили ПОСРЕДИ звонка (включили
     // камеру). Шлём свежий оффер, но только когда первичный обмен уже прошёл —
     // иначе на старте улетел бы двойной оффер (ручной + этот).
-    pc.addEventListener("negotiationneeded", async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const p = pc as any;
-      if (!p.remoteDescription || p.signalingState !== "stable") return;
-      try {
-        const offer = await pc.createOffer({});
-        await pc.setLocalDescription(offer);
-        this._send(uid, { type: pc.localDescription?.type, sdp: pc.localDescription?.sdp });
-      } catch (err) {
-        console.warn("[webrtc] renegotiate failed", err);
-      }
+    pc.addEventListener("negotiationneeded", () => {
+      void this._renegotiate(uid, pc);
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     pc.addEventListener("connectionstatechange", () => {
@@ -237,6 +236,21 @@ class WebRTCService {
       })();
     }
     return pc;
+  }
+
+  /** Свежий оффер существующему соединению — только когда первичный обмен
+   *  уже прошёл и состояние стабильно (иначе глейр/двойной оффер). */
+  private async _renegotiate(uid: number, pc: RTCPeerConnection) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const p = pc as any;
+    if (!p.remoteDescription || p.signalingState !== "stable") return;
+    try {
+      const offer = await pc.createOffer({});
+      await pc.setLocalDescription(offer);
+      this._send(uid, { type: pc.localDescription?.type, sdp: pc.localDescription?.sdp });
+    } catch (err) {
+      console.warn("[webrtc] renegotiate failed", err);
+    }
   }
 
   private _send(uid: number, signal: unknown) {
@@ -290,6 +304,23 @@ class WebRTCService {
             }
           }
         }
+      } else if (signal.renegotiate) {
+        // Десктопный simple-peer-РЕСПОНДЕР не шлёт оффер сам — он просит
+        // ренегосиацию нас (включил камеру, а видеослота в нашем аудио-онли
+        // оффере не было). Answerer не может ДОБАВИТЬ m-line — поэтому
+        // перед оффером убеждаемся, что видео-линия в нём будет (recvonly,
+        // если своей камеры нет), иначе его вебка до телефона не доедет.
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const trans = (pc as any).getTransceivers?.() ?? [];
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const hasVideoLine = trans.some((t: any) =>
+            t?.receiver?.track?.kind === "video" || t?.sender?.track?.kind === "video");
+          if (!hasVideoLine) pc.addTransceiver("video", { direction: "recvonly" });
+        } catch {
+          // API транссиверов недоступен — офферим как есть
+        }
+        await this._renegotiate(uid, pc);
       } else if (signal.candidate) {
         // Defer if remoteDescription isn't ready yet — otherwise the candidate
         // is silently dropped and ICE never completes.

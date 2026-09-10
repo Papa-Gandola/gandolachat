@@ -421,6 +421,13 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                                     "timeout": True,
                                 })
                             manager.active_calls.pop(_chat_id, None)
+                            # Плашки «в созвоне» у всего чата должны погаснуть —
+                            # иначе неотвеченный звонок «висит» в шапке вечно.
+                            await manager.broadcast_to_chat(_chat_id, {
+                                "type": "call_active",
+                                "chat_id": _chat_id,
+                                "participants": [],
+                            })
                             await _persist_call_record(_chat_id, _db, ended_by=m["initiator"], declined=False)
                         # Use a fresh session — the handler's `db` may close before 60s
                         from app.database import AsyncSessionLocal as _ASL
@@ -428,13 +435,17 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                             async with _ASL() as session:
                                 await _missed_timeout(chat_id, session)
                         _spawn(_wrap())
-                    # Always broadcast updated participants — и для ЛС тоже:
-                    # клиенты по этому списку лечат недособранный mesh.
-                    await manager.broadcast_to_chat(chat_id, {
-                        "type": "call_active",
-                        "chat_id": chat_id,
-                        "participants": list(manager.active_calls[chat_id]),
-                    })
+                    # call_active — только когда СОСТАВ изменился (не на каждый
+                    # ICE-кандидат: это десятки рассылок за первые секунды
+                    # звонка и лишние ререндеры у всех участников чата).
+                    # Изменения состава: первый сигнал юзера, join, выходы,
+                    # снапшот при коннекте — все покрыты.
+                    if is_new_to_call or just_created_meta:
+                        await manager.broadcast_to_chat(chat_id, {
+                            "type": "call_active",
+                            "chat_id": chat_id,
+                            "participants": list(manager.active_calls[chat_id]),
+                        })
                     # Surface what kind of signal we're forwarding + whether
                     # the target actually has any active sockets — invaluable
                     # for debugging "ICE stuck on checking" reports.
@@ -458,9 +469,15 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                 # call_active — mesh дособирают клиенты обычным tie-break'ом
                 # (меньший id офферит), глейр исключён.
                 chat_id = data.get("chat_id")
-                active = manager.active_calls.get(chat_id)
-                if not active:
-                    continue  # звонок уже кончился — клиент позвонит заново
+                if chat_id is None or chat_id not in manager.active_calls:
+                    if chat_id is not None:
+                        # Звонок уже мёртв: адресный пустой call_active гасит
+                        # плашку у нажавшего; его подвисший «пустой» звонок
+                        # добьёт клиентский сторожок.
+                        await manager.send_to_user(user_id, {
+                            "type": "call_active", "chat_id": chat_id, "participants": [],
+                        })
+                    continue
                 member_res = await db.execute(
                     select(Chat.id).join(Chat.members).where(Chat.id == chat_id, User.id == user_id)
                 )
@@ -468,7 +485,19 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                     continue
                 chat_result = await db.execute(select(Chat).where(Chat.id == chat_id))
                 chat_obj = chat_result.scalar_one_or_none()
-                if chat_obj and not chat_obj.is_group and len(active) >= 2 and user_id not in active:
+                # ПЕРЕЧИТЫВАЕМ состояние после db-await'ов: за это время звонок
+                # мог кончиться (гонка «войти» с последним отбоем).
+                active = manager.active_calls.get(chat_id)
+                if not active:
+                    await manager.send_to_user(user_id, {
+                        "type": "call_active", "chat_id": chat_id, "participants": [],
+                    })
+                    continue
+                if user_id in active:
+                    # Уже в этом звонке (другое устройство) — второй вход тем
+                    # же user_id ломает mesh, соединения ключуются по юзеру.
+                    continue
+                if chat_obj and not chat_obj.is_group and len(active) >= 2:
                     continue  # ЛС-звонок полон
                 active.add(user_id)
                 meta = manager.call_meta.get(chat_id)
@@ -478,10 +507,14 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                         "started_at": _t.time(),
                         "initiator": user_id,
                         "all_participants": set(),
-                        "answered": True,
+                        "answered": False,
                     }
                 meta["all_participants"].add(user_id)
-                meta["answered"] = True
+                if user_id != meta["initiator"]:
+                    # Вход инициатора со второго устройства «ответом» не
+                    # считается — иначе неотвеченный звонок ложится в историю
+                    # как «completed» и 60с-таймаут обезврежен.
+                    meta["answered"] = True
                 await manager.send_to_user(user_id, {
                     "type": "call_taken",
                     "chat_id": chat_id,
