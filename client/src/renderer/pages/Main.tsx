@@ -72,8 +72,10 @@ export default function Main({ token, user, onLogout }: Props) {
     const last = localStorage.getItem("gandola-last-version");
     if (last === APP_VERSION) return;
     localStorage.setItem("gandola-last-version", APP_VERSION);
-    // Свежая установка (метки не было) окошко не видит — только обновления.
-    if (last !== null && (CHANGELOG[APP_VERSION]?.length ?? 0) > 0) setShowWhatsNew(true);
+    // Показываем всем, у кого версия сменилась ИЛИ метки ещё нет: отличить
+    // свежую установку от «обновился в релиз, где фича дебютирует» нельзя —
+    // проверка на null молча съела показ у всех в 2.3.6.
+    if ((CHANGELOG[APP_VERSION]?.length ?? 0) > 0) setShowWhatsNew(true);
   }, []);
 
   useEffect(() => {
