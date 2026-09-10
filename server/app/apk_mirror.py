@@ -148,7 +148,9 @@ async def sync_apk() -> None:
             print(f"[apk-mirror] sync failed: {type(e).__name__}: {e}")
 
 
-@router.get("/apk")
+# FastAPI не добавляет HEAD к GET-ручкам сам — а HEAD шлют curl -I и
+# некоторые менеджеры закачек, им отвечаем явно.
+@router.api_route("/apk", methods=["GET", "HEAD"])
 async def download_apk():
     """Отдаём APK со своего диска; пока кэша нет — редирект на GitHub."""
     path = _apk_path()
