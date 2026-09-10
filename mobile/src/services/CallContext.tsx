@@ -1,7 +1,7 @@
 import { Audio } from "expo-av";
 import * as KeepAwake from "expo-keep-awake";
 import { createContext, ReactNode, useContext, useEffect, useRef, useState } from "react";
-import { Animated, Dimensions, Modal, PanResponder, Pressable, StyleSheet, Text, Vibration, View, ViewStyle } from "react-native";
+import { Animated, Dimensions, Modal, PanResponder, Platform, Pressable, StyleSheet, Text, Vibration, View, ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MediaStream, RTCView } from "react-native-webrtc";
 
@@ -410,6 +410,17 @@ export function CallProvider({ children }: { children: ReactNode }) {
           </View>
         </View>
       </Modal>
+
+      {/* В вебе звук собеседников играет через <video>-элементы RTCView —
+          при свёрнутом окне звонка (Modal размонтирован) их надо держать
+          живыми невидимками, иначе свернул = тишина. Натив звучит и так. */}
+      {inCall && minimized && Platform.OS === "web" && (
+        <View style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", opacity: 0 }} pointerEvents="none">
+          {remoteTiles.map((t) => (
+            <RTCView key={t.userId} streamURL={t.stream.toURL()} style={{ width: 1, height: 1 }} />
+          ))}
+        </View>
+      )}
 
       {/* Мини-бар свёрнутого звонка: плавает поверх всего приложения,
           тап — развернуть, красная кнопка — положить трубку. */}
