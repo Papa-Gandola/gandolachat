@@ -14,6 +14,7 @@ from app.config import settings
 from app.models import Message
 from app.ws.handler import websocket_endpoint
 from app.api import auth, users, chats, poker, dota, compendium
+from app import apk_mirror
 
 
 @asynccontextmanager
@@ -45,9 +46,18 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(_sync_compendium_assets)
 
     from app.compendium import poller as compendium_poller
+    from app import apk_mirror
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(cleanup_expired_messages, "interval", hours=1)
+    # Зеркало APK: первый прогон сразу при старте (next_run_time=now),
+    # дальше проверка раз в 30 минут — новый релиз mobile-latest подтянется
+    # сам без передеплоя.
+    scheduler.add_job(
+        apk_mirror.sync_apk, "interval",
+        minutes=30, max_instances=1, coalesce=True,
+        next_run_time=datetime.now(timezone.utc),
+    )
     # Гандолиум: катки → задания → газ → карточки. Интервалы бережём под
     # бесплатный лимит OpenDota (2000 запросов/день).
     scheduler.add_job(
@@ -106,6 +116,7 @@ app.include_router(chats.router)
 app.include_router(poker.router)
 app.include_router(dota.router)
 app.include_router(compendium.router)
+app.include_router(apk_mirror.router)
 
 
 @app.websocket("/ws")
