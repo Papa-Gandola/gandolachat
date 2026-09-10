@@ -7,9 +7,10 @@ import QRCode from "qrcode";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "https://2-26-117-77.sslip.io";
 
-// Скользящий релиз mobile-latest: workflow Mobile Release кладёт свежий APK
-// под этим же адресом после каждой сборки, поэтому QR-код вечный.
-const APK_URL = "https://github.com/Papa-Gandola/gandolachat/releases/download/mobile-latest/gandolachat.apk";
+// QR ведёт на НАШ сервер: /apk зеркалирует свежий APK из релиза
+// mobile-latest (GitHub-CDN у местных провайдеров виснет на хвосте
+// закачки). Ссылка вечная — содержимое подменяет сам сервер.
+const APK_URL = `${BASE_URL}/apk`;
 
 interface Props {
   user: UserOut;
