@@ -92,7 +92,18 @@ export default function Sidebar({
       }
     };
 
-    const onCallActive = (data: any) => setActiveCalls((prev) => new Set([...prev, data.chat_id]));
+    // call_active теперь несёт СПИСОК участников, и пустой список = звонок
+    // кончился. Раньше значок зажигался на любой call_active — и пустой
+    // «финальный» тут же возвращал LIVE после call_end, навсегда.
+    const onCallActive = (data: any) => {
+      const parts: unknown[] = Array.isArray(data.participants) ? data.participants : [];
+      setActiveCalls((prev) => {
+        const n = new Set(prev);
+        if (parts.length === 0) n.delete(data.chat_id);
+        else n.add(data.chat_id);
+        return n;
+      });
+    };
     const onCallEnd = (data: any) => setActiveCalls((prev) => { const n = new Set(prev); n.delete(data.chat_id); return n; });
 
     wsService.on("user_online", onOnline);
