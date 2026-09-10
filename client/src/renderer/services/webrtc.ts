@@ -80,9 +80,13 @@ class WebRTCService {
     this.currentChatId = chatId;
     this.localStream = await this._getMedia(video);
     this._createPeer(initiatorId, false);
+    this._flushPendingSignals();
+    return this.localStream;
+  }
 
-    // Flush queued signals (webcam AND screen) that arrived before we got our stream.
-    // Key format: `${userId}:${purpose}:${role}`
+  // Flush queued signals (webcam AND screen) that arrived before we got our
+  // stream. Key format: `${userId}:${purpose}:${role}`
+  private _flushPendingSignals() {
     for (const [key, signals] of Array.from(this.pendingSignals.entries())) {
       const [uidStr, purpose, role] = key.split(":");
       const userId = Number(uidStr);
@@ -101,7 +105,19 @@ class WebRTCService {
       }
     }
     this.pendingSignals.clear();
+  }
 
+  // Присоединение к УЖЕ идущему звонку (плашка «в созвоне»). Серверу шлём
+  // call_join — он рассылает call_active, и mesh дособирается сам обычным
+  // tie-break'ом в _handleCallActive (меньший id офферит, глейра нет).
+  // КРИТИЧНО: сначала применяем накопленные сигналы — если звонящий уже слал
+  // нам оффер (мы «прозвонили» 20с и вошли позже), отвечаем ИМЕННО ему,
+  // иначе его peer навсегда завис бы в have-local-offer и ЛС молчала бы.
+  async joinOngoing(chatId: number, video: boolean) {
+    this.currentChatId = chatId;
+    this.localStream = await this._getMedia(video);
+    this._flushPendingSignals();
+    wsService.send({ type: "call_join", chat_id: chatId });
     return this.localStream;
   }
 
@@ -336,6 +352,34 @@ class WebRTCService {
 
   private _handleCallEnd = (data: any) => {
     const fromId = data.from_user_id;
+    // Вне звонка: чистим накопленные сигналы этого юзера — протухший оффер
+    // отменённого звонка не должен всплыть при joinOngoing в СЛЕДУЮЩИЙ.
+    if (!this.localStream) {
+      for (const key of Array.from(this.pendingSignals.keys())) {
+        if (key.startsWith(`${fromId}:`)) this.pendingSignals.delete(key);
+      }
+      return;
+    }
+    if (data.timeout) {
+      // 60с никто не взял — сервер закрыл звонок ЦЕЛИКОМ. Сворачиваем всё
+      // локально: раньше звонящий оставался «в звонке» с захваченным микро,
+      // потому что рвался только один peer.
+      this.peers.forEach((p) => { try { p.destroy(); } catch {} });
+      this.peers.clear();
+      this.screenSendingPeers.forEach((p) => { try { p.destroy(); } catch {} });
+      this.screenSendingPeers.clear();
+      this.screenReceivingPeers.forEach((p) => { try { p.destroy(); } catch {} });
+      this.screenReceivingPeers.clear();
+      this.pendingSignals.clear();
+      this._videoSenders.clear();
+      this.localStream?.getTracks().forEach((t) => t.stop());
+      this.localStream = null;
+      this.localScreenStream?.getTracks().forEach((t) => t.stop());
+      this.localScreenStream = null;
+      this.currentChatId = null;
+      this.onCallEnded?.();
+      return;
+    }
     this.peers.get(fromId)?.destroy();
     this.peers.delete(fromId);
     this.screenSendingPeers.get(fromId)?.destroy();
@@ -417,6 +461,21 @@ class WebRTCService {
     this.localStream.addTrack(newTrack);
     this._videoSenders.forEach((sender) => {
       (sender as any).replaceTrack(newTrack).catch(() => {});
+    });
+    // Транссивер, добавленный НЕ-инициатором при audio-only старте, ни разу
+    // не согласован (currentDirection === null): replaceTrack в него уходит
+    // в никуда, и собеседник (особенно телефон) кадров не получает. Такие
+    // соединения пересогласовываем — simple-peer дошлёт свежий оффер.
+    this.peers.forEach((peer, uid) => {
+      try {
+        const pc2: RTCPeerConnection | undefined = (peer as any)._pc;
+        const sender = this._videoSenders.get(uid);
+        if (!pc2 || !sender) return;
+        const tr = pc2.getTransceivers().find((t) => t.sender === sender);
+        if (tr && tr.currentDirection == null) (peer as any).negotiate();
+      } catch {
+        // best-effort — обычный replaceTrack уже сделан
+      }
     });
   }
 

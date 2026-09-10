@@ -306,7 +306,7 @@ function MobileAppSection({ isNeo }: { isNeo: boolean }) {
         <div style={card}>
           <span style={cardTitle}>🤖 Андроид</span>
           <div style={qrBox}><QrImg text={APK_URL} alt="QR: скачать APK" /></div>
-          <span style={hint}>Наведи камеру — скачается свежий APK.<br />Ставится поверх старого, ничего не сотрётся.</span>
+          <span style={hint}>Наведи камеру — скачается свежий APK.<br />Ставится поверх старого, ничего не сотрётся.<br />Если качается плохо — попробуй с включённым VPN.</span>
           {apkInfo && <span style={{ ...hint, opacity: 0.8 }}>{apkInfo}</span>}
         </div>
         <div style={card}>

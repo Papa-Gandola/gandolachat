@@ -8,6 +8,7 @@ import { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
+import { WhatsNewModal } from "./src/components/WhatsNewModal";
 import { RootNavigator } from "./src/navigation/RootNavigator";
 import { AuthProvider } from "./src/services/AuthContext";
 import { CallProvider } from "./src/services/CallContext";
@@ -35,6 +36,7 @@ export default function App() {
           <AuthProvider>
             <CallProvider>
               <RootNavigator />
+              <WhatsNewModal />
             </CallProvider>
           </AuthProvider>
         </ThemeProvider>

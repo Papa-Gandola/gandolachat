@@ -82,6 +82,28 @@ export function ChatScreen({ navigation, route }: Props) {
   const { user } = useAuth();
   const call = useCall();
   const { chatId, name, userId, avatarUrl, allowAllWrite, createdBy } = route.params;
+  // Плашка «в созвоне»: кто сейчас в звонке этого чата (по call_active).
+  const callParticipants = call.activeCalls.get(Number(chatId)) ?? [];
+  const inThisCall = call.inCall && call.callChatId === Number(chatId);
+  const callNamesRef = useRef<Map<number, string>>(new Map());
+  const [, bumpCallNames] = useState(0);
+  useEffect(() => {
+    callParticipants.forEach((id) => {
+      if (id === user?.id || callNamesRef.current.has(id)) return;
+      callNamesRef.current.set(id, "…");
+      userApi
+        .getUser(id)
+        .then((r) => {
+          callNamesRef.current.set(id, r.data.username);
+          bumpCallNames((n) => n + 1);
+        })
+        .catch(() => callNamesRef.current.delete(id));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callParticipants.join(","), user?.id]);
+  const callNamesLine = callParticipants
+    .map((id) => (id === user?.id ? "ты" : callNamesRef.current.get(id) ?? "…"))
+    .join(", ");
   // Group when there's no single DM peer. A channel (allow_all_write === false)
   // is read-only for everyone except its creator.
   const isGroup = route.params.isGroup ?? userId == null;
@@ -640,14 +662,54 @@ export function ChatScreen({ navigation, route }: Props) {
           <Text style={{ fontSize: 18 }}>🎴</Text>
         </IconBtn>
         <IconBtn
-          disabled={userId == null}
+          disabled={userId == null && callParticipants.length === 0 && !inThisCall}
           onPress={() => {
-            if (userId != null) call.startCall(Number(chatId), name, [userId]);
+            // Живой созвон → мгновенно подключаемся (или разворачиваем свой);
+            // созвона нет → обычный дозвон (только ЛС).
+            if (inThisCall) call.expand();
+            else if (callParticipants.length > 0) call.joinOngoing(Number(chatId), name);
+            else if (userId != null) call.startCall(Number(chatId), name, [userId]);
           }}
         >
-          <PhoneIcon color={userId == null ? theme.colors.inkMuted : theme.colors.ink} />
+          <PhoneIcon
+            color={
+              callParticipants.length > 0 || inThisCall
+                ? theme.colors.online
+                : userId == null
+                  ? theme.colors.inkMuted
+                  : theme.colors.ink
+            }
+          />
         </IconBtn>
       </View>
+
+      {/* Плашка идущего созвона: имена участников, тап — войти/вернуться */}
+      {callParticipants.length > 0 && (
+        <Pressable
+          onPress={() => (inThisCall ? call.expand() : call.joinOngoing(Number(chatId), name))}
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 8,
+            paddingHorizontal: 14,
+            paddingVertical: 7,
+            backgroundColor: "rgba(80,200,120,0.14)",
+            borderBottomWidth: 1,
+            borderBottomColor: theme.colors.border,
+          }}
+        >
+          <PhoneIcon color={theme.colors.online} size={14} />
+          <Text
+            numberOfLines={1}
+            style={{ flex: 1, fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.ink }}
+          >
+            В созвоне: {callNamesLine}
+          </Text>
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "700", color: theme.colors.online }}>
+            {inThisCall ? "вернуться" : "войти →"}
+          </Text>
+        </Pressable>
+      )}
 
       <ScrollView
         ref={scrollRef}

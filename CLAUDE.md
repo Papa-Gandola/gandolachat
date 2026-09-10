@@ -25,8 +25,8 @@ Discord-подобный мессенджер для чата друзей (~50 
 | Менялось | Действия |
 |---|---|
 | `server/` | VPS: `git pull && docker compose build server && docker compose up -d server`. Миграции и синк ассетов — сами при старте. Релиз НЕ нужен |
-| `client/` | Бамп версии в **двух** местах: `client/package.json` + строка `v2.x.x` в `client/src/renderer/pages/Main.tsx` (+`npm i --package-lock-only`). После мержа: `git tag v2.x.x && git push origin v2.x.x` → Actions собирает **черновик** релиза (Linux создаёт, Windows докладывает — последовательно, гонку уже чинили) → хозяин жмёт Publish release |
-| `mobile/` | PWA: на VPS `cd mobile && npm run build:web` → скопировать `mobile/dist/*` в `server/web/` (bind-mount, рестарт не нужен; Node 20 на VPS стоит). Скрипт `postbuild-web.js` префиксует пути `/app`. Нативный Android: изменение mobile/app.json\|package.json\|eas.json в main (или тег `mobile-v*`) → Actions ждёт сборку EAS и сам публикует APK в скользящий релиз **mobile-latest** — постоянная ссылка `releases/download/mobile-latest/gandolachat.apk` (на неё смотрит QR в профиле десктопа). При новом APK поднимать И version, И versionCode (appVersionSource: local). Версия mobile своя (0.7.x) |
+| `client/` | Бамп версии в **двух** местах: `client/package.json` + `APP_VERSION` в `client/src/renderer/changelog.ts` (+`npm i --package-lock-only`); ТАМ ЖЕ дописать пункты в CHANGELOG — окошко «Что нового» покажется каждому один раз после обновления (Main.tsx версию берёт отсюда). После мержа: `git tag v2.x.x && git push origin v2.x.x` → Actions собирает **черновик** релиза (Linux создаёт, Windows докладывает — последовательно, гонку уже чинили) → хозяин жмёт Publish release |
+| `mobile/` | PWA: на VPS `cd mobile && npm run build:web` → скопировать `mobile/dist/*` в `server/web/` (bind-mount, рестарт не нужен; Node 20 на VPS стоит). Скрипт `postbuild-web.js` префиксует пути `/app`. Нативный Android: изменение mobile/app.json\|package.json\|eas.json в main (или тег `mobile-v*`) → Actions ждёт сборку EAS и сам публикует APK в скользящий релиз **mobile-latest** — постоянная ссылка `releases/download/mobile-latest/gandolachat.apk` (на неё смотрит QR в профиле десктопа). При новом APK поднимать И version, И versionCode (appVersionSource: local). Версия mobile своя (0.7.x). При заметном батче правок поднять `CHANGELOG_ID` (дата) в `mobile/src/changelog.ts` + дописать пункты — мобильное «Что нового» (версия для OTA не годится, она не меняется) |
 | только docs | ничего |
 
 Ошибся тегом: удалить И черновик релиза на GitHub, И тег
@@ -34,7 +34,9 @@ Discord-подобный мессенджер для чата друзей (~50 
 
 ## Сервер (`server/`, FastAPI + SQLAlchemy 2.0 async + PostgreSQL)
 
-Запуск: `uvicorn app.main:app`. В lifespan: alembic upgrade → синк
+Запуск: `uvicorn app.main:app`. В Dockerfile PYTHONUNBUFFERED=1 — иначе
+print-логи видны в `docker compose logs` с опозданием (не убирать).
+В lifespan: alembic upgrade → синк
 `assets/compendium/intro.mp4` в uploads → APScheduler-джобы.
 
 - `app/main.py` — app, CORS, статика `/uploads` и `/app` (PWA), WS-роут
@@ -77,10 +79,33 @@ Discord-подобный мессенджер для чата друзей (~50 
   status, edit_message (тоже режет `/quest_card`), delete_message,
   poker_action/poker_request_state, call_signal/call_end (WebRTC-сигналинг
   через сервер, mesh P2P ≤7; по завершении пишется `/call_record kind|dur|
-  n|initiator`). Исходящие: message, message_edited/deleted, reaction_*,
-  user_online/offline, typing, new_chat, chat_updated/deleted,
-  profile_updated, new_pending_user, dota_ready_update, poker_table_
-  created/updated/removed, poker_state, call_signal/call_end.
+  n|initiator`). Мультиустройство звонков: первый сигнал юзера в звонке →
+  его же сокетам летит `call_taken {chat_id}` (другие устройства гасят
+  входящий и молчат до call_end); call_end рассылается чату БЕЗ сокетов
+  отправителя + отдельным send_to_user самому отправителю (его другим
+  устройствам); call_active бродкастится для ВСЕХ чатов (и ЛС — клиенты
+  лечат mesh) при СМЕНЕ СОСТАВА (не на каждый кандидат — спам), ПОСЛЕ
+  каждого call_end/дисконнекта/60с-таймаута (пустой список = звонок
+  кончился) и СНИМКОМ каждому новому WS-подключению. `call_join {chat_id}`
+  — вход в УЖЕ идущий звонок: сервер регистрирует участника (active
+  перечитывается ПОСЛЕ db-await'ов — гонка с последним отбоем; повторный
+  join уже участвующего юзера игнорируется — mesh по user_id; вход
+  инициатора «ответом» не считается) и рассылает call_active, mesh
+  дособирают клиенты tie-break'ом (меньший id офферит); join в МЁРТВЫЙ
+  звонок → адресный пустой call_active (клиентский сторожок 12с добьёт
+  повисший вход). Клиенты звонят ТОЛЬКО на signal.type=offer, подавление
+  «я уже в этом звонке где-то» — по членству в call_active-реестре
+  (самоочищается; НЕ отдельный набор — тот протухал навсегда), реестр
+  сбрасывается на реконнекте (_ws_open) под свежий снимок; баннер гаснет
+  по call_end только от СЕБЯ или от ЗВОНЯЩЕГО (выход третьего из группы
+  звонилку не глушит) и по пустому call_active; входящий живёт 20с и
+  гаснет ЛОКАЛЬНО (не decline). call_end с timeout:true = сервер закрыл
+  звонок целиком — клиент сворачивает ВСЁ (иначе звонящий вечно «в
+  звонке»). Исходящие: message,
+  message_edited/deleted, reaction_*, user_online/offline, typing,
+  new_chat, chat_updated/deleted, profile_updated, new_pending_user,
+  dota_ready_update, poker_table_created/updated/removed, poker_state,
+  call_signal/call_end/call_taken/call_active.
 - `app/push.py` — send_push бьёт в ОБА канала: Expo (native Android) и
   Web Push (`app/webpush.py`, PWA/айфоны — VAPID-ключи генерятся сами в
   uploads/vapid/, pywebpush в тредпуле, мёртвые подписки 404/410
@@ -217,6 +242,32 @@ sw.js без кэша (нарочно). Пуши: Expo (native) + **Web Push д�
 требует жест; на старте молчаливая переподписка). ws.ts: pong-надзор (3
 безответных пинга → close → реконнект) + мгновенный реконнект на AppState
 active/visibilitychange — иначе после разворота телефона сокет «полумёртв».
+Звонки (CallContext.tsx + webrtc.ts, UI = модалка НАД навигатором): камера
+по умолчанию ВЫКЛ (аудио-старт; enableCamera лениво берёт камеру и делает
+addTrack+ренегосиацию через negotiationneeded, disableCamera глушит железо
+через replaceTrack(null)+stop); «назад» СВОРАЧИВАЕТ звонок (мини-бар
+сверху, тап=развернуть), НЕ кладёт трубку; RemoteTile рендерит RTCView
+ВСЕГДА (в вебе это <video> с ЗВУКОМ — иначе собеседник без камеры нем в
+PWA), аватар — оверлеем; дорожки без потока (десктопный transceiver без
+msid) докладываются в remoteStreams-карту — без этого вебка с компа не
+появлялась; webrtc.init перевешивает WS-хендлеры каждый раз (логаут
+стирает их — иначе после перелогина звонки мертвы); звонит только на
+offer + членство в activeCalls-реестре (сброс на _ws_open); входящий
+гаснет сам через 20с (локально, deps по chatId — подгрузка имени не
+рестартует таймер/звук); рингтон мягкий «как на компе» — сигнал/5с + один
+импульс вибрации, volume 0.6; activeCalls (chat_id→[user_id]) в
+CallContext по call_active (дедуп по составу), в ChatScreen плашка
+«В созвоне: имена» (тап/кнопка = joinOngoing → call_join; свой звонок =
+развернуть). joinOngoing/joinCall флашат очередь накопленных сигналов
+(_flushPending — иначе оффер звонившего завис бы навсегда) + сторожок
+12с на мёртвый join; startCall защищён от повторного входа при свёрнутом
+звонке (иначе утечка микрофона). RTCView в RemoteTile С KEY ПО
+ВИДЕОДОРОЖКЕ — натив привязывает дорожку один раз при streamURL, без
+ремаунта поздняя камера = чёрная плитка. `signal.renegotiate` от
+десктопного респондера → добавить recvonly-видеотранссивер + оффер
+(иначе его вебка не доедет в звонке, начатом с телефона). Мини-бар
+свёрнутого звонка — В ПОТОКЕ над навигатором (сдвигает приложение вниз;
+оверлей накрывал шапки экранов наглухо).
 Версия своя (0.7.x, app.json+package.json).
 
 ## Локальная проверка (как я гоняю без окружения хозяина)

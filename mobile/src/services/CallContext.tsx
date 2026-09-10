@@ -1,7 +1,8 @@
 import { Audio } from "expo-av";
 import * as KeepAwake from "expo-keep-awake";
 import { createContext, ReactNode, useContext, useEffect, useRef, useState } from "react";
-import { Animated, Dimensions, Modal, PanResponder, Pressable, StyleSheet, Text, Vibration, View, ViewStyle } from "react-native";
+import { Animated, Dimensions, Modal, PanResponder, Platform, Pressable, StyleSheet, Text, Vibration, View, ViewStyle } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MediaStream, RTCView } from "react-native-webrtc";
 
 import { Avatar } from "../components/Avatar";
@@ -29,10 +30,25 @@ interface PeerInfo {
 
 interface CallState {
   inCall: boolean;
+  /** id чата, в котором идёт НАШ текущий звонок (null — не в звонке). */
+  callChatId: number | null;
+  /** Кто сейчас в созвоне по чатам: chat_id → [user_id] (по call_active). */
+  activeCalls: Map<number, number[]>;
   startCall: (chatId: number, name: string, targetIds: number[], video?: boolean) => Promise<void>;
+  /** Подключиться к уже идущему созвону этого чата. */
+  joinOngoing: (chatId: number, name: string) => Promise<void>;
+  /** Развернуть свёрнутый звонок. */
+  expand: () => void;
 }
 
-const CallContext = createContext<CallState>({ inCall: false, startCall: async () => {} });
+const CallContext = createContext<CallState>({
+  inCall: false,
+  callChatId: null,
+  activeCalls: new Map(),
+  startCall: async () => {},
+  joinOngoing: async () => {},
+  expand: () => {},
+});
 export function useCall(): CallState {
   return useContext(CallContext);
 }
@@ -53,10 +69,34 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const [remotes, setRemotes] = useState<Remote[]>([]);
   const [muted, setMuted] = useState(false);
   const [videoOff, setVideoOff] = useState(false);
+  const [minimized, setMinimized] = useState(false);
+  const [callSec, setCallSec] = useState(0);
+  const [callChatId, setCallChatId] = useState<number | null>(null);
+  const [activeCalls, setActiveCalls] = useState<Map<number, number[]>>(new Map());
   const [peerInfo, setPeerInfo] = useState<Map<number, PeerInfo>>(new Map());
   const [peerVideoOff, setPeerVideoOff] = useState<Set<number>>(new Set());
   const activeRef = useRef(false);
   const ringRef = useRef<Audio.Sound | null>(null);
+  // Ref-зеркала для WS-хендлеров (их замыкание живёт от первого рендера).
+  // «Я уже в этом звонке где-то» выводится из РЕЕСТРА call_active
+  // (membership) — реестр самоочищается сервером, «вечной глушилки» после
+  // пропущенного call_end не бывает.
+  const activeCallsRef = useRef<Map<number, number[]>>(new Map());
+  const userIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    userIdRef.current = user?.id ?? null;
+  }, [user?.id]);
+  const insets = useSafeAreaInsets();
+
+  // Секундомер звонка — для шапки и мини-бара свёрнутого режима.
+  useEffect(() => {
+    if (!inCall) {
+      setCallSec(0);
+      return;
+    }
+    const id = setInterval(() => setCallSec((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [inCall]);
 
   const sendVideoStatus = (off: boolean) => {
     const chatId = webrtcService.getChatId();
@@ -109,6 +149,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
     webrtcService.onCallEnded = () => {
       activeRef.current = false;
       setInCall(false);
+      setMinimized(false);
+      setCallChatId(null);
       setLocalStream(null);
       setRemotes([]);
       setMuted(false);
@@ -124,6 +166,15 @@ export function CallProvider({ children }: { children: ReactNode }) {
       if (activeRef.current || webrtcService.isInCall()) return;
       const chatId = d.chat_id as number;
       const fromUserId = d.from_user_id as number;
+      // Звонок поднимает только ОФФЕР. Кандидаты/ансверы — это трафик чужого
+      // разговора (например, к нашему же устройству, взявшему трубку) —
+      // раньше они заставляли телефон звонить весь разговор.
+      const sig = d.signal as { type?: string; renegotiate?: boolean } | null;
+      if (!sig || sig.type !== "offer") return;
+      // Я уже в этом звонке на другом устройстве (реестр call_active) —
+      // молчим, в т.ч. на ре-офферы включения камеры посреди разговора.
+      const me = userIdRef.current;
+      if (me != null && (activeCallsRef.current.get(chatId) ?? []).includes(me)) return;
       setIncoming((prev) => {
         if (prev) return prev;
         userApi
@@ -133,9 +184,47 @@ export function CallProvider({ children }: { children: ReactNode }) {
         return { chatId, fromUserId, name: "Входящий звонок" };
       });
     };
+    // Гасим входящий по call_end ТОЛЬКО когда звонить дальше нечего: отбой
+    // сделал я сам (другое моё устройство) или сам ЗВОНЯЩИЙ отменил вызов.
+    // Выход третьего участника группы звонок не заканчивает.
     const onEnd = (d: Record<string, unknown>) => {
       const chatId = d.chat_id as number;
+      const fromId = d.from_user_id as number;
+      setIncoming((prev) => {
+        if (!prev || prev.chatId !== chatId) return prev;
+        const me = userIdRef.current;
+        if (fromId === me || fromId === prev.fromUserId) return null;
+        return prev;
+      });
+    };
+    // Трубку взяли на другом нашем устройстве — здесь гасим входящий.
+    const onTaken = (d: Record<string, unknown>) => {
+      const chatId = d.chat_id as number;
+      if (webrtcService.isInCall()) return; // взяли именно тут — не трогаем
       setIncoming((prev) => (prev && prev.chatId === chatId ? null : prev));
+    };
+    // Реестр «кто в созвоне». Сервер шлёт call_active при смене состава,
+    // снимком при коннекте и после каждого выхода/таймаута; пустой список =
+    // конец звонка (авторитетный) — гасим и входящий. Дедуп по составу.
+    const onActive = (d: Record<string, unknown>) => {
+      const chatId = d.chat_id as number;
+      const parts = Array.isArray(d.participants) ? (d.participants as number[]) : [];
+      const prevParts = activeCallsRef.current.get(chatId) ?? [];
+      if (parts.length === prevParts.length && parts.every((p) => prevParts.includes(p))) return;
+      const next = new Map(activeCallsRef.current);
+      if (parts.length === 0) next.delete(chatId);
+      else next.set(chatId, parts);
+      activeCallsRef.current = next;
+      setActiveCalls(next);
+      if (parts.length === 0) {
+        setIncoming((prev) => (prev && prev.chatId === chatId ? null : prev));
+      }
+    };
+    // Реконнект: реестр мог протухнуть (звонок кончился, пока были оффлайн).
+    // Сбрасываем — сервер тут же шлёт свежий снимок живых звонков.
+    const onOpen = () => {
+      activeCallsRef.current = new Map();
+      setActiveCalls(new Map());
     };
     const onVideoStatus = (d: Record<string, unknown>) => {
       const uid = d.user_id as number;
@@ -149,52 +238,84 @@ export function CallProvider({ children }: { children: ReactNode }) {
     };
     wsService.on("call_signal", onSignal);
     wsService.on("call_end", onEnd);
+    wsService.on("call_taken", onTaken);
+    wsService.on("call_active", onActive);
     wsService.on("video_status", onVideoStatus);
+    wsService.on("_ws_open", onOpen);
     return () => {
       wsService.off("call_signal", onSignal);
       wsService.off("call_end", onEnd);
+      wsService.off("call_taken", onTaken);
+      wsService.off("call_active", onActive);
       wsService.off("video_status", onVideoStatus);
+      wsService.off("_ws_open", onOpen);
     };
   }, []);
 
+  // Входящий живёт максимум 20 секунд: дальше плашка и звук гаснут сами.
+  // Сам звонок НЕ сбрасываем (никакого decline) — пока созвон жив, к нему
+  // можно подключиться кнопкой звонка в чате. Ключ — chatId, а не объект:
+  // подгрузка имени звонящего не должна перезапускать таймер.
+  useEffect(() => {
+    if (incoming == null) return;
+    const id = setTimeout(() => setIncoming(null), 20000);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incoming?.chatId]);
+
   // Ringtone + vibration while a call is incoming OR while an outgoing call
-  // hasn't been picked up yet (matches desktop: ringback tone for the caller).
+  // hasn't been picked up yet (ringback for the caller).
+  // Мягкий режим «как на компе»: короткий сигнал раз в 5 секунд вместо
+  // непрерывной сирены, вибрация — один лёгкий импульс на сигнал (и только
+  // для входящего). Через 20с входящий гаснет сам (эффект выше).
   useEffect(() => {
     const isIncoming = !!incoming && !inCall;
     const isOutgoingWaiting = inCall && remotes.length === 0;
     const ringing = isIncoming || isOutgoingWaiting;
     if (!ringing) return;
-    if (isIncoming) {
-      // Vibrate only for incoming — outgoing caller doesn't need to feel their
-      // own phone buzz.
-      Vibration.vibrate([0, 700, 700], true);
-    }
     let cancelled = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const buzz = () => {
+      if (isIncoming) Vibration.vibrate(300);
+    };
     (async () => {
       try {
         await Audio.setAudioModeAsync({ playsInSilentModeIOS: true, shouldDuckAndroid: true });
         const { sound } = await Audio.Sound.createAsync(
           // eslint-disable-next-line @typescript-eslint/no-require-imports
           require("../../assets/ring.wav"),
-          { shouldPlay: true, isLooping: true, volume: 1.0 },
+          { shouldPlay: true, isLooping: false, volume: 0.6 },
         );
         if (cancelled) {
           sound.unloadAsync().catch(() => {});
           return;
         }
         ringRef.current = sound;
+        buzz();
+        interval = setInterval(() => {
+          ringRef.current?.replayAsync().catch(() => {});
+          buzz();
+        }, 5000);
       } catch {
-        // ignore — vibration still rings (incoming only)
+        // звук не завёлся — хотя бы вибрируем по тому же графику
+        if (!cancelled) {
+          buzz();
+          interval = setInterval(buzz, 5000);
+        }
       }
     })();
     return () => {
       cancelled = true;
+      if (interval) clearInterval(interval);
       Vibration.cancel();
       const s = ringRef.current;
       ringRef.current = null;
       if (s) s.stopAsync().then(() => s.unloadAsync()).catch(() => {});
     };
-  }, [incoming, inCall, remotes.length]);
+    // Ключ — chatId, не объект: подгрузка имени звонящего не должна
+    // рестартовать звук (слышался бы «двойной» сигнал в первую секунду).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incoming?.chatId, inCall, remotes.length]);
 
   const afterMedia = (ls: MediaStream) => {
     setLocalStream(ls);
@@ -206,11 +327,22 @@ export function CallProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const startCall = async (chatId: number, name: string, targetIds: number[], video = true) => {
+  // Камера по умолчанию ВЫКЛЮЧЕНА (как на десктопе): звонок стартует
+  // аудио-онли, вебка — кнопкой. Меньше сюрпризов и меньше греет телефон.
+  const startCall = async (chatId: number, name: string, targetIds: number[], video = false) => {
+    // Уже в звонке (например, свёрнутом) — не начинаем второй: это
+    // перезаписало бы поток/чат и оставило бы микрофон первого звонка
+    // захваченным навсегда. Просто разворачиваем текущий.
+    if (activeRef.current || webrtcService.isInCall()) {
+      setMinimized(false);
+      return;
+    }
     activeRef.current = true;
     setCallName(name);
     setVideoOff(!video);
     setMuted(false);
+    setMinimized(false);
+    setCallChatId(chatId);
     try {
       afterMedia(await webrtcService.startCall(chatId, targetIds, video));
     } catch {
@@ -224,14 +356,49 @@ export function CallProvider({ children }: { children: ReactNode }) {
     setIncoming(null);
     activeRef.current = true;
     setCallName(inc.name);
-    setVideoOff(false);
+    setVideoOff(true);
     setMuted(false);
+    setMinimized(false);
+    setCallChatId(inc.chatId);
     try {
-      afterMedia(await webrtcService.joinCall(inc.chatId, inc.fromUserId, true));
+      afterMedia(await webrtcService.joinCall(inc.chatId, inc.fromUserId, false));
     } catch {
       activeRef.current = false;
     }
   };
+
+  // Подключение к уже идущему созвону (плашка/кнопка в чате).
+  const joinOngoing = async (chatId: number, name: string) => {
+    if (activeRef.current || webrtcService.isInCall()) {
+      setMinimized(false);
+      return;
+    }
+    activeRef.current = true;
+    setIncoming(null);
+    setCallName(name);
+    setVideoOff(true);
+    setMuted(false);
+    setMinimized(false);
+    setCallChatId(chatId);
+    try {
+      afterMedia(await webrtcService.joinOngoing(chatId));
+      // Сторожок мёртвого входа: call_join в звонок, который успел
+      // кончиться, сервер тихо игнорирует. Если за 12с нас так и не
+      // зарегистрировали в составе — кладём пустой звонок сами, а не сидим
+      // «Звоним…» с захваченным микрофоном.
+      setTimeout(() => {
+        const me = userIdRef.current;
+        const inRoster = me != null && (activeCallsRef.current.get(chatId) ?? []).includes(me);
+        if (!inRoster && webrtcService.getChatId() === chatId) {
+          webrtcService.endCall();
+        }
+      }, 12000);
+    } catch {
+      activeRef.current = false;
+    }
+  };
+
+  const expand = () => setMinimized(false);
 
   const reject = () => {
     if (!incoming) return;
@@ -245,11 +412,19 @@ export function CallProvider({ children }: { children: ReactNode }) {
     setMuted(m);
     webrtcService.setMuted(m);
   };
-  const toggleVideo = () => {
-    const v = !videoOff;
-    setVideoOff(v);
-    webrtcService.setVideoOff(v);
-    sendVideoStatus(v);
+  const toggleVideo = async () => {
+    if (videoOff) {
+      // Дорожки могло не быть вовсе (аудио-онли старт) — enableCamera сам
+      // спросит разрешение, возьмёт камеру и раздаст её собеседникам.
+      const ok = await webrtcService.enableCamera();
+      if (!ok) return; // камеру не дали — остаёмся с аватаркой
+      setVideoOff(false);
+      sendVideoStatus(false);
+    } else {
+      webrtcService.disableCamera();
+      setVideoOff(true);
+      sendVideoStatus(true);
+    }
   };
 
   // Group-call grid data: tile per remote participant.
@@ -261,8 +436,43 @@ export function CallProvider({ children }: { children: ReactNode }) {
   }));
 
   return (
-    <CallContext.Provider value={{ inCall, startCall }}>
-      {children}
+    <CallContext.Provider value={{ inCall, callChatId, activeCalls, startCall, joinOngoing, expand }}>
+      {/* Мини-бар свёрнутого звонка живёт В ПОТОКЕ (не оверлеем): он
+          сдвигает приложение вниз, и шапки экранов (назад/поиск/звонок)
+          остаются кликабельными — оверлей их накрывал наглухо. */}
+      <View style={{ flex: 1 }}>
+        {inCall && minimized && (
+          <Pressable
+            onPress={() => setMinimized(false)}
+            style={{ paddingTop: insets.top, backgroundColor: theme.colors.online }}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 8, gap: 10 }}>
+              <PhoneIcon color="#0a0a0a" size={16} />
+              <Text
+                numberOfLines={1}
+                style={{ flex: 1, fontFamily: theme.fonts.mono, fontSize: 13, fontWeight: "700", color: "#0a0a0a" }}
+              >
+                {callName} · {remotes.length === 0 ? "звоним…" : fmtDur(callSec)} — вернуться
+              </Text>
+              <Pressable
+                onPress={end}
+                hitSlop={8}
+                style={{
+                  width: 30,
+                  height: 30,
+                  borderRadius: 15,
+                  backgroundColor: theme.colors.danger,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <HangupIcon color="#fff" size={15} />
+              </Pressable>
+            </View>
+          </Pressable>
+        )}
+        <View style={{ flex: 1 }}>{children}</View>
+      </View>
 
       {/* Incoming-call prompt */}
       <Modal visible={!!incoming && !inCall} transparent animationType="fade" onRequestClose={reject}>
@@ -295,8 +505,9 @@ export function CallProvider({ children }: { children: ReactNode }) {
         </View>
       </Modal>
 
-      {/* Active call */}
-      <Modal visible={inCall} animationType="slide" onRequestClose={end}>
+      {/* Active call. Кнопка «назад» СВОРАЧИВАЕТ звонок (мини-бар), а не
+          кладёт трубку — раньше случайный back ронял звонок. */}
+      <Modal visible={inCall && !minimized} animationType="slide" onRequestClose={() => setMinimized(true)}>
         <View style={{ flex: 1, backgroundColor: "#000" }}>
           {/* Remote — full screen for 1:1, grid for groups */}
           {remoteTiles.length === 0 ? (
@@ -318,10 +529,34 @@ export function CallProvider({ children }: { children: ReactNode }) {
             meColor={colorFor(user?.id ?? 0)}
           />
 
-          {/* Name */}
+          {/* Name + duration */}
           <View style={{ position: "absolute", top: 48, left: 16 }}>
             <Text style={{ fontFamily: theme.fonts.mono, fontSize: 15, fontWeight: "700", color: "#fff" }}>{callName}</Text>
+            {remoteTiles.length > 0 && (
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: "rgba(255,255,255,0.7)", marginTop: 2 }}>
+                {fmtDur(callSec)}
+              </Text>
+            )}
           </View>
+
+          {/* Свернуть: звонок продолжается, можно ходить по чатам и писать */}
+          <Pressable
+            onPress={() => setMinimized(true)}
+            hitSlop={10}
+            style={{
+              position: "absolute",
+              top: 44,
+              right: 16,
+              width: 40,
+              height: 40,
+              borderRadius: 20,
+              backgroundColor: "rgba(255,255,255,0.16)",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Text style={{ color: "#fff", fontSize: 20, lineHeight: 22, fontWeight: "700" }}>⌄</Text>
+          </Pressable>
 
           {/* Controls */}
           <View style={{ position: "absolute", left: 0, right: 0, bottom: 44, flexDirection: "row", justifyContent: "center", gap: 20 }}>
@@ -337,8 +572,29 @@ export function CallProvider({ children }: { children: ReactNode }) {
           </View>
         </View>
       </Modal>
+
+      {/* В вебе звук собеседников играет через <video>-элементы RTCView —
+          при свёрнутом окне звонка (Modal размонтирован) их надо держать
+          живыми невидимками, иначе свернул = тишина. Натив звучит и так. */}
+      {inCall && minimized && Platform.OS === "web" && (
+        <View style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", opacity: 0 }} pointerEvents="none">
+          {remoteTiles.map((t) => (
+            <RTCView key={t.userId} streamURL={t.stream.toURL()} style={{ width: 1, height: 1 }} />
+          ))}
+        </View>
+      )}
+
     </CallContext.Provider>
   );
+}
+
+function fmtDur(sec: number): string {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  const mm = String(m).padStart(2, "0");
+  const ss = String(s).padStart(2, "0");
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
 function CircleBtn({ children, onPress, bg, size = 56 }: { children: ReactNode; onPress: () => void; bg: string; size?: number }) {
@@ -394,10 +650,29 @@ function RemoteTile({ tile, fallbackName }: { tile: RemoteTileData; fallbackName
   const showVideo = !videoOff && stream.getVideoTracks().length > 0;
   return (
     <View style={{ flex: 1, backgroundColor: "#111", overflow: "hidden" }}>
-      {showVideo ? (
-        <RTCView streamURL={stream.toURL()} objectFit="cover" style={StyleSheet.absoluteFill} />
-      ) : (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+      {/* RTCView рендерим ВСЕГДА: в вебе (PWA) это <video>, через который
+          играет и ЗВУК. Если рендерить его только при включённой камере,
+          собеседник без камеры в PWA был бы НЕМЫМ (главная причина «плохих
+          звонков с веб-формы»). При выключенном видео поверх — аватарка.
+          key по видеодорожке ОБЯЗАТЕЛЕН: нативный RTCView привязывает
+          дорожку один раз при установке streamURL; камера теперь всегда
+          приезжает ПОЗЖЕ (аудио-старт), и без ремаунта был бы вечный
+          чёрный экран вместо видео. */}
+      <RTCView
+        key={stream.getVideoTracks()[0]?.id ?? "audio-only"}
+        streamURL={stream.toURL()}
+        objectFit="cover"
+        style={StyleSheet.absoluteFill}
+      />
+      {!showVideo && (
+        <View
+          style={{
+            ...StyleSheet.absoluteFillObject,
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: "#111",
+          }}
+        >
           <Avatar
             letter={(name?.[0] ?? "?").toUpperCase()}
             size={80}
