@@ -12,6 +12,91 @@ export interface UserOut {
   grammar_errors?: number;
   is_admin?: boolean;
   last_seen?: string | null;
+  // Steam/Dota (Гандолиум); steam_id64 строкой — в number не влезает
+  steam_id64?: string | null;
+  dota_account_id?: number | null;
+  dota_rank_tier?: number | null;
+  dota_leaderboard_rank?: number | null;
+  // Косметика Гандолиума
+  comp_max_level?: number;
+  comp_badge?: boolean;
+  comp_title?: string | null;
+  comp_color?: string | null;
+  comp_frame?: string | null;
+}
+
+// ==== Гандолиум (компендиум) — зеркало десктопных типов ====
+export interface CompendiumQuest {
+  id: string;
+  num: number;
+  name: string;
+  desc: string;
+  gas: number;
+  cat: "daily" | "weekly" | "season" | "team" | "anti" | "secret";
+  needs_parse: boolean;
+  done: boolean;
+  progress?: number;
+  target?: number;
+  title?: string;
+  active?: boolean;
+}
+
+export interface CompendiumTrophy {
+  quest_id: string;
+  name: string;
+  cat: string;
+  gas: number;
+  completed_at: string;
+  title?: string;
+}
+
+export interface CompendiumCosmetics {
+  max_level: number;
+  badge: boolean;
+  title: string | null;
+  color: string | null;
+  frame: string | null;
+  earned_titles: string[];
+  palette: string[];
+  unlocks: Record<string, number>;
+}
+
+export interface CompendiumMe {
+  linked: boolean;
+  cosmetics?: CompendiumCosmetics;
+  season: string;
+  gas?: number;
+  level?: number;
+  level_progress?: number;
+  level_target?: number;
+  matches?: number;
+  wins?: number;
+  rank_tier?: number | null;
+  leaderboard_rank?: number | null;
+  daily?: CompendiumQuest[];
+  weekly?: CompendiumQuest[];
+  daily_pool?: CompendiumQuest[];
+  weekly_pool?: CompendiumQuest[];
+  season_quests?: CompendiumQuest[];
+  team?: CompendiumQuest[];
+  anti?: CompendiumQuest[];
+  trophies?: CompendiumTrophy[];
+}
+
+export interface CompendiumSeasonRow {
+  user_id: number;
+  username: string;
+  avatar_url: string | null;
+  gas: number;
+  level: number;
+  quests_done: number;
+  anti_count: number;
+  rank_tier: number | null;
+  leaderboard_rank: number | null;
+  comp_title?: string | null;
+  comp_color?: string | null;
+  comp_frame?: string | null;
+  comp_badge?: boolean;
 }
 
 export interface MessageOut {
@@ -116,10 +201,20 @@ export const userApi = {
   search: (q: string) => getInstance().get<UserOut[]>(`/api/users/search?q=${encodeURIComponent(q)}`),
   updateProfile: (data: { username?: string; status?: string; about?: string }) =>
     getInstance().patch<UserOut>("/api/users/me", data),
+  // Steam/Dota: ссылка на профиль, steamID64 или Friend ID из Доты
+  linkSteam: (input: string) => getInstance().post<UserOut>("/api/users/me/steam", { input }),
+  unlinkSteam: () => getInstance().delete<UserOut>("/api/users/me/steam"),
+  refreshSteam: () => getInstance().post<UserOut>("/api/users/me/steam/refresh"),
   registerPushToken: (token: string, platform = "android") =>
     getInstance().post("/api/users/push-token", { token, platform }),
   unregisterPushToken: (token: string) =>
     getInstance().delete("/api/users/push-token", { data: { token } }),
+  // Web Push (PWA/айфоны)
+  webPushKey: () => getInstance().get<{ key: string }>("/api/users/web-push/key"),
+  registerWebPush: (sub: { endpoint: string; keys: { p256dh: string; auth: string } }) =>
+    getInstance().post("/api/users/web-push", sub),
+  unregisterWebPush: (endpoint: string) =>
+    getInstance().delete("/api/users/web-push", { data: { endpoint, keys: {} } }),
   uploadAvatar: async (file: { uri: string; name: string; type: string }): Promise<UserOut> => {
     // Multipart via fetch (RN's fetch builds the boundary correctly for file parts).
     const token = await SecureStore.getItemAsync(TOKEN_KEY);
@@ -334,4 +429,24 @@ export const pokerApi = {
   leave: (tableId: number) => getInstance().post<PokerTableOut | null>(`/api/poker/${tableId}/leave`),
   start: (tableId: number) => getInstance().post<PokerTableOut>(`/api/poker/${tableId}/start`),
   close: (tableId: number) => getInstance().post<{ ok: boolean }>(`/api/poker/${tableId}/close`),
+};
+
+export const compendiumApi = {
+  me: () => getInstance().get<CompendiumMe>("/api/compendium/me"),
+  season: () =>
+    getInstance().get<{ season: string; rows: CompendiumSeasonRow[]; me: number }>("/api/compendium/season"),
+  user: (userId: number) =>
+    getInstance().get<{
+      user_id: number;
+      username: string;
+      season: string;
+      gas: number;
+      level: number;
+      trophies: CompendiumTrophy[];
+      rank_tier: number | null;
+      leaderboard_rank: number | null;
+    }>(`/api/compendium/user/${userId}`),
+  // ""/false = снять; надеть можно только открытое уровнем
+  updateCosmetics: (data: { badge?: boolean; title?: string; color?: string; frame?: string }) =>
+    getInstance().patch<CompendiumCosmetics>("/api/compendium/cosmetics", data),
 };

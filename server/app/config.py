@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     # and only needed to resolve steamcommunity.com/id/<vanity> links.
     OPENDOTA_API_KEY: str = ""
     STEAM_API_KEY: str = ""
+    # VAPID-subject для Web Push (mailto: или https:) — кто «владелец» пушей
+    VAPID_SUBJECT: str = "https://2-26-117-77.sslip.io"
     # 20 минут держат ~15-20 привязанных игроков в бесплатном лимите OpenDota
     # (2000 запросов/день) вместе с допарсом и ежечасными рангами.
     DOTA_POLL_MINUTES: int = 20

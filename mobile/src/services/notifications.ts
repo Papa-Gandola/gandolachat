@@ -95,6 +95,14 @@ async function getExpoToken(): Promise<string | null> {
  */
 export async function registerForPushNotifications(): Promise<void> {
   try {
+    // Веб (PWA): Expo-токенов нет — молча переподписываем Web Push, если
+    // разрешение уже выдано. Первичное включение — кнопкой в профиле
+    // (iOS требует жест пользователя для requestPermission).
+    if (Platform.OS === "web") {
+      const { webPushResubscribeSilent } = await import("./webPush");
+      await webPushResubscribeSilent();
+      return;
+    }
     // Warm the muted-chats cache so the synchronous handler check above can
     // see it on the very first notification after launch.
     const { loadMutedChats } = await import("./mutedChats");
@@ -125,6 +133,11 @@ export async function registerForPushNotifications(): Promise<void> {
  * doesn't keep getting notifications for the previous account.
  */
 export async function unregisterCurrentPushToken(): Promise<void> {
+  if (Platform.OS === "web") {
+    const { webPushDisable } = await import("./webPush");
+    await webPushDisable().catch(() => {});
+    return;
+  }
   if (!currentToken) return;
   try {
     await userApi.unregisterPushToken(currentToken);

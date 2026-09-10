@@ -271,6 +271,69 @@ async def refresh_steam(
     return current_user
 
 
+class WebPushIn(BaseModel):
+    endpoint: str
+    keys: dict = {}
+
+
+@router.get("/web-push/key")
+async def web_push_public_key(current_user: User = Depends(get_current_user)):
+    """Публичный VAPID-ключ для PushManager.subscribe (PWA/айфоны)."""
+    from app.webpush import get_public_key
+    return {"key": get_public_key()}
+
+
+@router.post("/web-push")
+async def register_web_push(
+    data: WebPushIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Сохранить/перепривязать Web Push подписку. Endpoint уникален —
+    смена аккаунта в том же браузере просто перенацеливает подписку."""
+    from app.models import WebPushSubscription
+    endpoint = (data.endpoint or "").strip()
+    p256dh = str(data.keys.get("p256dh") or "")
+    auth_key = str(data.keys.get("auth") or "")
+    if not endpoint or not p256dh or not auth_key:
+        raise HTTPException(400, "Кривая подписка: нет endpoint/keys")
+
+    res = await db.execute(select(WebPushSubscription).where(WebPushSubscription.endpoint == endpoint))
+    row = res.scalar_one_or_none()
+    if row is None:
+        db.add(WebPushSubscription(user_id=current_user.id, endpoint=endpoint, p256dh=p256dh, auth=auth_key))
+    else:
+        row.user_id = current_user.id
+        row.p256dh = p256dh
+        row.auth = auth_key
+    await db.commit()
+    return {"ok": True}
+
+
+@router.delete("/web-push")
+async def unregister_web_push(
+    data: WebPushIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Снять подписку (логаут в PWA). Удаляем только свою."""
+    from app.models import WebPushSubscription
+    endpoint = (data.endpoint or "").strip()
+    if not endpoint:
+        return {"ok": True}
+    res = await db.execute(
+        select(WebPushSubscription).where(
+            WebPushSubscription.endpoint == endpoint,
+            WebPushSubscription.user_id == current_user.id,
+        )
+    )
+    row = res.scalar_one_or_none()
+    if row is not None:
+        await db.delete(row)
+        await db.commit()
+    return {"ok": True}
+
+
 class PushTokenIn(BaseModel):
     token: str
     platform: str = "android"

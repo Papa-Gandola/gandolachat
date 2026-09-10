@@ -18,6 +18,32 @@ const path = require("path");
 const distDir = path.resolve(__dirname, "..", "dist");
 const BASE = "/app";
 
+// Static PWA head tags. Expo's export ships NO manifest at all, and our
+// apple-* meta tags used to be injected at runtime by webPwa.ts — that's a
+// race: iOS reads the HTML when the user taps "Add to Home Screen", and a
+// bookmark grabbed before the JS ran becomes a plain Safari bookmark with no
+// standalone mode and a random start URL. Baking the tags into index.html
+// makes install deterministic; manifest pins start_url/scope to /app/.
+const HEAD_MARKER = "<!-- gandola-pwa-head -->";
+const HEAD_TAGS = `${HEAD_MARKER}
+<link rel="manifest" href="/app/manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Gandola">
+<meta name="theme-color" content="#0a0a0a">
+<link rel="apple-touch-icon" href="/app/apple-touch-icon.png">`;
+
+function injectHeadTags() {
+  const indexPath = path.join(distDir, "index.html");
+  if (!fs.existsSync(indexPath)) return;
+  let html = fs.readFileSync(indexPath, "utf8");
+  if (html.includes(HEAD_MARKER)) return; // idempotent
+  html = html.replace("</head>", `${HEAD_TAGS}\n</head>`);
+  fs.writeFileSync(indexPath, html);
+  console.log("postbuild-web: injected PWA head tags into index.html");
+}
+
 // Files we care about. JSON in dist (e.g. manifest.json, metadata.json)
 // may also embed paths.
 const TEXT_FILE_EXT = /\.(html|js|mjs|css|json|webmanifest|map)$/i;
@@ -61,4 +87,5 @@ if (!fs.existsSync(distDir)) {
 
 console.log(`postbuild-web: rewriting paths under ${distDir} to base="${BASE}"`);
 walk(distDir);
+injectHeadTags();
 console.log(`postbuild-web: done (${touched} file(s) changed)`);

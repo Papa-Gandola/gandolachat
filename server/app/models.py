@@ -158,6 +158,20 @@ class PushToken(Base):
     )
 
 
+class WebPushSubscription(Base):
+    """Web Push подписка PWA (айфоны). Endpoint уникален глобально —
+    повторная подписка того же браузера перепривязывается к текущему юзеру
+    (как push_tokens). Протухшие (404/410) вычищает app/webpush.py."""
+    __tablename__ = "web_push_subscriptions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    endpoint: Mapped[str] = mapped_column(Text, unique=True)
+    p256dh: Mapped[str] = mapped_column(String(255))
+    auth: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 class PokerSeat(Base):
     __tablename__ = "poker_seats"
 

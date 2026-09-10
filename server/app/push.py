@@ -59,31 +59,43 @@ async def send_push(
     channel_id: str = "default",
     priority: str = "high",
 ) -> None:
-    """Look up every active push token for the given users and POST a single
-    batch to Expo. Up to 100 tokens per request — fine for any chat we have."""
+    """Look up every push channel for the given users: Expo tokens (native
+    Android) get a single batched POST; Web Push subscriptions (PWA/айфоны)
+    go through app/webpush.py. Обе ветки best-effort и независимы — юзер
+    только с айфоном не должен зависеть от наличия Expo-токенов."""
     uids = list({uid for uid in user_ids if uid is not None})
     if not uids:
         return
+
     result = await db.execute(
         select(PushToken.token).where(PushToken.user_id.in_(uids))
     )
     tokens = [row[0] for row in result.all() if row[0]]
-    if not tokens:
-        return
-    messages = [
-        {
-            "to": t,
-            "title": title,
-            "body": body,
-            "data": data or {},
-            "sound": "default",
-            "priority": priority,
-            "channelId": channel_id,
-        }
-        for t in tokens
-    ]
-    # Don't block the caller on the HTTP round-trip — fire and forget.
-    asyncio.create_task(_fire(messages))
+    if tokens:
+        messages = [
+            {
+                "to": t,
+                "title": title,
+                "body": body,
+                "data": data or {},
+                "sound": "default",
+                "priority": priority,
+                "channelId": channel_id,
+            }
+            for t in tokens
+        ]
+        # Don't block the caller on the HTTP round-trip — fire and forget.
+        asyncio.create_task(_fire(messages))
+
+    try:
+        from app.webpush import send_web_push
+        await send_web_push(
+            db, uids, title, body,
+            data=data,
+            tag=(data or {}).get("notification_tag"),
+        )
+    except Exception as e:
+        print(f"[push][web] dispatch failed: {type(e).__name__}: {e}")
 
 
 async def _fire(messages: list[dict]) -> None:

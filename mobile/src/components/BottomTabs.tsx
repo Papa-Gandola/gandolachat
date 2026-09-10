@@ -9,12 +9,13 @@ import { Unread } from "./Unread";
 interface TabSpec {
   routeName: string;
   label: string;
-  iconKey: "chats" | "profile";
+  iconKey: "chats" | "compendium" | "profile";
   badge?: number;
 }
 
 const TABS: TabSpec[] = [
   { routeName: "Chats", label: "ЧАТЫ", iconKey: "chats" },
+  { routeName: "Compendium", label: "ГАНДОЛИУМ", iconKey: "compendium" },
   { routeName: "Profile", label: "Я", iconKey: "profile" },
 ];
 
@@ -63,7 +64,7 @@ export function BottomTabs({ state, navigation }: BottomTabBarProps) {
                 }}
               />
             ) : null}
-            <TabIcon iconKey={tab.iconKey} color={tint} />
+            <TabIcon iconKey={tab.iconKey} color={tint} active={active} />
             <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
               <Text
                 style={{
@@ -90,7 +91,10 @@ function prettyLabel(uppercase: string): string {
   return lower.charAt(0).toUpperCase() + lower.slice(1);
 }
 
-function TabIcon({ iconKey, color }: { iconKey: TabSpec["iconKey"]; color: string }) {
+function TabIcon({ iconKey, color, active }: { iconKey: TabSpec["iconKey"]; color: string; active?: boolean }) {
   if (iconKey === "chats") return <ChatBubbleIcon color={color} />;
+  // Гандолиум: цветное эмодзи вместо векторной иконки — неактивную гасим
+  // прозрачностью, чтобы сидела в ряду с серыми SVG.
+  if (iconKey === "compendium") return <Text style={{ fontSize: 17, opacity: active ? 1 : 0.5 }}>⛽</Text>;
   return <PersonIcon color={color} />;
 }

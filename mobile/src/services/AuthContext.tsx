@@ -44,35 +44,84 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // catch expired/revoked tokens, and refresh it (server returns a fresh
   // token on /me so the session slides forward as long as you keep opening
   // the app).
+  //
+  // ВАЖНО (баг «не могу зайти по ярлыку»): раньше ЛЮБАЯ ошибка /me — включая
+  // сетевую — трактовалась как протухший токен и удаляла его. iPhone
+  // открывает PWA с ярлыка, радио просыпается долю секунды, запрос падает —
+  // и человека разлогинивало на ровном месте. Теперь токен выкидывается
+  // только на 401/403 (реально невалиден); сетевые/серверные сбои — входим
+  // со старым токеном и дотягиваем /me фоновыми повторами.
   useEffect(() => {
-    (async () => {
+    let cancelled = false;
+
+    const isAuthRejection = (err: unknown) => {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      return status === 401 || status === 403;
+    };
+
+    const fetchMe = async (fallbackToken: string): Promise<"ok" | "auth" | "net"> => {
       try {
-        const saved = await SecureStore.getItemAsync(TOKEN_KEY);
-        if (saved) {
-          // Set token first so the axios interceptor picks it up for the /me call.
-          await SecureStore.setItemAsync(TOKEN_KEY, saved);
-          setToken(saved);
-          try {
-            const me = await userApi.me();
-            const fresh = me.data.access_token || saved;
-            await SecureStore.setItemAsync(TOKEN_KEY, fresh);
-            setToken(fresh);
-            setUser(me.data.user);
-            wsService.connect(fresh);
-            // Re-register the push token after relog so the server has a
-            // fresh user_id↔token mapping (handles account switches too).
-            registerForPushNotifications().catch(() => {});
-          } catch {
-            // Saved token no longer valid — drop it.
-            await SecureStore.deleteItemAsync(TOKEN_KEY);
+        const me = await userApi.me();
+        if (cancelled) return "ok";
+        const fresh = me.data.access_token || fallbackToken;
+        await SecureStore.setItemAsync(TOKEN_KEY, fresh);
+        setToken(fresh);
+        setUser(me.data.user);
+        wsService.connect(fresh);
+        // Re-register the push token after relog so the server has a
+        // fresh user_id↔token mapping (handles account switches too).
+        registerForPushNotifications().catch(() => {});
+        return "ok";
+      } catch (err) {
+        return isAuthRejection(err) ? "auth" : "net";
+      }
+    };
+
+    (async () => {
+      const saved = await SecureStore.getItemAsync(TOKEN_KEY).catch(() => null);
+      if (!saved) {
+        setReady(true);
+        return;
+      }
+      // Set token first so the axios interceptor picks it up for the /me call.
+      setToken(saved);
+
+      const first = await fetchMe(saved);
+      if (first === "auth") {
+        await SecureStore.deleteItemAsync(TOKEN_KEY).catch(() => {});
+        if (!cancelled) {
+          setToken(null);
+          setUser(null);
+        }
+        setReady(true);
+        return;
+      }
+      setReady(true);
+      if (first === "ok") return;
+
+      // Сеть моргнула на старте — приложение уже открыто со старым токеном,
+      // WS сам реконнектится; здесь добиваем профиль повторами с бэкоффом.
+      wsService.connect(saved);
+      const delays = [3000, 5000, 10000, 20000, 30000];
+      for (const d of delays) {
+        await new Promise((r) => setTimeout(r, d));
+        if (cancelled) return;
+        const res = await fetchMe(saved);
+        if (res === "ok") return;
+        if (res === "auth") {
+          await SecureStore.deleteItemAsync(TOKEN_KEY).catch(() => {});
+          if (!cancelled) {
             setToken(null);
             setUser(null);
           }
+          return;
         }
-      } finally {
-        setReady(true);
       }
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const value = useMemo<AuthState>(
