@@ -28,7 +28,7 @@ def upgrade() -> None:
         sa.Column("level", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("quests_done", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("anti_count", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
         sa.UniqueConstraint("season", "user_id", name="uq_season_user"),
     )
     op.create_index("ix_season_results_season", "season_results", ["season"])

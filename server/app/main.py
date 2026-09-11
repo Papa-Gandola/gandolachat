@@ -50,13 +50,21 @@ async def lifespan(app: FastAPI):
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(cleanup_expired_messages, "interval", hours=1)
-    # Финал сезона: 1-го числа в 04:10 МСК (01:10 UTC) закрываем прошлый
-    # месяц — снапшот таблицы, карточка-подиум, титул чемпиона. Идемпотентно;
-    # misfire_grace 20ч — проспали ночь, финал всё равно случится.
+    # Финал сезона: 1-го числа в 12:00 МСК (09:00 UTC) закрываем прошлый
+    # месяц — снапшот таблицы, карточка-подиум, титул чемпиона. Полдень —
+    # зазор для parse-рецеков и ночных даунтаймов OpenDota. Идемпотентно.
+    # Джобстор in-memory, поэтому misfire_grace спасает только живой
+    # процесс; рестарт поверх крона страхует прогон при старте ниже
+    # (внутри finalize_season гард: 1-го числа до полудня МСК — рано).
     from app.compendium import finale as finale_mod
     scheduler.add_job(
-        finale_mod.finalize_season, "cron", day=1, hour=1, minute=10,
+        finale_mod.finalize_season, "cron", day=1, hour=9, minute=0,
         misfire_grace_time=20 * 3600, coalesce=True, max_instances=1,
+    )
+    scheduler.add_job(
+        finale_mod.finalize_season, "date",
+        run_date=datetime.now(timezone.utc),
+        misfire_grace_time=3600,
     )
     # Ночной бэкап базы: 04:00 МСК (01:00 UTC), храним последние 14 дампов.
     # misfire_grace: если сервер спал в 4 утра — догоняем в течение дня.

@@ -78,9 +78,10 @@ export function CompendiumScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await load();
+    // На вкладке АРХИВ свайп обновляет архив, не только /me
+    await (tab === "archive" ? loadArchive() : load());
     setRefreshing(false);
-  }, [load]);
+  }, [load, loadArchive, tab]);
 
   const seasonTitle = useMemo(() => {
     if (!data?.season) return "";

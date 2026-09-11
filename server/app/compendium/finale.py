@@ -1,14 +1,19 @@
 """Финал сезона Гандолиума.
 
-Джоба 1-го числа в 04:10 МСК закрывает ПРОШЛЫЙ месяц: снапшот финальной
+Джоба 1-го числа в 12:00 МСК закрывает ПРОШЛЫЙ месяц: снапшот финальной
 таблицы в season_results (идемпотентно — повторный запуск ничего не
 дублирует), карточка `/quest_card kind=season_final` с подиумом 🥇🥈🥉 во
-все компендиум-чаты + пуш всем. Время выбрано с зазором: ночной поллер
-успевает дозасчитать катки, доигранные под самую полночь.
+все компендиум-чаты + пуш всем. Полдень — нарочно с большим зазором:
+поллер и parse-рецеки успевают дозасчитать катки последнего вечера даже
+после ночного даунтайма OpenDota. Совсем поздний газ (рецек до 36ч)
+теоретически может капнуть и после — снапшот НЕ пересчитывается, это
+осознанный компромисс.
 
 Закрываем не только «вчерашний» месяц, а ВСЕ незакрытые прошлые сезоны с
-активностью: даунтайм дольше misfire_grace (20ч) иначе оставил бы месяц
-без финала навсегда — следующий запуск догонит пачкой.
+активностью: пропуск запуска (рестарт поверх крона, даунтайм дольше
+misfire_grace) не оставит месяц без финала — догонит следующий запуск
+или прогон при старте сервера (гард не даёт стартовому прогону закрыть
+сезон РАНЬШЕ полудня 1-го числа).
 
 Награды НЕ пишутся в колонки — они выводятся из season_results запросами:
 рамки gold/silver/bronze открыты тем, у кого есть место 1/2/3 в любом
@@ -17,12 +22,12 @@ api/compendium.py).
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, func
 
 from app.database import AsyncSessionLocal
-from app.models import User, Chat, CompendiumProfile, QuestCompletion, SeasonResult
+from app.models import User, Chat, chat_members, CompendiumProfile, QuestCompletion, SeasonResult
 from app.compendium.engine import current_season, level_for_gas
 from app.compendium.quests import BY_ID
 
@@ -112,11 +117,13 @@ async def _finalize_one(db, season: str) -> None:
     await db.commit()
     print(f"[finale] сезон {season} закрыт: {len(rows)} игроков, чемпион — {rows[0]['username']} ({rows[0]['gas']}⛽)")
 
-    # Карточка-подиум во все компендиум-чаты. Отправитель — чемпион: его
-    # сообщение, его звёздный час. Цикл — по снапшоту id, Chat/User
-    # перечитываются свежими на каждой итерации: ошибка одного чата
-    # роллбэчится и НЕ травит остальные (грабля №2 — rollback экспайрит
-    # ранее загруженные объекты).
+    # Карточка-подиум во все компендиум-чаты. Отправитель — лучший по
+    # месту УЧАСТНИК конкретного чата (обычно чемпион; в чате без
+    # призёров — создатель чата): сообщение «ничьё» от не-участника
+    # выглядело бы дырой. Цикл — по снапшоту id, Chat/User перечитываются
+    # свежими на каждой итерации: ошибка одного чата роллбэчится и НЕ
+    # травит остальные (грабля №2 — rollback экспайрит ранее загруженные
+    # объекты).
     payload = {
         "kind": "season_final",
         "season": season,
@@ -127,7 +134,6 @@ async def _finalize_one(db, season: str) -> None:
             for r in rows[:3]
         ],
     }
-    champ_id = rows[0]["user_id"]
     push_title = f"🏆 Итоги сезона — {month_gen(season)}"
     push_body = f"Чемпион: {rows[0]['username']} ({rows[0]['gas']}⛽)! Подиум в чате."
 
@@ -140,10 +146,19 @@ async def _finalize_one(db, season: str) -> None:
     for cid in chat_ids:
         try:
             chat = (await db.execute(select(Chat).where(Chat.id == cid))).scalar_one_or_none()
-            champion = (await db.execute(select(User).where(User.id == champ_id))).scalar_one_or_none()
-            if not chat or not champion:
+            if not chat:
                 continue
-            await _post_card(db, chat, champion, payload,
+            member_res = await db.execute(
+                select(chat_members.c.user_id).where(chat_members.c.chat_id == cid)
+            )
+            member_ids = {r[0] for r in member_res.all()}
+            sender_id = next((r["user_id"] for r in rows if r["user_id"] in member_ids), None)
+            if sender_id is None:
+                sender_id = chat.created_by
+            sender = (await db.execute(select(User).where(User.id == sender_id))).scalar_one_or_none()
+            if not sender:
+                continue
+            await _post_card(db, chat, sender, payload,
                              push_title=push_title, push_body=push_body)
         except Exception as e:
             try:
@@ -155,6 +170,11 @@ async def _finalize_one(db, season: str) -> None:
 
 async def finalize_season() -> None:
     """Джоба: закрыть все прошлые сезоны, которые ещё не закрыты."""
+    # Гард для стартового прогона: рестарт сервера в ночь на 1-е не должен
+    # закрыть сезон ДО полудня — поллер ещё дозачисляет полуночные катки.
+    now_msk = datetime.now(timezone.utc) + timedelta(hours=3)
+    if now_msk.day == 1 and now_msk.hour < 12:
+        return
     # Общий лок компендиум-джоб: не снапшотить таблицу, пока поллер
     # дозачисляет газ, и не толкаться коммитами в одной сессии.
     from app.compendium.poller import _JOB_LOCK

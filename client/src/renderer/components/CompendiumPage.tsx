@@ -124,8 +124,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
       if (typeof m?.content === "string" && m.content.startsWith("/quest_card")) {
         load();
         loadSeason();
-        // Карточка финала = архив пополнился; перечитываем, только если он
-        // уже был загружен (иначе дождётся первого клика по вкладке)
+        // Карточка финала = архив пополнился (раз в месяц — лишний фетч не жмёт)
         if (m.content.includes("season_final")) loadArchive();
         // Развёрнутые полки трофеев в таблице сезона могли устареть
         setUserTrophies({});
