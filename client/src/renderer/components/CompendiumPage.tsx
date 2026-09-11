@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   UserOut, compendiumApi, CompendiumMe, CompendiumCosmetics, CompendiumQuest, CompendiumSeasonRow, CompendiumTrophy,
+  SeasonArchive,
 } from "../services/api";
 import { wsService } from "../services/ws";
 import { useTheme } from "../services/theme";
@@ -45,9 +46,11 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
   const isNeo = theme === "neo";
   const mono = { fontFamily: "var(--font-mono)" };
   const [data, setData] = useState<CompendiumMe | null>(null);
-  const [tab, setTab] = useState<"quests" | "season" | "trophies" | "cosmetics">("quests");
+  const [tab, setTab] = useState<"quests" | "season" | "archive" | "trophies" | "cosmetics">("quests");
   const [seasonRows, setSeasonRows] = useState<CompendiumSeasonRow[] | null>(null);
   const [seasonError, setSeasonError] = useState(false);
+  const [archive, setArchive] = useState<SeasonArchive[] | null>(null);
+  const [archiveError, setArchiveError] = useState(false);
   const [expandedUsers, setExpandedUsers] = useState<Set<number>>(new Set());
   const [userTrophies, setUserTrophies] = useState<Record<number, CompendiumTrophy[]>>({});
   const [resetLeft, setResetLeft] = useState(msToDailyReset());
@@ -90,6 +93,16 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
     }
   }
 
+  async function loadArchive() {
+    try {
+      const res = await compendiumApi.seasons();
+      setArchive(res.data);
+      setArchiveError(false);
+    } catch {
+      setArchiveError(true);
+    }
+  }
+
   async function loadSeason() {
     try {
       const res = await compendiumApi.season();
@@ -111,6 +124,9 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
       if (typeof m?.content === "string" && m.content.startsWith("/quest_card")) {
         load();
         loadSeason();
+        // Карточка финала = архив пополнился; перечитываем, только если он
+        // уже был загружен (иначе дождётся первого клика по вкладке)
+        if (m.content.includes("season_final")) loadArchive();
         // Развёрнутые полки трофеев в таблице сезона могли устареть
         setUserTrophies({});
       }
@@ -250,7 +266,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
 
             {/* --- вкладки --- */}
             <div style={{ display: "flex", gap: 6, margin: "18px 0 14px", flexWrap: "wrap" }}>
-              {([["quests", "ЗАДАНИЯ"], ["season", "СЕЗОН"], ["trophies", "ТРОФЕИ"], ["cosmetics", "КОСМЕТИКА"]] as const).map(([key, label]) => (
+              {([["quests", "ЗАДАНИЯ"], ["season", "СЕЗОН"], ["archive", "АРХИВ"], ["trophies", "ТРОФЕИ"], ["cosmetics", "КОСМЕТИКА"]] as const).map(([key, label]) => (
                 <button
                   key={key}
                   onClick={() => {
@@ -258,6 +274,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                     // Клик по вкладке заодно освежает данные — дешёвый способ
                     // восстановиться после неудачной загрузки
                     if (key === "season") loadSeason();
+                    else if (key === "archive") loadArchive();
                     else load();
                   }}
                   style={{
@@ -368,9 +385,67 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                   </React.Fragment>
                 ))}
                 <p style={{ ...mono, color: "var(--text-muted)", fontSize: 11.5, margin: "12px 12px 4px" }}>
-                  Итоги — в последний день месяца: 🥇 золотая рамка + чат покупает шаурму,
-                  последнее место (от 10 игр) — аватарка на 3 дня голосованием чата 💀
+                  Финал — в ночь на 1-е число: карточка-подиум в чат, топ-3 получают рамки
+                  🥇🥈🥉 навсегда, чемпион — титул месяца (+чат покупает шаурму 😉)
                 </p>
+              </div>
+            )}
+
+            {tab === "archive" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                {archiveError && (
+                  <p style={{ ...mono, color: BLOOD, fontSize: 12, margin: 0 }}>
+                    ⚠ Не удалось загрузить архив — тыкни вкладку ещё раз
+                  </p>
+                )}
+                {!archive && !archiveError && (
+                  <p style={{ ...mono, color: "var(--text-muted)", fontSize: 13, margin: 0 }}>Загружаю архив…</p>
+                )}
+                {archive && !archive.length && !archiveError && (
+                  <p style={{ ...mono, color: "var(--text-muted)", fontSize: 13, margin: 0 }}>
+                    Архив пуст — первый сезон ещё не закрыт. Финал случается сам в ночь на 1-е число 🏁
+                  </p>
+                )}
+                {archive?.map((arc) => (
+                  <div key={arc.season} style={s.panel(isNeo)}>
+                    <div style={{ ...mono, fontWeight: 800, fontSize: 12.5, letterSpacing: "0.08em", color: "var(--accent)", padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
+                      // СЕЗОН {arc.season_name.toUpperCase()} · {arc.season.slice(0, 4)}
+                    </div>
+                    {arc.rows.map((r) => (
+                      <div
+                        key={r.user_id}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 12, padding: "8px 12px",
+                          background: r.user_id === currentUser.id ? (isNeo ? "rgba(198,255,61,0.07)" : "var(--bg-active)") : "transparent",
+                          borderBottom: "1px solid var(--border)",
+                        }}
+                      >
+                        <span style={{ ...mono, width: 28, color: r.place === 1 ? GOLD : r.place === 2 ? "#c0c6cf" : r.place === 3 ? "#cd7f32" : "var(--text-muted)", fontWeight: 800, fontSize: 14 }}>
+                          {r.place === 1 ? "🥇" : r.place === 2 ? "🥈" : r.place === 3 ? "🥉" : `${r.place}`}
+                        </span>
+                        <span style={{ ...mono, flex: 1, fontWeight: 700, fontSize: 13, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {r.username}{r.user_id === currentUser.id ? " (ты)" : ""}
+                          {r.place === 1 && (
+                            <span style={{ color: GOLD, fontWeight: 500, fontSize: 11, marginLeft: 6 }}>«Чемпион {arc.season_name}»</span>
+                          )}
+                        </span>
+                        <span title="Заданий закрыто" style={{ ...mono, fontSize: 11.5, color: "var(--text-muted)" }}>✓{r.quests_done}</span>
+                        {r.anti_count > 0 && (
+                          <span title="Анти-ачивки" style={{ ...mono, fontSize: 11.5, color: BLOOD }}>💀{r.anti_count}</span>
+                        )}
+                        <span style={{ ...mono, fontSize: 11.5, color: "var(--text-muted)" }}>ур. {r.level}</span>
+                        <span style={{ ...mono, fontWeight: 800, fontSize: 13, color: "var(--accent)", minWidth: 64, textAlign: "right" }}>
+                          {r.gas} ⛽
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+                {archive && archive.length > 0 && (
+                  <p style={{ ...mono, color: "var(--text-muted)", fontSize: 11.5, margin: 0 }}>
+                    Ники — на момент закрытия сезона. Рамки подиума — во вкладке КОСМЕТИКА.
+                  </p>
+                )}
               </div>
             )}
 
@@ -456,12 +531,14 @@ function CosmeticsTab({ isNeo, cos, onSaved }: {
     opacity: locked ? 0.55 : 1,
   });
 
-  function Row({ need, name, desc, children }: { need: number; name: string; desc: string; children?: React.ReactNode }) {
-    const locked = lvl < need;
+  // trophy: разблокировка не уровнем, а местом в финале сезона — строка
+  // видна всегда, замки́ на самих кнопках
+  function Row({ need, name, desc, children, trophy }: { need: number; name: string; desc: string; children?: React.ReactNode; trophy?: boolean }) {
+    const locked = !trophy && lvl < need;
     return (
       <div style={{ display: "flex", gap: 14, padding: "13px 14px", borderBottom: "1px solid var(--border)", alignItems: "flex-start", opacity: locked ? 0.75 : 1 }}>
         <span style={{ ...mono, fontSize: 11, fontWeight: 800, minWidth: 44, color: locked ? "var(--text-muted)" : "var(--accent)", paddingTop: 3 }}>
-          {locked ? `🔒 ${need}` : `ур.${need}`}
+          {trophy ? "🏆" : locked ? `🔒 ${need}` : `ур.${need}`}
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ ...mono, fontWeight: 700, fontSize: 13, color: "var(--text-primary)" }}>{name}</div>
@@ -491,7 +568,8 @@ function CosmeticsTab({ isNeo, cos, onSaved }: {
         </div>
       </Row>
 
-      <Row need={U.title ?? 4} name="Титул под ником" desc="Из заработанных — прожарочные тоже считаются">
+      {/* trophy: чемпион сезона носит свой титул с любого уровня (сервер пускает) */}
+      <Row need={U.title ?? 4} trophy={lvl < (U.title ?? 4) && !!cos.podium_frames?.gold} name="Титул под ником" desc="Из заработанных — прожарочные тоже считаются">
         {cos.earned_titles.length === 0 ? (
           <span style={{ ...mono, fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
             Пока ни одного титула — закрывай громкие задания
@@ -499,7 +577,8 @@ function CosmeticsTab({ isNeo, cos, onSaved }: {
         ) : (
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             <button style={chip(!cos.title, false)} onClick={() => save({ title: "" })} disabled={busy}>без титула</button>
-            {cos.earned_titles.map((t) => (
+            {/* ниже 4 уровня носибельны только чемпионские — остальные не дразним */}
+            {cos.earned_titles.filter((t) => lvl >= (U.title ?? 4) || t.startsWith("Чемпион ")).map((t) => (
               <button key={t} style={chip(cos.title === t, false)} onClick={() => save({ title: t })} disabled={busy}>
                 «{t}»
               </button>
@@ -539,6 +618,33 @@ function CosmeticsTab({ isNeo, cos, onSaved }: {
           >
             переливающаяся{lvl < (U.frame_animated ?? 12) ? ` 🔒${U.frame_animated ?? 12}` : ""}
           </button>
+        </div>
+      </Row>
+
+      <Row trophy need={0} name="Рамки подиума" desc="За место в финале сезона — остаются навсегда">
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {/* Снять подиумную рамку можно и до 8 уровня — «без рамки» из
+              строки выше в этом случае спрятана замком */}
+          {(cos.podium_frames?.gold || cos.podium_frames?.silver || cos.podium_frames?.bronze) && (
+            <button style={chip(!cos.frame, false)} onClick={() => save({ frame: "" })} disabled={busy}>без рамки</button>
+          )}
+          {(["gold", "silver", "bronze"] as const).map((f) => {
+            const pf = cos.podium_frames || { gold: false, silver: false, bronze: false };
+            const has = pf[f];
+            const place = f === "gold" ? 1 : f === "silver" ? 2 : 3;
+            const label = f === "gold" ? "🥇 золотая" : f === "silver" ? "🥈 серебряная" : "🥉 бронзовая";
+            return (
+              <button
+                key={f}
+                style={chip(cos.frame === f, !has)}
+                disabled={busy || !has}
+                onClick={() => has && save({ frame: f })}
+                title={has ? "" : `За ${place}-е место в финале любого сезона`}
+              >
+                {label}{has ? "" : " 🔒"}
+              </button>
+            );
+          })}
         </div>
       </Row>
 

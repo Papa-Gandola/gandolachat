@@ -1493,6 +1493,47 @@ function QuestCardMobile({ theme, mine, payload }: {
     : (payload.username || "");
   const items: Array<{ name: string; gas: number }> = payload.items || [];
 
+  // Финал сезона: карточка-подиум 🥇🥈🥉 (зеркало десктопной)
+  if (kind === "season_final") {
+    const podium: Array<{ place: number; username: string; gas: number; level: number }> = payload.podium || [];
+    const placeColor = (pl: number) => (pl === 1 ? GOLD : pl === 2 ? "#c0c6cf" : "#cd7f32");
+    return (
+      <View style={{ flexDirection: "row", justifyContent: mine ? "flex-end" : "flex-start", paddingHorizontal: 14, paddingVertical: 4 }}>
+        <View
+          style={{
+            maxWidth: "85%",
+            padding: 10,
+            borderRadius: theme.radius.bubble,
+            borderWidth: 1,
+            borderLeftWidth: 3,
+            borderColor: GOLD,
+            backgroundColor: theme.colors.bgElev,
+          }}
+        >
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "800", color: GOLD, letterSpacing: 0.5 }}>
+            🏆 ИТОГИ СЕЗОНА
+          </Text>
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkDim, marginTop: 1 }}>
+            Сезон {payload.season_name || payload.season} закрыт · игроков: {payload.players ?? podium.length}
+          </Text>
+          {podium.map((pl) => (
+            <View key={pl.place} style={{ flexDirection: "row", justifyContent: "space-between", gap: 12, marginTop: pl.place === 1 ? 6 : 4 }}>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: pl.place === 1 ? 13.5 : 12.5, fontWeight: "800", color: placeColor(pl.place), flexShrink: 1 }} numberOfLines={1}>
+                {pl.place === 1 ? "🥇" : pl.place === 2 ? "🥈" : "🥉"} {pl.username}
+              </Text>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "800", color: theme.colors.accent }}>
+                {pl.gas} ⛽ · ур.{pl.level}
+              </Text>
+            </View>
+          ))}
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted, marginTop: 6 }}>
+            Подиум получил рамки · чемпион — титул «Чемпион {payload.season_name || ""}» · архив — в Гандолиуме
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={{ flexDirection: "row", justifyContent: mine ? "flex-end" : "flex-start", paddingHorizontal: 14, paddingVertical: 4 }}>
       <View

@@ -159,6 +159,26 @@ class Reminder(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+class SeasonResult(Base):
+    """Итог сезона Гандолиума: снапшот финальной таблицы на момент закрытия
+    месяца (ники меняются, привязки отвязываются — а история должна стоять).
+    place=1..N по газу; топ-3 открывают рамки gold/silver/bronze, первое
+    место — титул «Чемпион <месяца>»."""
+    __tablename__ = "season_results"
+    __table_args__ = (UniqueConstraint("season", "user_id", name="uq_season_user"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    season: Mapped[str] = mapped_column(String(7), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    place: Mapped[int] = mapped_column(Integer)
+    username: Mapped[str] = mapped_column(String(50))
+    gas: Mapped[int] = mapped_column(Integer, default=0)
+    level: Mapped[int] = mapped_column(Integer, default=1)
+    quests_done: Mapped[int] = mapped_column(Integer, default=0)
+    anti_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 class PushToken(Base):
     """Expo push token registered by a mobile client. Multiple tokens per
     user are allowed (multi-device). Same token can only belong to one user

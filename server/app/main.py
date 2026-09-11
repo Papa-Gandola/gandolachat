@@ -50,6 +50,14 @@ async def lifespan(app: FastAPI):
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(cleanup_expired_messages, "interval", hours=1)
+    # Финал сезона: 1-го числа в 04:10 МСК (01:10 UTC) закрываем прошлый
+    # месяц — снапшот таблицы, карточка-подиум, титул чемпиона. Идемпотентно;
+    # misfire_grace 20ч — проспали ночь, финал всё равно случится.
+    from app.compendium import finale as finale_mod
+    scheduler.add_job(
+        finale_mod.finalize_season, "cron", day=1, hour=1, minute=10,
+        misfire_grace_time=20 * 3600, coalesce=True, max_instances=1,
+    )
     # Ночной бэкап базы: 04:00 МСК (01:00 UTC), храним последние 14 дампов.
     # misfire_grace: если сервер спал в 4 утра — догоняем в течение дня.
     from app import backups as backups_mod

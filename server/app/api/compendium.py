@@ -13,7 +13,8 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import User, CompendiumProfile, QuestCompletion
+from app.models import User, CompendiumProfile, QuestCompletion, SeasonResult
+from app.compendium.finale import month_gen
 from app.auth import get_current_user
 from app.compendium.engine import (
     current_season, day_key_of, week_key_of, level_for_gas,
@@ -39,7 +40,20 @@ NAME_PALETTE = [
     "#c6ff3d", "#57f287", "#fee75c", "#faa61a", "#ff6a5e",
     "#eb459e", "#a78bda", "#5865f2", "#00b0f4", "#ffd24a",
 ]
-FRAMES = ("lime", "animated")
+FRAMES = ("lime", "animated", "gold", "silver", "bronze")
+# Рамки за подиум сезона — открываются МЕСТОМ в season_results, не уровнем.
+PODIUM_FRAME_PLACE = {"gold": 1, "silver": 2, "bronze": 3}
+
+
+async def _champion_titles(db: AsyncSession, user_id: int) -> list[str]:
+    """Титулы чемпионов сезонов — «Чемпион сентября» за 1-е место. Они за
+    МЕСТО, не за уровень: PATCH пускает их мимо уровневого замка."""
+    champ_res = await db.execute(
+        select(SeasonResult.season)
+        .where(SeasonResult.user_id == user_id, SeasonResult.place == 1)
+        .order_by(SeasonResult.season)
+    )
+    return [f"Чемпион {month_gen(season)}" for (season,) in champ_res.all()]
 
 
 async def _earned_titles(db: AsyncSession, user_id: int) -> list[str]:
@@ -52,10 +66,23 @@ async def _earned_titles(db: AsyncSession, user_id: int) -> list[str]:
         q = BY_ID.get(qid)
         if q and q.title and q.title not in titles:
             titles.append(q.title)
+    for t in await _champion_titles(db, user_id):
+        if t not in titles:
+            titles.append(t)
     return titles
 
 
-def _cosmetics_dict(user: User, earned: list[str]) -> dict:
+async def _podium_frames(db: AsyncSession, user_id: int) -> dict:
+    """Какие рамки за подиум заработаны (место 1/2/3 в ЛЮБОМ сезоне)."""
+    res = await db.execute(
+        select(SeasonResult.place)
+        .where(SeasonResult.user_id == user_id, SeasonResult.place <= 3)
+    )
+    places = {p for (p,) in res.all()}
+    return {"gold": 1 in places, "silver": 2 in places, "bronze": 3 in places}
+
+
+def _cosmetics_dict(user: User, earned: list[str], podium: dict | None = None) -> dict:
     return {
         "max_level": user.comp_max_level or 0,
         "badge": user.comp_badge,
@@ -65,6 +92,8 @@ def _cosmetics_dict(user: User, earned: list[str]) -> dict:
         "earned_titles": earned,
         "palette": NAME_PALETTE,
         "unlocks": UNLOCKS,
+        # Рамки за подиум сезона: заработано местом, не уровнем.
+        "podium_frames": podium or {"gold": False, "silver": False, "bronze": False},
     }
 
 
@@ -181,7 +210,7 @@ async def my_compendium(
     earned = await _earned_titles(db, current_user.id)
     return {
         "linked": True,
-        "cosmetics": _cosmetics_dict(current_user, earned),
+        "cosmetics": _cosmetics_dict(current_user, earned, await _podium_frames(db, current_user.id)),
         "season": season,
         "gas": gas,
         "level": level_for_gas(gas),
@@ -229,7 +258,8 @@ async def update_cosmetics(
         if not t:
             current_user.comp_title = None
         else:
-            if lvl < UNLOCKS["title"]:
+            # Чемпионский титул — награда за место, носится с любого уровня
+            if lvl < UNLOCKS["title"] and t not in await _champion_titles(db, current_user.id):
                 raise HTTPException(400, f"Титулы открываются на уровне {UNLOCKS['title']}")
             earned = await _earned_titles(db, current_user.id)
             if t not in earned:
@@ -254,9 +284,20 @@ async def update_cosmetics(
         else:
             if f not in FRAMES:
                 raise HTTPException(400, "Нет такой рамки")
-            need = UNLOCKS["frame_lime"] if f == "lime" else UNLOCKS["frame_animated"]
-            if lvl < need:
-                raise HTTPException(400, f"Эта рамка открывается на уровне {need}")
+            if f in PODIUM_FRAME_PLACE:
+                place = PODIUM_FRAME_PLACE[f]
+                has = await db.execute(
+                    select(SeasonResult.id)
+                    .where(SeasonResult.user_id == current_user.id, SeasonResult.place == place)
+                    .limit(1)
+                )
+                if has.first() is None:
+                    medal = {1: "🥇 1-е", 2: "🥈 2-е", 3: "🥉 3-е"}[place]
+                    raise HTTPException(400, f"Эта рамка — за {medal} место в сезоне")
+            else:
+                need = UNLOCKS["frame_lime"] if f == "lime" else UNLOCKS["frame_animated"]
+                if lvl < need:
+                    raise HTTPException(400, f"Эта рамка открывается на уровне {need}")
             current_user.comp_frame = f
 
     await db.commit()
@@ -266,7 +307,30 @@ async def update_cosmetics(
     await _broadcast_profile(db, current_user)
 
     earned = await _earned_titles(db, current_user.id)
-    return _cosmetics_dict(current_user, earned)
+    return _cosmetics_dict(current_user, earned, await _podium_frames(db, current_user.id))
+
+
+@router.get("/seasons")
+async def seasons_archive(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Архив закрытых сезонов: финальные таблицы со снапшот-никами."""
+    res = await db.execute(
+        select(SeasonResult).order_by(SeasonResult.season.desc(), SeasonResult.place)
+    )
+    grouped: dict[str, list[dict]] = {}
+    for r in res.scalars().all():
+        grouped.setdefault(r.season, []).append({
+            "place": r.place, "user_id": r.user_id, "username": r.username,
+            "gas": r.gas, "level": r.level,
+            "quests_done": r.quests_done, "anti_count": r.anti_count,
+        })
+    out = [
+        {"season": s, "season_name": month_gen(s), "rows": rows}
+        for s, rows in grouped.items()
+    ]
+    return out[:12]
 
 
 @router.get("/season")

@@ -162,6 +162,25 @@ export interface CompendiumCosmetics {
   earned_titles: string[];
   palette: string[];
   unlocks: Record<string, number>;
+  // Рамки за подиум финала сезона (место 1/2/3 в любом сезоне)
+  podium_frames?: { gold: boolean; silver: boolean; bronze: boolean };
+}
+
+// Архив закрытых сезонов (снапшот финальной таблицы)
+export interface SeasonArchiveRow {
+  place: number;
+  user_id: number;
+  username: string;
+  gas: number;
+  level: number;
+  quests_done: number;
+  anti_count: number;
+}
+
+export interface SeasonArchive {
+  season: string;       // "2026-08"
+  season_name: string;  // «августа»
+  rows: SeasonArchiveRow[];
 }
 
 export interface CompendiumMe {
@@ -209,6 +228,7 @@ export const compendiumApi = {
   updateCosmetics: (data: { badge?: boolean; title?: string; color?: string; frame?: string }) =>
     api.patch<CompendiumCosmetics>("/api/compendium/cosmetics", data),
   season: () => api.get<{ season: string; rows: CompendiumSeasonRow[]; me: number }>("/api/compendium/season"),
+  seasons: () => api.get<SeasonArchive[]>("/api/compendium/seasons"),
   user: (userId: number) =>
     api.get<{ user_id: number; username: string; season: string; gas: number; level: number; trophies: CompendiumTrophy[]; rank_tier: number | null; leaderboard_rank: number | null }>(
       `/api/compendium/user/${userId}`

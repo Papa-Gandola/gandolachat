@@ -2078,6 +2078,61 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
     window.dispatchEvent(new CustomEvent("set-app-mode", { detail: { mode: "compendium" } }));
   };
 
+  // Финал сезона: карточка-подиум 🥇🥈🥉 (постится от имени чемпиона).
+  if (kind === "season_final") {
+    const podium: Array<{ place: number; username: string; gas: number; level: number; quests_done: number }> =
+      payload.podium || [];
+    const medals: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
+    const placeColor = (place: number) =>
+      darkOnLime ? "#0a0a0a"
+        : place === 1 ? GOLD
+        : place === 2 ? "#c0c6cf"
+        : "#cd7f32";
+    return (
+      <div
+        onClick={openCompendium}
+        title="Открыть Гандолиум"
+        style={{
+          padding: "10px 12px",
+          background: cardBg,
+          border: `1px solid ${darkOnLime ? "rgba(0,0,0,0.55)" : GOLD}`,
+          borderLeft: `3px solid ${darkOnLime ? "rgba(0,0,0,0.55)" : GOLD}`,
+          borderRadius: isNeo ? 0 : 8,
+          margin: "4px 0",
+          maxWidth: 380,
+          cursor: "pointer",
+        }}
+      >
+        <div style={{ ...mono, fontWeight: 800, fontSize: 12.5, letterSpacing: "0.06em", color: darkOnLime ? "#0a0a0a" : GOLD }}>
+          🏆 ИТОГИ СЕЗОНА
+        </div>
+        <div style={{ ...mono, color: subColor, fontSize: 12, marginTop: 2 }}>
+          Сезон {payload.season_name || payload.season} закрыт · игроков: {payload.players ?? podium.length}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 8 }}>
+          {podium.map((p) => (
+            <div key={p.place} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
+              <span style={{ ...mono, fontSize: p.place === 1 ? 14 : 13, fontWeight: 800, color: placeColor(p.place) }}>
+                {medals[p.place] || p.place} {p.username}
+                {p.place === 1 && (
+                  <span style={{ color: titleGold, fontSize: 11, marginLeft: 6 }}>
+                    титул «Чемпион {payload.season_name || ""}»
+                  </span>
+                )}
+              </span>
+              <span style={{ ...mono, fontSize: 12.5, fontWeight: 800, color: gasColor, whiteSpace: "nowrap" }}>
+                {p.gas} ⛽ · ур. {p.level}
+              </span>
+            </div>
+          ))}
+        </div>
+        <div style={{ ...mono, fontSize: 11.5, color: subColor, marginTop: 8 }}>
+          Подиум получил рамки, полная таблица — в архиве Гандолиума
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       onClick={openCompendium}
