@@ -131,8 +131,13 @@ print-логи видны в `docker compose logs` с опозданием (не
   `uploads/apk/` синк не затирает (обновит только скачав новый целиком).
 - `app/backups.py` — ночные дампы БД: 04:00 МСК `pg_dump -Fc` в
   ОТДЕЛЬНЫЙ том `backups:/app/backups` (НЕ uploads — тот публичен!),
-  ротация 14 шт., pg_dump-16 ставится в Dockerfile из PGDG (в bookworm
-  только 15-й, он сервер 16 не дампит). Достать: `docker compose cp
+  ротация 14 шт., pg_dump-16 в Dockerfile КОПИРУЕТСЯ из образа
+  postgres:16 (multi-stage + ldd-сбор библиотек БЕЗ libc, обёртки с
+  LD_LIBRARY_PATH в /usr/local/bin) — PGDG из РФ шаток, а главное
+  плавающий python:3.12-slim уехал на trixie и bookworm-PGDG стал
+  неразрешим (exit 100). База сервера прибита к python:3.12-slim-bookworm
+  — не отпинывать: плавающий тег уже ломал сборку сменой дистрибутива.
+  Достать: `docker compose cp
   server:/app/backups/<файл> ./`; восстановить: pg_restore --clean
   --if-exists -h db -U gandola -d gandolachat (затирает базу!).
 - `app/notes.py` — «Заметки»: личный чат (Chat.is_notes=True, один участник,
