@@ -23,6 +23,9 @@ def upgrade() -> None:
     op.add_column("users", sa.Column(
         "grammar_wk_base", sa.Integer(), nullable=False, server_default="0"
     ))
+    # Бэкфилл: без него первые «Итоги недели» объявили бы граммар-наци по
+    # счётчику ЗА ВСЮ ИСТОРИЮ (grammar_errors копится давно)
+    op.execute("UPDATE users SET grammar_wk_base = grammar_errors")
 
 
 def downgrade() -> None:

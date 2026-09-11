@@ -88,6 +88,16 @@ async def poll_presence() -> None:
         print(f"[presence] steam api failed: {type(e).__name__}: {e}")
         return
 
+    # Гонка с тумблером невидимки: PATCH мог выключить видимость, пока мы
+    # ходили в Steam со старым снапшотом — пересекаем с актуальным набором,
+    # чтобы drop_user не «воскрес» через 2 минуты.
+    async with AsyncSessionLocal() as db:
+        vis_res = await db.execute(
+            select(User.id).where(User.dota_presence_visible.is_(True))
+        )
+        visible_now = {r[0] for r in vis_res.all()}
+    now_playing &= visible_now
+
     if now_playing != _playing:
         _playing = now_playing
         await _broadcast()

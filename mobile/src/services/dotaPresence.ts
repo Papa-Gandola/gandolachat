@@ -1,15 +1,25 @@
 import { useEffect, useState } from "react";
 import { wsService } from "./ws";
 
-// «🎮 в Доте сейчас»: сервер шлёт dota_presence при смене состава и
-// снимок на каждое подключение (зеркало десктопного services/presence.ts).
+// «🎮 в Доте сейчас» (зеркало десктопного services/presence.ts).
 let playing = new Set<number>();
 const listeners = new Set<() => void>();
 
-wsService.on("dota_presence", (msg: { playing?: number[] }) => {
+function onPresence(msg: { playing?: number[] }) {
   playing = new Set<number>(msg?.playing || []);
   listeners.forEach((fn) => fn());
-});
+}
+
+// wsService.disconnect() (логаут) стирает ВСЕ хендлеры разом (см. webrtc.init)
+// — перевешиваем при каждом коннекте из AuthContext.
+export function initDotaPresence() {
+  wsService.off("dota_presence", onPresence);
+  wsService.on("dota_presence", onPresence);
+  playing = new Set();
+  listeners.forEach((fn) => fn());
+}
+
+initDotaPresence();
 
 export function useDotaPlaying(): Set<number> {
   const [, tick] = useState(0);

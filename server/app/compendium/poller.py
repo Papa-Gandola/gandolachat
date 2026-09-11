@@ -57,10 +57,13 @@ async def _linked_users(db) -> list[User]:
 
 
 async def _get_or_create_profile(db, user_id: int, season: str) -> CompendiumProfile:
+    # populate_existing: ставки (_credit) меняют газ raw-UPSERT-ом мимо
+    # identity map — без перечитки цикл поллера затёр бы выплату стейл-
+    # объектом (грабля №1; ловили потерю выплат при 2+ катках за цикл)
     res = await db.execute(
         select(CompendiumProfile).where(
             CompendiumProfile.user_id == user_id, CompendiumProfile.season == season
-        )
+        ).execution_options(populate_existing=True)
     )
     prof = res.scalar_one_or_none()
     if prof is None:

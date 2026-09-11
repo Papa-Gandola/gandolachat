@@ -22,13 +22,13 @@ UPSERT в профиль СЕЗОНА КАТКИ. Разрешает полле�
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.models import User, Bet, DotaMatch, CompendiumProfile
-from app.compendium.engine import season_of, current_season, level_for_gas
+from app.compendium.engine import current_season, level_for_gas
 
 MARKETS = ("match", "kills", "kda", "roshan", "streak")
 STAKE_MIN = 10
@@ -157,7 +157,13 @@ async def _finish(db, bet: Bet, won: bool, match_season: str) -> dict:
 
 
 async def _void(db, bet: Bet, reason: str) -> dict:
-    """Аннулировать с возвратом (сам в катке / TTL / нет парса)."""
+    """Аннулировать с возвратом (сам в катке / TTL / нет парса).
+
+    Возврат — в ТЕКУЩИЙ сезон, не в сезон ставки: ставка с 31-го числа
+    возвращается 1-го, когда прошлый месяц уже закрыт финалом — газ в
+    закрытом профиле был бы мёртвым (снапшот не пересчитывается). Юзеру
+    важнее юзабельный газ, чем сезонная бухгалтерия; финал прошлого
+    месяца в любом случае прошёл без эскроу — смещение осознанное."""
     bet.status = "refunded"
     bet.resolved_at = datetime.now(timezone.utc)
     bet.payout = bet.stake
@@ -328,20 +334,41 @@ async def sweep_expired(db) -> None:
     """TTL-возвраты: катка не случилась / стрик завис / парс не доехал.
     Сам коммитит. Зовётся из poll_matches под общим локом."""
     now = datetime.now(timezone.utc)
-    refunded: list[tuple[int, int]] = []
+    refunded: list[tuple[int, int, bool]] = []  # (bettor, stake, ждали_парс)
     res = await db.execute(select(Bet).where(Bet.status == "open"))
-    for bet in res.scalars().all():
-        age_h = (now - bet.placed_at).total_seconds() / 3600
-        expired = (
-            (bet.market == "streak" and age_h > STREAK_TTL_D * 24)
-            or (bet.market != "streak" and bet.match_id is None and age_h > BET_TTL_H)
-            or (bet.match_id is not None and age_h > STUCK_PARSE_TTL_H)
+    bets = list(res.scalars().all())
+
+    # Прилипшие к катке рошан-ставки меряем от СТАРТА КАТКИ, не от ставки:
+    # катка на 23-м часу жизни ставки иначе оставляла бы парсу лишь час,
+    # хотя recheck тянет его до 36ч от начала катки.
+    stuck_ids = [b.match_id for b in bets if b.match_id is not None]
+    match_started: dict[int, datetime] = {}
+    if stuck_ids:
+        m_res = await db.execute(
+            select(DotaMatch.match_id, DotaMatch.started_at)
+            .where(DotaMatch.match_id.in_(stuck_ids))
         )
+        for mid, st in m_res.all():
+            match_started.setdefault(mid, st)
+
+    for bet in bets:
+        age_h = (now - bet.placed_at).total_seconds() / 3600
+        if bet.match_id is not None:
+            base = match_started.get(bet.match_id, bet.placed_at)
+            stuck_h = (now - base).total_seconds() / 3600
+            expired = stuck_h > STUCK_PARSE_TTL_H
+        else:
+            expired = (
+                (bet.market == "streak" and age_h > STREAK_TTL_D * 24)
+                or (bet.market != "streak" and age_h > BET_TTL_H)
+            )
         if not expired:
             continue
-        await _void(db, bet, "катка не случилась")
-        refunded.append((bet.bettor_id, bet.stake))
+        waited_parse = bet.match_id is not None
+        await _void(db, bet, "парс не доехал" if waited_parse else "катка не случилась")
+        refunded.append((bet.bettor_id, bet.stake, waited_parse))
     await db.commit()
-    for uid, stake in refunded:
-        await _push_bettor(db, uid, "🎲 Ставка отменена",
-                           f"Катка так и не случилась — {stake}⛽ вернулись")
+    for uid, stake, waited_parse in refunded:
+        body = (f"Парс реплея так и не доехал — {stake}⛽ вернулись"
+                if waited_parse else f"Катка так и не случилась — {stake}⛽ вернулись")
+        await _push_bettor(db, uid, "🎲 Ставка отменена", body)

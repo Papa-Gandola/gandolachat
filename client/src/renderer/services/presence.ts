@@ -7,10 +7,22 @@ import { wsService } from "./ws";
 let playing = new Set<number>();
 const listeners = new Set<() => void>();
 
-wsService.on("dota_presence", (msg: any) => {
+function onPresence(msg: any) {
   playing = new Set<number>((msg?.playing as number[]) || []);
   listeners.forEach((fn) => fn());
-});
+}
+
+// wsService.disconnect() (логаут) стирает ВСЕ хендлеры разом — тот же
+// класс бага, что чинили в звонках. Перевешиваем при каждом коннекте
+// (Main.tsx), off перед on — идемпотентно.
+export function initPresence() {
+  wsService.off("dota_presence", onPresence);
+  wsService.on("dota_presence", onPresence);
+  playing = new Set();
+  listeners.forEach((fn) => fn());
+}
+
+initPresence();
 
 export function useDotaPlaying(): Set<number> {
   const [, tick] = useState(0);

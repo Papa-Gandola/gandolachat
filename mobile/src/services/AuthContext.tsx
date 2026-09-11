@@ -4,6 +4,7 @@ import { createContext, ReactNode, useContext, useEffect, useMemo, useState } fr
 import { apiErrorMessage, authApi, UserOut, userApi } from "./api";
 import { registerForPushNotifications, unregisterCurrentPushToken } from "./notifications";
 import { initReminderResync, resyncLocalReminders } from "./reminders";
+import { initDotaPresence } from "./dotaPresence";
 import { wsService } from "./ws";
 
 interface AuthState {
@@ -69,6 +70,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setToken(fresh);
         setUser(me.data.user);
         wsService.connect(fresh);
+        initDotaPresence();
         // Re-register the push token after relog so the server has a
         // fresh user_id↔token mapping (handles account switches too).
         registerForPushNotifications().catch(() => {});
@@ -105,6 +107,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Сеть моргнула на старте — приложение уже открыто со старым токеном,
       // WS сам реконнектится; здесь добиваем профиль повторами с бэкоффом.
       wsService.connect(saved);
+      initDotaPresence();
       const delays = [3000, 5000, 10000, 20000, 30000];
       for (const d of delays) {
         await new Promise((r) => setTimeout(r, d));
@@ -146,6 +149,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setToken(access_token);
           setUser(u);
           wsService.connect(access_token);
+          initDotaPresence();
           registerForPushNotifications().catch(() => {});
         initReminderResync();
         resyncLocalReminders().catch(() => {});
