@@ -170,6 +170,16 @@ export function useChats(): ChatsState {
       const cid = data.chat_id as number | undefined;
       if (typeof cid === "number") clearTyping(cid);
     };
+    // Прочитал на другом своём устройстве (комп) — сервер бродкастит
+    // message_read и нашим сокетам; гасим бейдж (зеркало десктопного фикса)
+    const onReadSync = (m: { user_id?: number; chat_id?: number }) => {
+      if (m?.user_id === user?.id && m?.chat_id) {
+        setUnread((prev) =>
+          prev[String(m.chat_id)] ? { ...prev, [String(m.chat_id)]: 0 } : prev,
+        );
+      }
+    };
+    wsService.on("message_read", onReadSync);
     wsService.on("new_chat", onNewChat);
     wsService.on("message", onMessage);
     wsService.on("message", onMessageClearTyping);
@@ -179,9 +189,11 @@ export function useChats(): ChatsState {
     wsService.on("user_online", onUserOnline);
     wsService.on("user_offline", onUserOffline);
     wsService.on("_ws_open", onWsOpen);
+    // cleanup ниже снимает и onReadSync
     return () => {
       typingTimersRef.current.forEach((t) => clearTimeout(t));
       typingTimersRef.current.clear();
+      wsService.off("message_read", onReadSync);
       wsService.off("typing", onTyping);
       wsService.off("message", onMessageClearTyping);
       wsService.off("new_chat", onNewChat);

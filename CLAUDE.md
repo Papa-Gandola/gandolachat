@@ -71,6 +71,11 @@ print-логи видны в `docker compose logs` с опозданием (не
   delete, messages (limit/before_id), search, файлы ≤50MB (+caption,
   media_group_id для мозаики), read-status, unread counts, online,
   stats, админ-чистка сообщений до даты. Caption с `/quest_card` режется.
+- Пуш-данные message/call несут chat_name; для ЛС (chat.name=NULL) —
+  имя отправителя/звонящего, иначе тап по пушу открывал чат «Чат».
+  `message_read` бродкастится ВСЕМ сокетам чата, включая другие
+  устройства читателя — клиенты гасят по нему свой unread (кросс-девайс
+  прочитанность: Sidebar на десктопе, useChats на мобилке).
 - `app/ws/manager.py` — ConnectionManager: мультисокеты на юзера,
   chat_users, active_calls + call_meta (для /call_record), broadcast_to_chat
   (_eid дедуп), send_to_user, дроп мёртвых сокетов.
@@ -234,10 +239,10 @@ print-логи видны в `docker compose logs` с опозданием (не
   пересчитывается, это осознанно.
 - `api/compendium.py` — /me (ротации+done, марафоны с прогрессом, анти done
   только текущего сезона, трофеи, cosmetics), /season (таблица привязанных),
-  /user/{id} (чужая полка), PATCH /cosmetics (валидация по comp_max_level —
-  вечному максимуму: значок ур.2, титул ур.4 из заработанных, цвет ур.6 из
-  NAME_PALETTE, рамка lime ур.8 / animated ур.12; золотой /dota ур.10 —
-  авто). UNLOCKS/палитра — там же. **Финал**: рамки gold/silver/bronze
+  /user/{id} (чужая полка, desc у тайных «???»), PATCH /cosmetics
+  (валидация по comp_max_level — уровню ЛУЧШЕГО сезона, см. bets.py:
+  значок ур.2, титул ур.4 из заработанных, цвет ур.6 из NAME_PALETTE,
+  рамка lime ур.8 / animated ур.12; золотой /dota ур.10 — авто). UNLOCKS/палитра — там же. **Финал**: рамки gold/silver/bronze
   валидируются МЕСТОМ 1/2/3 в любом сезоне (PODIUM_FRAME_PLACE, не
   уровнем), титулы «Чемпион <месяца>» (_champion_titles) дописываются в
   _earned_titles и носятся С ЛЮБОГО уровня (обход замка ур.4 — титул за
@@ -255,7 +260,8 @@ print-логи видны в `docker compose logs` с опозданием (не
   0003 компендиум, 0004 косметика, 0005 BIGINT+unique на dota_account_id,
   0006 web_push_subscriptions, 0007 chats.is_notes + reminders,
   0008 season_results (unique season+user), 0009 bets,
-  0010 users.dota_presence_visible + grammar_wk_base.
+  0010 users.dota_presence_visible + grammar_wk_base (бэкфилл),
+  0011 пересчёт comp_max_level под «уровень лучшего сезона».
   Только добавления; прогоняются сами на старте.
 
 ## Клиент десктоп (`client/`, Electron + React + Vite)
@@ -357,6 +363,12 @@ switchCamera (натив track._switchCamera, веб — реаквизиция 
 + replaceTrack), кнопка 🔄 видна при включённой камере, mirror только у
 фронталки. Имя ЛС-чата без собеседника (Заметки) — ветка is_notes в
 useChats/getChatName, иначе показывался бы сам юзер.
+Голосовые (ChatScreen + VoiceMessage): перед записью выгружаются ВСЕ
+живые плееры голосовых (unloadAllVoicePlayers — живой Sound держит
+аудио-сессию на части андроидов), ретрай prepare — только со СВЕЖИМ
+объектом Recording (упавший prepare портит объект навсегда — ловили
+«одно голосовое за запуск»), busy-флаг со сторожком 6с. Кнопка 📝
+Заметок показывает ошибку вместо молчания (404 = «сервер не обновлён»).
 Версия своя (0.7.x, app.json+package.json).
 
 ## Локальная проверка (как я гоняю без окружения хозяина)

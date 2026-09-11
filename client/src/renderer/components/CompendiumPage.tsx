@@ -270,7 +270,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
 
             {/* --- вкладки --- */}
             <div style={{ display: "flex", gap: 6, margin: "18px 0 14px", flexWrap: "wrap" }}>
-              {([["quests", "ЗАДАНИЯ"], ["season", "СЕЗОН"], ["bets", "СТАВКИ"], ["archive", "АРХИВ"], ["trophies", "ТРОФЕИ"], ["cosmetics", "КОСМЕТИКА"]] as const).map(([key, label]) => (
+              {([["quests", "ЗАДАНИЯ"], ["season", "СЕЗОН"], ["bets", "СТАВКИ"], ["trophies", "ТРОФЕИ"], ["cosmetics", "КОСМЕТИКА"], ["archive", "АРХИВ"]] as const).map(([key, label]) => (
                 <button
                   key={key}
                   onClick={() => {
@@ -778,7 +778,7 @@ function CosmeticsTab({ isNeo, cos, onSaved }: {
       <div style={{ padding: "10px 14px", background: "var(--bg-secondary)", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
         <span style={{ ...mono, fontWeight: 800, fontSize: 12.5, letterSpacing: "0.08em", color: "var(--accent)" }}>// КОСМЕТИКА</span>
         <span style={{ ...mono, fontSize: 11, color: "var(--text-muted)" }}>
-          открыто уровнем {lvl} · уровни не сгорают между сезонами
+          открыто уровнем {lvl} · уровень — по лучшему сезону, проигранные ставки могут его опустить 🎲
         </span>
       </div>
 
@@ -890,8 +890,12 @@ function Stat({ mono, label, value }: { mono: React.CSSProperties; label: string
 
 function TrophyChip({ t, isNeo }: { t: CompendiumTrophy; isNeo: boolean }) {
   const bad = t.cat === "anti";
+  // Клик раскрывает описание «как получить» прямо в чипе (как тап на
+  // телефоне) — ховер-тултип легко не заметить. У тайных чужих — «???».
+  const [open, setOpen] = useState(false);
   return (
-    <span title={t.desc || undefined} style={{
+    <span onClick={() => setOpen((o) => !o)} title={t.desc || undefined} style={{
+      cursor: "pointer",
       fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 700, padding: "3px 8px",
       color: bad ? BLOOD : "var(--accent)",
       border: `1px solid ${bad ? BLOOD : "var(--accent)"}`,
@@ -899,6 +903,11 @@ function TrophyChip({ t, isNeo }: { t: CompendiumTrophy; isNeo: boolean }) {
       borderRadius: isNeo ? 0 : 999, whiteSpace: "nowrap",
     }}>
       {bad ? "💀 " : ""}{t.name}
+      {open && t.desc && (
+        <span style={{ display: "block", fontWeight: 500, fontSize: 10.5, opacity: 0.85, marginTop: 2, maxWidth: 240, whiteSpace: "normal" }}>
+          {t.desc}
+        </span>
+      )}
     </span>
   );
 }

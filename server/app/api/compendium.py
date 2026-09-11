@@ -482,6 +482,9 @@ async def place_bet(
     ok = await bets_mod.try_debit(db, current_user.id, season, data.stake)
     if not ok:
         raise HTTPException(400, "Не хватает газа в этом сезоне — катай и закрывай задания")
+    # Проигранный (поставленный) газ опускает и «вечный» максимум — решение
+    # хозяина; несоответствующая косметика слетает внутри recalc.
+    await bets_mod.recalc_max_level(db, current_user.id)
 
     bet = Bet(
         bettor_id=current_user.id, target_id=target.id, season=season,
@@ -496,6 +499,11 @@ async def place_bet(
         await db.rollback()
         raise HTTPException(400, "У тебя уже есть открытая ставка на этого игрока — дождись развязки")
     await db.refresh(bet)
+
+    # Уровень/косметика могли измениться — чат должен увидеть живьём
+    from app.api.users import _broadcast_profile
+    await db.refresh(current_user)
+    await _broadcast_profile(db, current_user)
 
     prof_res = await db.execute(
         select(CompendiumProfile.gas).where(

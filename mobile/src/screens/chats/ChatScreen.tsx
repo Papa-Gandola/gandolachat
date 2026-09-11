@@ -24,7 +24,7 @@ import { ChevronLeftIcon, PhoneIcon, SearchIcon, SendIcon } from "../../componen
 import { IconBtn } from "../../components/IconBtn";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import { SwipeableMessage } from "../../components/SwipeableMessage";
-import { VoiceMessage } from "../../components/VoiceMessage";
+import { VoiceMessage, unloadAllVoicePlayers } from "../../components/VoiceMessage";
 import { ChatsStackParamList } from "../../navigation/types";
 import { apiErrorMessage, chatApi, ChatOut, MessageOut, notesApi, userApi } from "../../services/api";
 import { cancelLocalReminder, scheduleLocalReminder } from "../../services/reminders";
@@ -124,6 +124,7 @@ export function ChatScreen({ navigation, route }: Props) {
   // True while a recording is being created or torn down — expo-av allows only
   // one prepared recording at a time, so block a new start until teardown ends.
   const recBusyRef = useRef(false);
+  const recBusySinceRef = useRef(0);
   const [recording, setRecording] = useState(false);
   const [recError, setRecError] = useState<string | null>(null);
   const recStartRef = useRef(0);
@@ -475,8 +476,14 @@ export function ChatScreen({ navigation, route }: Props) {
   };
 
   const startRecording = async () => {
+    // Сторожок: если busy-флаг завис (непредвиденный путь) — через 6с
+    // отпускаем, иначе «жму и ничего не происходит» до перезапуска
+    if (recBusyRef.current && Date.now() - recBusySinceRef.current > 6000) {
+      recBusyRef.current = false;
+    }
     if (recBusyRef.current || recordingRef.current) return;
     recBusyRef.current = true;
+    recBusySinceRef.current = Date.now();
     setRecError(null);
     try {
       const perm = await Audio.requestPermissionsAsync();
@@ -495,18 +502,25 @@ export function ChatScreen({ navigation, route }: Props) {
         }
         lastRecording = null;
       }
+      // Живой плеер голосовых держит аудио-сессию на части андроидов —
+      // выгружаем ВСЕ перед записью, иначе prepare отдаёт «Only one
+      // Recording…» и микрофон клинит до перезапуска приложения.
+      unloadAllVoicePlayers();
       await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
       // Manual prepare → start (createAsync misbehaved on some devices). Hold
       // the ref BEFORE start so the object can't be garbage-collected.
-      const rec = new Audio.Recording();
+      let rec = new Audio.Recording();
       try {
         await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
       } catch {
         // Previous recorder still held by the OS — force-release the whole audio
         // subsystem (toggling the iOS audio-mode flag alone does nothing on
-        // Android) and retry once.
+        // Android) and retry once. ВАЖНО: со СВЕЖИМ объектом Recording —
+        // упавший prepare оставляет старый объект в состоянии, где повторный
+        // prepare на нём падает всегда (ловили «одно голосовое за запуск»).
         await resetAudioSubsystem();
         await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+        rec = new Audio.Recording();
         await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
       }
       lastRecording = rec;

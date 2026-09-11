@@ -27,7 +27,9 @@ from datetime import datetime, timezone
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from app.models import User, Bet, DotaMatch, CompendiumProfile
+from sqlalchemy import func
+
+from app.models import User, Bet, DotaMatch, CompendiumProfile, SeasonResult
 from app.compendium.engine import current_season, level_for_gas
 
 MARKETS = ("match", "kills", "kda", "roshan", "streak")
@@ -85,9 +87,61 @@ async def lines_for(db, user_id: int) -> dict:
     return {"kills": kills_line, "kda": kda_line}
 
 
+async def recalc_max_level(db, user_id: int) -> None:
+    """Пересчёт comp_max_level = уровень ЛУЧШЕГО сезона (по текущему газу
+    профилей). Решение хозяина: проигранный в ставках газ ОПУСКАЕТ и
+    «вечный» максимум — прошлые сезоны заморожены и не сгорают, но пик
+    текущего сезона проигрывается вместе с газом. Несоответствующая
+    надетая косметика слетает (кроме наград за МЕСТО: подиумные рамки и
+    чемпионские титулы вечны). Не коммитит."""
+    peak_res = await db.execute(
+        select(func.max(CompendiumProfile.gas))
+        .where(CompendiumProfile.user_id == user_id, CompendiumProfile.gas > 0)
+    )
+    peak = peak_res.scalar() or 0
+    lvl = level_for_gas(peak) if peak > 0 else 0
+    await db.execute(
+        update(User).where(User.id == user_id).values(comp_max_level=lvl)
+    )
+
+    # Слетание косметики ниже порога. UNLOCKS живут в api.compendium —
+    # рантайм-импорт (модульный сделал бы цикл: api импортирует bets).
+    from app.api.compendium import UNLOCKS
+    user_res = await db.execute(
+        select(User).where(User.id == user_id).execution_options(populate_existing=True)
+    )
+    user = user_res.scalar_one_or_none()
+    if user is None:
+        return
+    changed = False
+    if user.comp_badge and lvl < UNLOCKS["badge"]:
+        user.comp_badge = False
+        changed = True
+    if user.comp_title and lvl < UNLOCKS["title"]:
+        champ_res = await db.execute(
+            select(SeasonResult.season)
+            .where(SeasonResult.user_id == user_id, SeasonResult.place == 1)
+        )
+        from app.compendium.finale import month_gen
+        champ_titles = {f"Чемпион {month_gen(s)}" for (s,) in champ_res.all()}
+        if user.comp_title not in champ_titles:
+            user.comp_title = None
+            changed = True
+    if user.comp_color and lvl < UNLOCKS["color"]:
+        user.comp_color = None
+        changed = True
+    if user.comp_frame in ("lime", "animated"):
+        need = UNLOCKS["frame_lime"] if user.comp_frame == "lime" else UNLOCKS["frame_animated"]
+        if lvl < need:
+            user.comp_frame = None
+            changed = True
+    if changed:
+        await db.flush()
+
+
 async def _credit(db, user_id: int, season: str, amount: int) -> None:
     """Атомарное зачисление газа в профиль сезона (создаёт при отсутствии) +
-    подтяжка вечного comp_max_level. Не коммитит — это дело вызывающего."""
+    пересчёт comp_max_level. Не коммитит — это дело вызывающего."""
     now = datetime.now(timezone.utc)
     stmt = pg_insert(CompendiumProfile).values(
         user_id=user_id, season=season, gas=amount, updated_at=now,
@@ -96,18 +150,7 @@ async def _credit(db, user_id: int, season: str, amount: int) -> None:
         set_={"gas": CompendiumProfile.gas + amount, "updated_at": now},
     )
     await db.execute(stmt)
-    gas_res = await db.execute(
-        select(CompendiumProfile.gas).where(
-            CompendiumProfile.user_id == user_id, CompendiumProfile.season == season
-        )
-    )
-    gas = gas_res.scalar_one_or_none() or 0
-    lvl = level_for_gas(gas)
-    await db.execute(
-        update(User)
-        .where(User.id == user_id, (User.comp_max_level.is_(None)) | (User.comp_max_level < lvl))
-        .values(comp_max_level=lvl)
-    )
+    await recalc_max_level(db, user_id)
 
 
 async def try_debit(db, user_id: int, season: str, amount: int) -> bool:

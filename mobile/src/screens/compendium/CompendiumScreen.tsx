@@ -186,9 +186,9 @@ export function CompendiumScreen() {
                   ["quests", "ЗАДАНИЯ"],
                   ["season", "СЕЗОН"],
                   ["bets", "СТАВКИ"],
-                  ["archive", "АРХИВ"],
                   ["trophies", "ТРОФЕИ"],
                   ["cosmetics", "КОСМЕТИКА"],
+                  ["archive", "АРХИВ"],
                 ] as [TabKey, string][]
               ).map(([key, label]) => (
                 <Pressable
@@ -757,7 +757,7 @@ function CosmeticsTab({ theme, cos, onSaved }: {
   return (
     <View>
       <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: theme.colors.inkMuted, marginBottom: 4 }}>
-        открыто уровнем {lvl} · уровни не сгорают между сезонами
+        открыто уровнем {lvl} · уровень — по лучшему сезону, ставки могут его опустить 🎲
       </Text>
 
       <Row need={U.badge ?? 2} name="Значок ⛽ у ника" desc="Виден в чате и списках">

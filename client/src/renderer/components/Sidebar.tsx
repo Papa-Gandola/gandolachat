@@ -109,12 +109,26 @@ export default function Sidebar({
     };
     const onCallEnd = (data: any) => setActiveCalls((prev) => { const n = new Set(prev); n.delete(data.chat_id); return n; });
 
+    // Прочитал на ДРУГОМ своём устройстве (телефон) — сервер бродкастит
+    // message_read и нашим сокетам; гасим бейдж, иначе «непрочитанное» висит
+    const onReadSync = (m: any) => {
+      if (m?.user_id === currentUser.id && m?.chat_id) {
+        setUnread((prev) => {
+          if (!prev.get(m.chat_id)) return prev;
+          const n = new Map(prev);
+          n.set(m.chat_id, 0);
+          return n;
+        });
+      }
+    };
+    wsService.on("message_read", onReadSync);
     wsService.on("user_online", onOnline);
     wsService.on("user_offline", onOffline);
     wsService.on("message", onMsg);
     wsService.on("call_active", onCallActive);
     wsService.on("call_end", onCallEnd);
     return () => {
+      wsService.off("message_read", onReadSync);
       wsService.off("user_online", onOnline);
       wsService.off("user_offline", onOffline);
       wsService.off("message", onMsg);
