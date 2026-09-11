@@ -34,7 +34,9 @@ export interface UserOut {
   comp_badge?: boolean;
   comp_title?: string | null;
   comp_color?: string | null;
-  comp_frame?: string | null; // "lime" | "animated"
+  comp_frame?: string | null; // "lime" | "animated" | подиумные
+  // «🎮 в Доте сейчас»: показывать себя (невидимка = false)
+  dota_presence_visible?: boolean;
 }
 
 export interface MessageOut {
@@ -113,7 +115,7 @@ export interface TokenResponse {
 export const userApi = {
   me: () => api.get<TokenResponse>("/api/users/me"),
   search: (q: string) => api.get<UserOut[]>(`/api/users/search?q=${encodeURIComponent(q)}`),
-  updateProfile: (data: { username?: string; status?: string; about?: string }) =>
+  updateProfile: (data: { username?: string; status?: string; about?: string; dota_presence_visible?: boolean }) =>
     api.patch<UserOut>("/api/users/me", data),
   getUser: (userId: number) => api.get<UserOut>(`/api/users/${userId}`),
   uploadAvatar: (file: File) => {
@@ -222,6 +224,48 @@ export interface CompendiumSeasonRow {
   comp_badge?: boolean;
 }
 
+// === Ставки Гандолиума ===
+export interface BetOut {
+  id: number;
+  bettor_id: number;
+  bettor: string;
+  target_id: number;
+  target: string;
+  market: string;   // match | kills | kda | roshan | streak
+  side: string;     // win/lose | over/under
+  line: number;     // kda — ×10
+  label: string;    // готовая подпись с сервера
+  stake: number;
+  status: string;   // open | won | lost | refunded
+  progress: number; // streak: побед подряд
+  payout: number;
+  placed_at: string;
+  resolved_at: string | null;
+  pending_parse: boolean;
+}
+
+export interface BetTarget {
+  user_id: number;
+  username: string;
+  avatar_url: string | null;
+  kills_line: number;
+  kda_line: number;  // ×10
+  roshan_line: number;
+  is_me: boolean;
+}
+
+export interface BetsOverview {
+  season: string;
+  my_gas: number;
+  linked: boolean;
+  stake_min: number;
+  stake_max: number;
+  streak_stake_max: Record<string, number>;
+  targets: BetTarget[];
+  open: BetOut[];
+  my_recent: BetOut[];
+}
+
 export const compendiumApi = {
   me: () => api.get<CompendiumMe>("/api/compendium/me"),
   // ""/false = снять; надеть можно только открытое уровнем
@@ -229,6 +273,9 @@ export const compendiumApi = {
     api.patch<CompendiumCosmetics>("/api/compendium/cosmetics", data),
   season: () => api.get<{ season: string; rows: CompendiumSeasonRow[]; me: number }>("/api/compendium/season"),
   seasons: () => api.get<SeasonArchive[]>("/api/compendium/seasons"),
+  bets: () => api.get<BetsOverview>("/api/compendium/bets"),
+  placeBet: (data: { target_id: number; market: string; side: string; line?: number; stake: number }) =>
+    api.post<{ bet: BetOut; my_gas: number }>("/api/compendium/bets", data),
   user: (userId: number) =>
     api.get<{ user_id: number; username: string; season: string; gas: number; level: number; trophies: CompendiumTrophy[]; rank_tier: number | null; leaderboard_rank: number | null }>(
       `/api/compendium/user/${userId}`

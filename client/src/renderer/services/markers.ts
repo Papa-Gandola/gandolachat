@@ -5,6 +5,8 @@ export function markerPreview(content: string): string | null {
     try {
       const p = JSON.parse(content.slice(12));
       if (p.kind === "season_final") return `🏆 Итоги сезона: чемпион — ${p.podium?.[0]?.username ?? "?"}`;
+      if (p.kind === "bet_result") return `🎲 Ставки: катка ${p.target ?? "?"}`;
+      if (p.kind === "week_recap") return "📅 Итоги недели";
       if (p.special === "rampage") return `🚨 РАМПАГА: ${p.username}!`;
       if (p.special === "fullstack") return "🏆 СТАК ПОБЕДИЛ";
       if (p.kind === "anti") return `💀 Прожарка: ${p.username}`;

@@ -1,6 +1,6 @@
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useState } from "react";
-import { ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Platform, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 
 import { AppBar } from "../../components/AppBar";
 import { ChatRow } from "../../components/ChatRow";
@@ -9,7 +9,7 @@ import { IconBtn } from "../../components/IconBtn";
 import { PlusIcon, SearchIcon, SettingsIcon } from "../../components/icons";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import { ChatsStackParamList } from "../../navigation/types";
-import { notesApi } from "../../services/api";
+import { apiErrorMessage, notesApi } from "../../services/api";
 import { useChats } from "../../services/useChats";
 import { useTheme, useThemeControls } from "../../theme";
 
@@ -59,7 +59,17 @@ export function ChatsListScreen({ navigation }: Props) {
                       isNotes: true,
                     }),
                   )
-                  .catch(() => {});
+                  .catch((e: unknown) => {
+                    // Молчаливый catch прятал «нажимаю и ничего»: 404 =
+                    // сервер ещё без Заметок (нужен деплой), остальное — сеть
+                    const status = (e as { response?: { status?: number } })?.response?.status;
+                    const msg =
+                      status === 404 || status === 405
+                        ? "Сервер ещё не обновлён до Заметок — нужен деплой сервера"
+                        : apiErrorMessage(e);
+                    if (Platform.OS === "web") window.alert(`Заметки: ${msg}`);
+                    else Alert.alert("Заметки", msg);
+                  });
               }}
             >
               <Text style={{ fontSize: 17 }}>📝</Text>

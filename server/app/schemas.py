@@ -26,6 +26,7 @@ class UserOut(BaseModel):
     dota_account_id: int | None = None
     dota_rank_tier: int | None = None
     dota_leaderboard_rank: int | None = None
+    dota_presence_visible: bool = True
     # Косметика Гандолиума (разблокировки — по comp_max_level, навсегда)
     comp_max_level: int = 0
     comp_badge: bool = False

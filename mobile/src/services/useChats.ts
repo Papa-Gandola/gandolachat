@@ -32,6 +32,8 @@ function markerPreview(content: string): string | null {
     try {
       const p = JSON.parse(content.slice(12));
       if (p.kind === "season_final") return `🏆 Итоги сезона: чемпион — ${p.podium?.[0]?.username ?? "?"}`;
+      if (p.kind === "bet_result") return `🎲 Ставки: катка ${p.target ?? "?"}`;
+      if (p.kind === "week_recap") return "📅 Итоги недели";
       if (p.special === "rampage") return `🚨 РАМПАГА: ${p.username}!`;
       if (p.special === "fullstack") return "🏆 СТАК ПОБЕДИЛ";
       if (p.kind === "anti") return `💀 Прожарка: ${p.username}`;
@@ -168,6 +170,16 @@ export function useChats(): ChatsState {
       const cid = data.chat_id as number | undefined;
       if (typeof cid === "number") clearTyping(cid);
     };
+    // Прочитал на другом своём устройстве (комп) — сервер бродкастит
+    // message_read и нашим сокетам; гасим бейдж (зеркало десктопного фикса)
+    const onReadSync = (m: { user_id?: number; chat_id?: number }) => {
+      if (m?.user_id === user?.id && m?.chat_id) {
+        setUnread((prev) =>
+          prev[String(m.chat_id)] ? { ...prev, [String(m.chat_id)]: 0 } : prev,
+        );
+      }
+    };
+    wsService.on("message_read", onReadSync);
     wsService.on("new_chat", onNewChat);
     wsService.on("message", onMessage);
     wsService.on("message", onMessageClearTyping);
@@ -177,9 +189,11 @@ export function useChats(): ChatsState {
     wsService.on("user_online", onUserOnline);
     wsService.on("user_offline", onUserOffline);
     wsService.on("_ws_open", onWsOpen);
+    // cleanup ниже снимает и onReadSync
     return () => {
       typingTimersRef.current.forEach((t) => clearTimeout(t));
       typingTimersRef.current.clear();
+      wsService.off("message_read", onReadSync);
       wsService.off("typing", onTyping);
       wsService.off("message", onMessageClearTyping);
       wsService.off("new_chat", onNewChat);

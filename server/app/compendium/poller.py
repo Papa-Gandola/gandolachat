@@ -57,10 +57,13 @@ async def _linked_users(db) -> list[User]:
 
 
 async def _get_or_create_profile(db, user_id: int, season: str) -> CompendiumProfile:
+    # populate_existing: ставки (_credit) меняют газ raw-UPSERT-ом мимо
+    # identity map — без перечитки цикл поллера затёр бы выплату стейл-
+    # объектом (грабля №1; ловили потерю выплат при 2+ катках за цикл)
     res = await db.execute(
         select(CompendiumProfile).where(
             CompendiumProfile.user_id == user_id, CompendiumProfile.season == season
-        )
+        ).execution_options(populate_existing=True)
     )
     prof = res.scalar_one_or_none()
     if prof is None:
@@ -356,6 +359,17 @@ async def _process_new_match(db, user: User, match_id: int) -> bool:
     comps = engine.evaluate_match(row, ctx)
     await _apply_and_announce(db, user, comps, row.season)
     await _handle_team(db, row, user)
+
+    # Ставки на эту катку (свежая строка уже закоммичена). Состав катки —
+    # для анти-руин щита «ставивший сам в игре» (анонимы без account_id
+    # мимо щита — принимаем: сговор в чате на 7 человек и так виден всем).
+    from app.compendium import bets as bets_mod
+    participants = {int(p["account_id"]) for p in players if p.get("account_id")}
+    try:
+        await bets_mod.settle_for_match(db, user, row, participants)
+    except Exception as e:
+        _log(f"bets settle failed for match {match_id}: {type(e).__name__}: {e}")
+        await db.rollback()
     return True
 
 
@@ -420,6 +434,15 @@ async def poll_matches() -> None:
                         await db.rollback()
                     await asyncio.sleep(1.0)  # бережём лимиты OpenDota
                 await asyncio.sleep(0.5)
+
+            # TTL-возвраты ставок (катка не случилась / стрик завис / парс
+            # не доехал) — в конце цикла, под тем же общим локом.
+            from app.compendium import bets as bets_mod
+            try:
+                await bets_mod.sweep_expired(db)
+            except Exception as e:
+                _log(f"bets sweep failed: {type(e).__name__}: {e}")
+                await db.rollback()
 
 
 async def recheck_parses() -> None:
@@ -496,6 +519,12 @@ async def recheck_parses() -> None:
                             ctx = await _build_ctx(db, user, r.season)
                             comps = engine.evaluate_match(r, ctx)
                             await _apply_and_announce(db, user, comps, r.season)
+                            # Рошан-ставки, ждавшие парса этой катки
+                            from app.compendium import bets as bets_mod
+                            participants = {
+                                int(p["account_id"]) for p in players if p.get("account_id")
+                            }
+                            await bets_mod.settle_after_parse(db, user, r, participants)
                     except Exception as e:
                         _log(f"re-eval after parse failed for {uname}: {type(e).__name__}: {e}")
                         await db.rollback()

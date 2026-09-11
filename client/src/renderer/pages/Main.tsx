@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ChatOut, UserOut, chatApi, notesApi } from "../services/api";
 import { wsService } from "../services/ws";
+import { initPresence } from "../services/presence";
 import { webrtcService } from "../services/webrtc";
 import { playCallRing, playMessageSound } from "../services/sounds";
 import Sidebar from "../components/Sidebar";
@@ -80,6 +81,7 @@ export default function Main({ token, user, onLogout }: Props) {
 
   useEffect(() => {
     wsService.connect(token);
+    initPresence(); // перелогин стирает WS-хендлеры — перевешиваем 🎮-презенс
     wsService.onQualityChange = (q, p) => { setConnQuality(q); setConnPing(p); };
     webrtcService.init(user.id);
     chatApi.list().then((res) => setChats(res.data));

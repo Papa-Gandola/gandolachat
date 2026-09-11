@@ -411,6 +411,25 @@ function DotaSection({ user, isOwn, isNeo, onUser }: {
             </span>
           )}
           {isOwn && (
+            <label
+              title="Значок 🎮 у твоего ника, когда запущена Dota 2. Выключи, если хочешь катать в невидимке."
+              style={{ ...mono, display: "flex", alignItems: "center", gap: 7, color: "var(--text-muted)", fontSize: 11.5, cursor: "pointer", userSelect: "none" }}
+            >
+              <input
+                type="checkbox"
+                checked={user.dota_presence_visible !== false}
+                onChange={async (e) => {
+                  try {
+                    const res = await userApi.updateProfile({ dota_presence_visible: e.target.checked });
+                    onUser(res.data);
+                  } catch { /* сеть мигнула — чекбокс вернётся со свежим /me */ }
+                }}
+                style={{ accentColor: "var(--accent)", width: 13, height: 13, cursor: "pointer" }}
+              />
+              🎮 показывать чату, что я сейчас в Доте
+            </label>
+          )}
+          {isOwn && (
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button style={btn} onClick={refresh} disabled={busy}>
                 {busy ? "..." : isNeo ? "[ОБНОВИТЬ]" : "🔄 Обновить"}

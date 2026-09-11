@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Platform, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Platform, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
 
 import { AppBar } from "../../components/AppBar";
 import { Avatar } from "../../components/Avatar";
@@ -7,14 +7,15 @@ import { DotaRankBadge } from "../../components/DotaRankBadge";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import {
   apiErrorMessage, compendiumApi, CompendiumCosmetics, CompendiumMe, CompendiumQuest,
-  CompendiumSeasonRow, CompendiumTrophy, SeasonArchive,
+  CompendiumSeasonRow, CompendiumTrophy, SeasonArchive, BetsOverview, BetOut,
 } from "../../services/api";
 import { useAuth } from "../../services/AuthContext";
+import { useDotaPlaying } from "../../services/dotaPresence";
 import { wsService } from "../../services/ws";
 import { useTheme } from "../../theme";
 
 type ThemeT = ReturnType<typeof useTheme>;
-type TabKey = "quests" | "season" | "archive" | "trophies" | "cosmetics";
+type TabKey = "quests" | "season" | "bets" | "archive" | "trophies" | "cosmetics";
 
 const BLOOD = "#ff6a5e";
 const GOLD = "#ffd24a";
@@ -29,6 +30,8 @@ export function CompendiumScreen() {
   const [seasonErr, setSeasonErr] = useState(false);
   const [archive, setArchive] = useState<SeasonArchive[] | null>(null);
   const [archiveErr, setArchiveErr] = useState(false);
+  const [betsTick, setBetsTick] = useState(0);
+  const dotaPlaying = useDotaPlaying();
   const [tab, setTab] = useState<TabKey>("quests");
   const [refreshing, setRefreshing] = useState(false);
   // Раскрытых полок может быть несколько — удобно сравнивать людей.
@@ -69,6 +72,8 @@ export function CompendiumScreen() {
         load();
         // Карточка финала = архив пополнился
         if (m.content.includes("season_final")) loadArchive();
+        // Ставки рассудились — открытая вкладка обновится
+        if (m.content.includes("bet_result")) setBetsTick((t) => t + 1);
         setUserTrophies({});
       }
     };
@@ -78,8 +83,9 @@ export function CompendiumScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    // На вкладке АРХИВ свайп обновляет архив, не только /me
+    // На вкладке АРХИВ свайп обновляет архив, на СТАВКАХ — ставки
     await (tab === "archive" ? loadArchive() : load());
+    if (tab === "bets") setBetsTick((t) => t + 1);
     setRefreshing(false);
   }, [load, loadArchive, tab]);
 
@@ -179,9 +185,10 @@ export function CompendiumScreen() {
                 [
                   ["quests", "ЗАДАНИЯ"],
                   ["season", "СЕЗОН"],
-                  ["archive", "АРХИВ"],
+                  ["bets", "СТАВКИ"],
                   ["trophies", "ТРОФЕИ"],
                   ["cosmetics", "КОСМЕТИКА"],
+                  ["archive", "АРХИВ"],
                 ] as [TabKey, string][]
               ).map(([key, label]) => (
                 <Pressable
@@ -189,6 +196,7 @@ export function CompendiumScreen() {
                   onPress={() => {
                     setTab(key);
                     if (key === "archive") loadArchive();
+                    else if (key === "bets") setBetsTick((t) => t + 1);
                     else load();
                   }}
                   style={{
@@ -257,7 +265,7 @@ export function CompendiumScreen() {
                           <Avatar letter={(r.username[0] ?? "?").toUpperCase()} size={28} bg="#5865f2" uri={r.avatar_url} />
                           <View style={{ flex: 1, minWidth: 0 }}>
                             <Text numberOfLines={1} style={{ fontFamily: theme.fonts.mono, fontSize: 13, fontWeight: "700", color: r.comp_color || theme.colors.ink }}>
-                              {r.username}{r.comp_badge ? " ⛽" : ""}{r.user_id === auth.user?.id ? " (ты)" : ""}
+                              {r.username}{r.comp_badge ? " ⛽" : ""}{dotaPlaying.has(r.user_id) ? " 🎮" : ""}{r.user_id === auth.user?.id ? " (ты)" : ""}
                             </Text>
                             <Text numberOfLines={1} style={{ fontFamily: theme.fonts.mono, fontSize: 9.5, color: theme.colors.inkMuted }}>
                               ур.{r.level} · ✓{r.quests_done}{r.anti_count ? ` · 💀${r.anti_count}` : ""}{r.comp_title ? ` · «${r.comp_title}»` : ""}
@@ -280,6 +288,10 @@ export function CompendiumScreen() {
                     ))
                   )}
                 </View>
+              )}
+
+              {tab === "bets" && (
+                <BetsTab theme={theme} refreshTick={betsTick} myId={auth.user?.id ?? 0} />
               )}
 
               {tab === "archive" && (
@@ -480,6 +492,209 @@ function TrophyChip({ theme, t }: { theme: ThemeT; t: CompendiumTrophy }) {
   );
 }
 
+const BET_MARKETS: Array<{ key: string; name: string; sides: Array<[string, string]> }> = [
+  { key: "match", name: "ИСХОД", sides: [["win", "победа"], ["lose", "поражение"]] },
+  { key: "kills", name: "УБИЙСТВА", sides: [["over", "больше"], ["under", "меньше"]] },
+  { key: "kda", name: "KDA", sides: [["over", "больше"], ["under", "меньше"]] },
+  { key: "roshan", name: "РОШАНЫ", sides: [["over", "возьмут"], ["under", "не возьмут"]] },
+  { key: "streak", name: "ВИНСТРИК", sides: [["win", "подряд"]] },
+];
+
+function BetsTab({ theme, refreshTick, myId }: { theme: ThemeT; refreshTick: number; myId: number }) {
+  const [ov, setOv] = useState<BetsOverview | null>(null);
+  const [loadErr, setLoadErr] = useState(false);
+  const [targetId, setTargetId] = useState(0);
+  const [market, setMarket] = useState("match");
+  const [side, setSide] = useState("win");
+  const [streakLen, setStreakLen] = useState(2);
+  const [stake, setStake] = useState("20");
+  const [busy, setBusy] = useState(false);
+  const [placeErr, setPlaceErr] = useState("");
+  const [placedOk, setPlacedOk] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    compendiumApi.bets()
+      .then((res) => { if (alive) { setOv(res.data); setLoadErr(false); } })
+      .catch(() => { if (alive) setLoadErr(true); });
+    return () => { alive = false; };
+  }, [refreshTick]);
+
+  if (loadErr) {
+    return <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: BLOOD }}>⚠ Не удалось загрузить — потяни вниз</Text>;
+  }
+  if (!ov) return <ActivityIndicator color={theme.colors.accent} />;
+
+  const target = ov.targets.find((t) => t.user_id === targetId) || null;
+  const onSelf = target?.is_me ?? false;
+  const marketDef = BET_MARKETS.find((m) => m.key === market)!;
+  const sides = onSelf ? marketDef.sides.filter(([k]) => k === "win" || k === "over") : marketDef.sides;
+  const effSide = sides.some(([k]) => k === side) ? side : sides[0][0];
+  const cap = market === "streak" ? (ov.streak_stake_max[String(streakLen)] ?? 10) : ov.stake_max;
+  const mult = market === "streak" ? 2 ** streakLen : 2;
+  const lineText = !target ? "" :
+    market === "kills" ? `линия: ${target.kills_line} (средняя)` :
+    market === "kda" ? `линия: ${(target.kda_line / 10).toFixed(1)} (средняя)` :
+    market === "roshan" ? `линия: ${target.roshan_line} рошана (нужен парс 📼)` :
+    market === "streak" ? "победы строго подряд" : "следующая рейтинговая";
+
+  const chip = (active: boolean) => ({
+    paddingHorizontal: 11, paddingVertical: 7,
+    borderRadius: theme.radius.sm,
+    backgroundColor: active ? theme.colors.accent : theme.colors.bgElev,
+    borderWidth: 1, borderColor: active ? theme.colors.accent : theme.colors.border,
+    opacity: busy ? 0.7 : 1,
+  }) as const;
+  const chipText = (active: boolean) => ({
+    fontFamily: theme.fonts.mono, fontSize: 11.5, fontWeight: "700",
+    color: active ? theme.colors.accentText : theme.colors.ink,
+  }) as const;
+
+  const place = async () => {
+    if (!target || busy) return;
+    setBusy(true);
+    setPlaceErr("");
+    setPlacedOk("");
+    try {
+      const res = await compendiumApi.placeBet({
+        target_id: target.user_id, market, side: effSide,
+        ...(market === "streak" ? { line: streakLen } : {}),
+        stake: Math.round(Number(stake) || 0),
+      });
+      setOv((prev) => prev ? { ...prev, my_gas: res.data.my_gas, open: [res.data.bet, ...prev.open] } : prev);
+      setPlacedOk(`Принято! ${res.data.bet.label} · ${res.data.bet.stake}⛽ (×${mult})`);
+    } catch (e) {
+      setPlaceErr(apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const outcome = (b: BetOut) =>
+    b.status === "won" ? { t: `✅ +${b.payout - b.stake}⛽`, c: "#57f287" }
+      : b.status === "lost" ? { t: `❌ -${b.stake}⛽`, c: BLOOD }
+      : b.status === "refunded" ? { t: "↩ возврат", c: theme.colors.inkMuted }
+      : { t: `${b.stake}⛽`, c: theme.colors.accent };
+
+  const betRow = (b: BetOut, showOutcome: boolean) => (
+    <View key={b.id} style={{ flexDirection: "row", alignItems: "baseline", gap: 8, paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: theme.colors.border }}>
+      <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11.5, fontWeight: "700", color: b.bettor_id === myId ? theme.colors.accent : theme.colors.ink }}>
+        {b.bettor_id === myId ? "ты" : b.bettor}
+      </Text>
+      <Text numberOfLines={1} style={{ flex: 1, fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted }}>
+        → {b.target_id === b.bettor_id ? "себя" : b.target}: {b.label}
+        {b.market === "streak" && b.status === "open" ? ` · ${b.progress}/${b.line}` : ""}
+        {b.pending_parse ? " · 📼" : ""}
+      </Text>
+      <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11.5, fontWeight: "800", color: showOutcome ? outcome(b).c : theme.colors.accent }}>
+        {showOutcome ? outcome(b).t : `${b.stake}⛽`}
+      </Text>
+    </View>
+  );
+
+  return (
+    <View style={{ gap: 14 }}>
+      <View style={{ backgroundColor: theme.colors.bgElev, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.md, padding: 12, gap: 10 }}>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, fontWeight: "800", letterSpacing: 1, color: theme.colors.accent }}>НОВАЯ СТАВКА</Text>
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkMuted }}>твой газ: <Text style={{ color: theme.colors.accent, fontWeight: "800" }}>{ov.my_gas} ⛽</Text></Text>
+        </View>
+        {!ov.linked ? (
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11.5, color: theme.colors.inkMuted, lineHeight: 17 }}>
+            Ставки — только для привязанных к Dota (вкладка «Я»). Чужие видно и так 👇
+          </Text>
+        ) : (
+          <>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+              {ov.targets.map((t) => (
+                <Pressable key={t.user_id} onPress={() => { setTargetId(t.user_id); setPlacedOk(""); }} style={chip(targetId === t.user_id)}>
+                  <Text style={chipText(targetId === t.user_id)}>{t.is_me ? "на себя 💪" : t.username}</Text>
+                </Pressable>
+              ))}
+            </View>
+            {target ? (
+              <>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+                  {BET_MARKETS.map((m) => (
+                    <Pressable key={m.key} onPress={() => { setMarket(m.key); setPlacedOk(""); }} style={chip(market === m.key)}>
+                      <Text style={chipText(market === m.key)}>{m.name}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                  {market === "streak" ? (
+                    [2, 3, 5].map((k) => (
+                      <Pressable key={k} onPress={() => setStreakLen(k)} style={chip(streakLen === k)}>
+                        <Text style={chipText(streakLen === k)}>{k} побед ×{2 ** k}</Text>
+                      </Pressable>
+                    ))
+                  ) : (
+                    sides.map(([k, label]) => (
+                      <Pressable key={k} onPress={() => setSide(k)} style={chip(effSide === k)}>
+                        <Text style={chipText(effSide === k)}>{label}</Text>
+                      </Pressable>
+                    ))
+                  )}
+                  <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: theme.colors.inkMuted }}>{lineText}</Text>
+                </View>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                  <TextInput
+                    value={stake}
+                    onChangeText={setStake}
+                    keyboardType="number-pad"
+                    style={{
+                      fontFamily: theme.fonts.mono, width: 74, paddingHorizontal: 10, paddingVertical: 7,
+                      backgroundColor: theme.colors.bg, color: theme.colors.ink, fontSize: 13,
+                      borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.sm,
+                    }}
+                  />
+                  <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: theme.colors.inkMuted }}>
+                    {ov.stake_min}–{cap}⛽ · выплата ×{mult}
+                  </Text>
+                  <Pressable onPress={place} disabled={busy} style={{ backgroundColor: theme.colors.accent, borderRadius: theme.radius.sm, paddingHorizontal: 16, paddingVertical: 9, opacity: busy ? 0.6 : 1 }}>
+                    <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11.5, fontWeight: "800", color: theme.colors.accentText }}>ПОСТАВИТЬ</Text>
+                  </Pressable>
+                </View>
+                {onSelf ? (
+                  <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: theme.colors.inkMuted }}>
+                    На себя — только за успех: селф-челлендж. Руин не оплачивается 🙂
+                  </Text>
+                ) : null}
+                {placeErr ? <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: BLOOD }}>{placeErr}</Text> : null}
+                {placedOk ? <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: "#57f287" }}>{placedOk}</Text> : null}
+              </>
+            ) : (
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted }}>Выбери, на кого ставишь 👆</Text>
+            )}
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 9.5, color: theme.colors.inkMuted, lineHeight: 14 }}>
+              Газ списывается сразу. Рассудит поллер по следующей катке; сам в катке цели — ставка
+              аннулируется (анти-руин). Нет катки 24ч (стрик — 7 дней) — газ вернётся.
+            </Text>
+          </>
+        )}
+      </View>
+
+      <View style={{ backgroundColor: theme.colors.bgElev, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.md, padding: 12 }}>
+        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, fontWeight: "800", letterSpacing: 1, color: theme.colors.accent, marginBottom: 4 }}>
+          ОТКРЫТЫЕ · {ov.open.length}
+        </Text>
+        {!ov.open.length ? (
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkMuted }}>Пока тихо — стол ждёт смелых ⛽</Text>
+        ) : ov.open.map((b) => betRow(b, false))}
+      </View>
+
+      <View style={{ backgroundColor: theme.colors.bgElev, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.md, padding: 12 }}>
+        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, fontWeight: "800", letterSpacing: 1, color: theme.colors.accent, marginBottom: 4 }}>
+          МОИ ПОСЛЕДНИЕ
+        </Text>
+        {!ov.my_recent.length ? (
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkMuted }}>История пуста — сделай первую ставку</Text>
+        ) : ov.my_recent.map((b) => betRow(b, true))}
+      </View>
+    </View>
+  );
+}
+
 function CosmeticsTab({ theme, cos, onSaved }: {
   theme: ThemeT;
   cos: CompendiumCosmetics;
@@ -542,7 +757,7 @@ function CosmeticsTab({ theme, cos, onSaved }: {
   return (
     <View>
       <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: theme.colors.inkMuted, marginBottom: 4 }}>
-        открыто уровнем {lvl} · уровни не сгорают между сезонами
+        открыто уровнем {lvl} · уровень — по лучшему сезону, ставки могут его опустить 🎲
       </Text>
 
       <Row need={U.badge ?? 2} name="Значок ⛽ у ника" desc="Виден в чате и списках">

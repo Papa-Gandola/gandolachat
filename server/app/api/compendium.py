@@ -10,10 +10,11 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import User, CompendiumProfile, QuestCompletion, SeasonResult
+from app.models import User, Bet, DotaMatch, CompendiumProfile, QuestCompletion, SeasonResult
 from app.compendium.finale import month_gen
 from app.auth import get_current_user
 from app.compendium.engine import (
@@ -331,6 +332,187 @@ async def seasons_archive(
         for s, rows in grouped.items()
     ]
     return out[:12]
+
+
+# ======================= Ставки =======================
+from app.compendium import bets as bets_mod
+
+
+class BetIn(BaseModel):
+    target_id: int
+    market: str
+    side: str
+    line: int | None = None  # только для streak (2/3/5); линии kills/kda считает сервер
+    stake: int
+
+
+def _bet_dict(b: Bet, names: dict[int, str]) -> dict:
+    return {
+        "id": b.id,
+        "bettor_id": b.bettor_id, "bettor": names.get(b.bettor_id, "?"),
+        "target_id": b.target_id, "target": names.get(b.target_id, "?"),
+        "market": b.market, "side": b.side, "line": b.line,
+        "label": bets_mod.describe({"market": b.market, "side": b.side, "line": b.line}),
+        "stake": b.stake, "status": b.status,
+        "progress": b.progress, "payout": b.payout,
+        "placed_at": b.placed_at.isoformat(),
+        "resolved_at": b.resolved_at.isoformat() if b.resolved_at else None,
+        "pending_parse": b.market == "roshan" and b.status == "open" and b.match_id is not None,
+    }
+
+
+@router.get("/bets")
+async def bets_overview(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Ставки: мой газ, цели с персональными линиями, открытые ставки всех
+    (социалка — всё на виду), моя недавняя история."""
+    season = current_season()
+    prof_res = await db.execute(
+        select(CompendiumProfile.gas).where(
+            CompendiumProfile.user_id == current_user.id,
+            CompendiumProfile.season == season,
+        )
+    )
+    my_gas = prof_res.scalar_one_or_none() or 0
+
+    linked_res = await db.execute(
+        select(User).where(User.dota_account_id.is_not(None), User.is_approved.is_(True))
+    )
+    linked = list(linked_res.scalars().all())
+    names = {u.id: u.username for u in linked}
+    targets = []
+    for u in linked:
+        lines = await bets_mod.lines_for(db, u.id)
+        targets.append({
+            "user_id": u.id, "username": u.username, "avatar_url": u.avatar_url,
+            "kills_line": lines["kills"], "kda_line": lines["kda"],
+            "roshan_line": bets_mod.ROSHAN_LINE,
+            "is_me": u.id == current_user.id,
+        })
+
+    open_res = await db.execute(
+        select(Bet).where(Bet.status == "open").order_by(Bet.placed_at.desc())
+    )
+    open_bets = list(open_res.scalars().all())
+    mine_res = await db.execute(
+        select(Bet)
+        .where(Bet.bettor_id == current_user.id, Bet.status != "open")
+        .order_by(Bet.resolved_at.desc())
+        .limit(20)
+    )
+    history = list(mine_res.scalars().all())
+    # Имена для ставок людей вне targets (отвязались после ставки)
+    extra_ids = {b.bettor_id for b in open_bets + history} | {b.target_id for b in open_bets + history}
+    missing = extra_ids - set(names)
+    if missing:
+        extra_res = await db.execute(select(User.id, User.username).where(User.id.in_(missing)))
+        names.update({uid: uname for uid, uname in extra_res.all()})
+
+    return {
+        "season": season,
+        "my_gas": my_gas,
+        "linked": current_user.dota_account_id is not None,
+        "stake_min": bets_mod.STAKE_MIN,
+        "stake_max": bets_mod.STAKE_MAX,
+        "streak_stake_max": bets_mod.STREAK_STAKE_MAX,
+        "targets": targets,
+        "open": [_bet_dict(b, names) for b in open_bets],
+        "my_recent": [_bet_dict(b, names) for b in history],
+    }
+
+
+@router.post("/bets")
+async def place_bet(
+    data: BetIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Поставить ⛽. Анти-руин зашит в валидацию: на себя — только «за
+    успех», рынка смертей нет, линии считает сервер, эскроу сразу."""
+    if current_user.dota_account_id is None:
+        raise HTTPException(400, "Ставки — только для привязанных к Dota (нужен твой account_id для честности)")
+    if data.market not in bets_mod.MARKETS:
+        raise HTTPException(400, "Нет такого рынка")
+    target = await db.get(User, data.target_id)
+    if not target or target.dota_account_id is None:
+        raise HTTPException(400, "Цель не привязана к Dota")
+    on_self = target.id == current_user.id
+
+    # Стороны: match — win/lose, streak — только win, остальные over/under.
+    valid_sides = {"match": ("win", "lose"), "streak": ("win",),
+                   "kills": ("over", "under"), "kda": ("over", "under"),
+                   "roshan": ("over", "under")}[data.market]
+    if data.side not in valid_sides:
+        raise HTTPException(400, "Нет такой стороны ставки")
+    # Анти-руин: на себя нельзя ставить на ПЛОХОЙ исход — никакой мотивации
+    # фидить/руинить свои (и чужие!) катки.
+    if on_self and data.side in ("lose", "under"):
+        raise HTTPException(400, "На себя — только за успех. Руин не оплачивается 🙂")
+
+    # Линии: kills/kda — от средних цели (анти-принтер), roshan — фикс.
+    if data.market == "streak":
+        line = data.line or 0
+        if line not in bets_mod.STREAK_STAKE_MAX:
+            raise HTTPException(400, "Стрик бывает 2, 3 или 5 побед")
+    elif data.market in ("kills", "kda"):
+        lines = await bets_mod.lines_for(db, target.id)
+        line = lines[data.market]
+    elif data.market == "roshan":
+        line = bets_mod.ROSHAN_LINE
+    else:
+        line = 0
+
+    cap = bets_mod.STREAK_STAKE_MAX[line] if data.market == "streak" else bets_mod.STAKE_MAX
+    if not (bets_mod.STAKE_MIN <= data.stake <= cap):
+        raise HTTPException(400, f"Ставка от {bets_mod.STAKE_MIN} до {cap}⛽ на этот рынок")
+
+    existing = await db.execute(
+        select(Bet.id).where(
+            Bet.bettor_id == current_user.id,
+            Bet.target_id == target.id,
+            Bet.status == "open",
+        ).limit(1)
+    )
+    if existing.first() is not None:
+        raise HTTPException(400, "У тебя уже есть открытая ставка на этого игрока — дождись развязки")
+
+    season = current_season()
+    ok = await bets_mod.try_debit(db, current_user.id, season, data.stake)
+    if not ok:
+        raise HTTPException(400, "Не хватает газа в этом сезоне — катай и закрывай задания")
+    # Проигранный (поставленный) газ опускает и «вечный» максимум — решение
+    # хозяина; несоответствующая косметика слетает внутри recalc.
+    await bets_mod.recalc_max_level(db, current_user.id)
+
+    bet = Bet(
+        bettor_id=current_user.id, target_id=target.id, season=season,
+        market=data.market, side=data.side, line=line, stake=data.stake,
+    )
+    db.add(bet)
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Гонка двух параллельных ставок на одну пару: проигравший уникальный
+        # индекс uq_bets_open_pair откатывается ВМЕСТЕ с эскроу — газ цел
+        await db.rollback()
+        raise HTTPException(400, "У тебя уже есть открытая ставка на этого игрока — дождись развязки")
+    await db.refresh(bet)
+
+    # Уровень/косметика могли измениться — чат должен увидеть живьём
+    from app.api.users import _broadcast_profile
+    await db.refresh(current_user)
+    await _broadcast_profile(db, current_user)
+
+    prof_res = await db.execute(
+        select(CompendiumProfile.gas).where(
+            CompendiumProfile.user_id == current_user.id,
+            CompendiumProfile.season == season,
+        )
+    )
+    names = {current_user.id: current_user.username, target.id: target.username}
+    return {"bet": _bet_dict(bet, names), "my_gas": prof_res.scalar_one_or_none() or 0}
 
 
 @router.get("/season")

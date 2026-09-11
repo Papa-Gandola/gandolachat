@@ -58,6 +58,16 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                 "user_id": user_id,
             }, exclude_user=user_id)
 
+    # Снимок «кто сейчас в Доте» — presence летит только при смене состава.
+    from app import steam_presence
+    try:
+        await websocket.send_json({
+            "type": "dota_presence",
+            "playing": steam_presence.playing_ids(),
+        })
+    except Exception:
+        pass
+
     # Снимок идущих звонков по чатам юзера. Без него открывший приложение
     # ПОСРЕДИ разговора не узнал бы о нём: call_active летит только на
     # сигналах, а в устоявшемся звонке сигналов нет (медиа ходит P2P).
@@ -381,7 +391,8 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                                         "from_user_id": user_id,
                                         "is_group": chat_full.is_group,
                                         "peer_user_id": peer_user_id,
-                                        "chat_name": chat_full.name,
+                                        # У ЛС имени нет — деп-линк открывал чат «Чат»
+                                        "chat_name": chat_full.name or caller_name,
                                         "notification_tag": f"call-{chat_id}",
                                     },
                                     channel_id="calls",
@@ -741,7 +752,9 @@ async def handle_message(data: dict, sender_id: int, db: AsyncSession):
                         "message_id": msg.id,
                         "is_group": chat_full.is_group,
                         "peer_user_id": peer_user_id,
-                        "chat_name": chat_full.name,
+                        # У ЛС имени нет (chat.name=NULL) — тап по пушу открывал
+                        # чат с заголовком «Чат»; для ЛС имя = отправитель
+                        "chat_name": chat_full.name or sender.username,
                         # Stable identifier so the mobile side can collapse
                         # all notifications from the same chat into one.
                         "notification_tag": f"chat-{chat_id}",

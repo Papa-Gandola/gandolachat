@@ -17,6 +17,13 @@ function fmt(ms: number): string {
 // Only one voice message should play at a time. When a player starts, it
 // pauses whichever was playing before (Telegram-style).
 let activePause: (() => void) | null = null;
+// Все живые плееры (не только играющий): перед записью голосового их надо
+// выгрузить целиком — см. комментарий у unloadSelf ниже.
+const liveUnloads = new Set<() => void>();
+
+export function unloadAllVoicePlayers() {
+  liveUnloads.forEach((fn) => fn());
+}
 
 // Voice-message player: play/pause + a progress bar + elapsed/total time.
 export function VoiceMessage({ uri, mine }: Props) {
@@ -33,12 +40,25 @@ export function VoiceMessage({ uri, mine }: Props) {
     setPlaying(false);
   }).current;
 
+  // Регистрируем и «полный сброс»: перед ЗАПИСЬЮ голосового загруженный
+  // плеер надо не просто поставить на паузу, а выгрузить — на части
+  // андроидов живой Sound держит аудио-сессию и prepareToRecordAsync
+  // отдаёт «Only one Recording…» (после чего запись клинит навсегда).
+  const unloadSelf = useRef(() => {
+    const snd = soundRef.current;
+    soundRef.current = null;
+    setPlaying(false);
+    snd?.unloadAsync().catch(() => {});
+  }).current;
+
   useEffect(() => {
+    liveUnloads.add(unloadSelf);
     return () => {
+      liveUnloads.delete(unloadSelf);
       if (activePause === pauseSelf) activePause = null;
       soundRef.current?.unloadAsync().catch(() => {});
     };
-  }, [pauseSelf]);
+  }, [pauseSelf, unloadSelf]);
 
   const onStatus = (st: AVPlaybackStatus) => {
     if (!st.isLoaded) return;

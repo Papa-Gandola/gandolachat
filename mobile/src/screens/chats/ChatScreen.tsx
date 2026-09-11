@@ -24,7 +24,7 @@ import { ChevronLeftIcon, PhoneIcon, SearchIcon, SendIcon } from "../../componen
 import { IconBtn } from "../../components/IconBtn";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import { SwipeableMessage } from "../../components/SwipeableMessage";
-import { VoiceMessage } from "../../components/VoiceMessage";
+import { VoiceMessage, unloadAllVoicePlayers } from "../../components/VoiceMessage";
 import { ChatsStackParamList } from "../../navigation/types";
 import { apiErrorMessage, chatApi, ChatOut, MessageOut, notesApi, userApi } from "../../services/api";
 import { cancelLocalReminder, scheduleLocalReminder } from "../../services/reminders";
@@ -124,6 +124,7 @@ export function ChatScreen({ navigation, route }: Props) {
   // True while a recording is being created or torn down — expo-av allows only
   // one prepared recording at a time, so block a new start until teardown ends.
   const recBusyRef = useRef(false);
+  const recBusySinceRef = useRef(0);
   const [recording, setRecording] = useState(false);
   const [recError, setRecError] = useState<string | null>(null);
   const recStartRef = useRef(0);
@@ -475,8 +476,14 @@ export function ChatScreen({ navigation, route }: Props) {
   };
 
   const startRecording = async () => {
+    // Сторожок: если busy-флаг завис (непредвиденный путь) — через 6с
+    // отпускаем, иначе «жму и ничего не происходит» до перезапуска
+    if (recBusyRef.current && Date.now() - recBusySinceRef.current > 6000) {
+      recBusyRef.current = false;
+    }
     if (recBusyRef.current || recordingRef.current) return;
     recBusyRef.current = true;
+    recBusySinceRef.current = Date.now();
     setRecError(null);
     try {
       const perm = await Audio.requestPermissionsAsync();
@@ -495,18 +502,25 @@ export function ChatScreen({ navigation, route }: Props) {
         }
         lastRecording = null;
       }
+      // Живой плеер голосовых держит аудио-сессию на части андроидов —
+      // выгружаем ВСЕ перед записью, иначе prepare отдаёт «Only one
+      // Recording…» и микрофон клинит до перезапуска приложения.
+      unloadAllVoicePlayers();
       await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
       // Manual prepare → start (createAsync misbehaved on some devices). Hold
       // the ref BEFORE start so the object can't be garbage-collected.
-      const rec = new Audio.Recording();
+      let rec = new Audio.Recording();
       try {
         await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
       } catch {
         // Previous recorder still held by the OS — force-release the whole audio
         // subsystem (toggling the iOS audio-mode flag alone does nothing on
-        // Android) and retry once.
+        // Android) and retry once. ВАЖНО: со СВЕЖИМ объектом Recording —
+        // упавший prepare оставляет старый объект в состоянии, где повторный
+        // prepare на нём падает всегда (ловили «одно голосовое за запуск»).
         await resetAudioSubsystem();
         await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+        rec = new Audio.Recording();
         await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
       }
       lastRecording = rec;
@@ -1492,6 +1506,88 @@ function QuestCardMobile({ theme, mine, payload }: {
     ? (payload.who || payload.names || []).join(" + ")
     : (payload.username || "");
   const items: Array<{ name: string; gas: number }> = payload.items || [];
+
+  // Итоги недели (воскресная карточка)
+  if (kind === "week_recap") {
+    const topGas: Array<{ username: string; gas: number }> = payload.top_gas || [];
+    const winrate: Array<{ username: string; wins: number; games: number; pct: number }> = payload.winrate || [];
+    const grammar: { username: string; errors: number } | null = payload.grammar || null;
+    const medals = ["🥇", "🥈", "🥉"];
+    return (
+      <View style={{ flexDirection: "row", justifyContent: mine ? "flex-end" : "flex-start", paddingHorizontal: 14, paddingVertical: 4 }}>
+        <View style={{ maxWidth: "85%", padding: 10, borderRadius: theme.radius.bubble, borderWidth: 1, borderLeftWidth: 3, borderColor: theme.colors.accent, backgroundColor: theme.colors.bgElev }}>
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "800", color: theme.colors.accent, letterSpacing: 0.5 }}>
+            📅 ИТОГИ НЕДЕЛИ
+          </Text>
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkDim, marginTop: 1 }}>
+            {payload.week_label}
+          </Text>
+          {topGas.map((r, i) => (
+            <View key={i} style={{ flexDirection: "row", justifyContent: "space-between", gap: 12, marginTop: i === 0 ? 6 : 3 }}>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12.5, fontWeight: "700", color: theme.colors.ink }}>
+                {medals[i] || `${i + 1}.`} {r.username}
+              </Text>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "800", color: theme.colors.accent }}>
+                +{r.gas} ⛽
+              </Text>
+            </View>
+          ))}
+          {winrate.length ? (
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted, marginTop: 6 }}>
+              🎯 {winrate.map((w) => `${w.username} ${w.pct}% (${w.wins}/${w.games})`).join(" · ")}
+            </Text>
+          ) : null}
+          {grammar ? (
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted, marginTop: 4 }}>
+              📖 Граммар-наци недели отмечает: {grammar.username} — {grammar.errors} очепяток
+            </Text>
+          ) : null}
+        </View>
+      </View>
+    );
+  }
+
+  // Ставки рассудились: итоги по одной катке (зеркало десктопной)
+  if (kind === "bet_result") {
+    const m = payload.match || {};
+    const bitems: Array<{ bettor: string; label: string; outcome: string; delta: number; stake: number }> =
+      payload.items || [];
+    const oColor = (o: string) => (o === "won" ? "#57f287" : o === "lost" ? BLOOD : theme.colors.inkMuted);
+    const oText = (it: any) =>
+      it.outcome === "won" ? `✅ +${it.delta}⛽` : it.outcome === "lost" ? `❌ -${it.stake}⛽` : "↩ возврат";
+    return (
+      <View style={{ flexDirection: "row", justifyContent: mine ? "flex-end" : "flex-start", paddingHorizontal: 14, paddingVertical: 4 }}>
+        <View
+          style={{
+            maxWidth: "85%",
+            padding: 10,
+            borderRadius: theme.radius.bubble,
+            borderWidth: 1,
+            borderLeftWidth: 3,
+            borderColor: theme.colors.accent,
+            backgroundColor: theme.colors.bgElev,
+          }}
+        >
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "800", color: theme.colors.accent, letterSpacing: 0.5 }}>
+            🎲 СТАВКИ РАССУЖЕНЫ
+          </Text>
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkDim, marginTop: 1 }}>
+            катка {payload.target}: {m.is_win ? "победа" : "поражение"} · {m.kills}/{m.deaths}/{m.assists}
+          </Text>
+          {bitems.map((it, i) => (
+            <View key={i} style={{ flexDirection: "row", justifyContent: "space-between", gap: 12, marginTop: i === 0 ? 6 : 3 }}>
+              <Text numberOfLines={1} style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "700", color: theme.colors.ink, flexShrink: 1 }}>
+                {it.bettor}: {it.label}
+              </Text>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11.5, fontWeight: "800", color: oColor(it.outcome) }}>
+                {oText(it)}
+              </Text>
+            </View>
+          ))}
+        </View>
+      </View>
+    );
+  }
 
   // Финал сезона: карточка-подиум 🥇🥈🥉 (зеркало десктопной)
   if (kind === "season_final") {
