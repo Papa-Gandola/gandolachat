@@ -50,6 +50,13 @@ async def lifespan(app: FastAPI):
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(cleanup_expired_messages, "interval", hours=1)
+    # Ночной бэкап базы: 04:00 МСК (01:00 UTC), храним последние 14 дампов.
+    # misfire_grace: если сервер спал в 4 утра — догоняем в течение дня.
+    from app import backups as backups_mod
+    scheduler.add_job(
+        backups_mod.run_backup, "cron", hour=1, minute=0,
+        misfire_grace_time=12 * 3600, coalesce=True, max_instances=1,
+    )
     # Напоминания из «Заметок»: раз в 30с постим созревшие + Web Push.
     from app import notes as notes_mod
     scheduler.add_job(
