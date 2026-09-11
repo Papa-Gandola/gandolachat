@@ -66,7 +66,25 @@ export interface ChatOut {
   description?: string | null;
   admin_ids?: number[];
   compendium_enabled?: boolean;
+  is_notes?: boolean;
 }
+
+export interface ReminderOut {
+  id: number;
+  text: string;
+  remind_at: string;
+}
+
+export const notesApi = {
+  open: () => api.get<ChatOut>("/api/chats/notes"),
+  createReminder: (text: string, remindAtIso: string) =>
+    api.post<ReminderOut & { message_id: number; chat_id: number }>("/api/notes/reminders", {
+      text,
+      remind_at: remindAtIso,
+    }),
+  listReminders: () => api.get<ReminderOut[]>("/api/notes/reminders"),
+  cancelReminder: (id: number) => api.delete(`/api/notes/reminders/${id}`),
+};
 
 export interface ChatStats {
   media_count: number;
@@ -129,6 +147,7 @@ export interface CompendiumTrophy {
   quest_id: string;
   name: string;
   cat: string;
+  desc?: string;
   gas: number;
   completed_at: string;
   title?: string;

@@ -41,6 +41,7 @@ function markerPreview(content: string): string | null {
     }
   }
   if (content === "/dota_call") return "⚔️ Газуем в дотан";
+  if (content.startsWith("/reminder ")) return "⏰ Напоминание";
   if (/^\/poker_table \d+$/.test(content)) return "🃏 Покерный стол";
   if (/^\/call_record (completed|missed|declined|cancelled)\|/.test(content)) return "📞 Звонок";
   return null;
@@ -206,7 +207,13 @@ export function useChats(): ChatsState {
       // For a DM the row should display the OTHER participant — not "Pavel ↔
       // Marina", just "Marina". For groups, show the group name.
       const counterpart = isGroup ? null : c.members.find((m) => m.id !== user.id) ?? c.members[0];
-      const displayName = isGroup ? c.name ?? "Группа" : counterpart?.username ?? "Без имени";
+      // «Заметки» — ЛС без собеседника: без этой ветки чат назывался бы
+      // именем самого юзера.
+      const displayName = c.is_notes
+        ? c.name ?? "Заметки"
+        : isGroup
+          ? c.name ?? "Группа"
+          : counterpart?.username ?? "Без имени";
       const isOnline = !isGroup && counterpart ? online.has(counterpart.id) : false;
       const avatarUrl = isGroup ? c.avatar_url ?? null : counterpart?.avatar_url ?? null;
       const last = c.last_message;
@@ -233,6 +240,7 @@ export function useChats(): ChatsState {
         avatarUrl,
         createdBy: c.created_by,
         allowAllWrite: c.allow_all_write,
+        isNotes: !!c.is_notes,
         typing: typingChats.has(c.id),
       };
     });

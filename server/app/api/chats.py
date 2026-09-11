@@ -89,6 +89,7 @@ async def get_chats(
             members=[UserOut.model_validate(m) for m in chat.members],
             last_message=last,
             allow_all_write=chat.allow_all_write, compendium_enabled=chat.compendium_enabled,
+            is_notes=chat.is_notes,
             avatar_url=chat.avatar_url,
             description=chat.description,
             admin_ids=_parse_admin_ids(chat),

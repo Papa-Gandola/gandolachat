@@ -29,7 +29,8 @@ export function CompendiumScreen() {
   const [seasonErr, setSeasonErr] = useState(false);
   const [tab, setTab] = useState<TabKey>("quests");
   const [refreshing, setRefreshing] = useState(false);
-  const [expandedUser, setExpandedUser] = useState<number | null>(null);
+  // Раскрытых полок может быть несколько — удобно сравнивать людей.
+  const [expandedUsers, setExpandedUsers] = useState<Set<number>>(new Set());
   const [userTrophies, setUserTrophies] = useState<Record<number, CompendiumTrophy[]>>({});
 
   const load = useCallback(async () => {
@@ -74,11 +75,15 @@ export function CompendiumScreen() {
   }, [data?.season]);
 
   const toggleUser = async (uid: number) => {
-    if (expandedUser === uid) {
-      setExpandedUser(null);
+    if (expandedUsers.has(uid)) {
+      setExpandedUsers((prev) => {
+        const n = new Set(prev);
+        n.delete(uid);
+        return n;
+      });
       return;
     }
-    setExpandedUser(uid);
+    setExpandedUsers((prev) => new Set(prev).add(uid));
     if (!userTrophies[uid]) {
       try {
         const res = await compendiumApi.user(uid);
@@ -245,7 +250,7 @@ export function CompendiumScreen() {
                             {r.gas} ⛽
                           </Text>
                         </Pressable>
-                        {expandedUser === r.user_id ? (
+                        {expandedUsers.has(r.user_id) ? (
                           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 5, paddingVertical: 8, paddingLeft: 34 }}>
                             {!userTrophies[r.user_id]?.length ? (
                               <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted }}>Полка пока пустая</Text>
@@ -387,11 +392,15 @@ function TrophyChip({ theme, t }: { theme: ThemeT; t: CompendiumTrophy }) {
   const bad = t.cat === "anti";
   const c = bad ? BLOOD : theme.colors.accent;
   return (
-    <View style={{ paddingHorizontal: 7, paddingVertical: 3, borderWidth: 1, borderColor: c, borderRadius: theme.radius.sm, backgroundColor: `${c}14` }}>
+    <Pressable
+      // Тап по ачивке — короткое описание (у тайных сервер шлёт «???»).
+      onPress={() => Alert.alert(`${bad ? "💀 " : ""}${t.name}`, t.desc || "")}
+      style={{ paddingHorizontal: 7, paddingVertical: 3, borderWidth: 1, borderColor: c, borderRadius: theme.radius.sm, backgroundColor: `${c}14` }}
+    >
       <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, fontWeight: "700", color: c }}>
         {bad ? "💀 " : ""}{t.name}
       </Text>
-    </View>
+    </Pressable>
   );
 }
 

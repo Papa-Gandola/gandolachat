@@ -48,7 +48,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
   const [tab, setTab] = useState<"quests" | "season" | "trophies" | "cosmetics">("quests");
   const [seasonRows, setSeasonRows] = useState<CompendiumSeasonRow[] | null>(null);
   const [seasonError, setSeasonError] = useState(false);
-  const [expandedUser, setExpandedUser] = useState<number | null>(null);
+  const [expandedUsers, setExpandedUsers] = useState<Set<number>>(new Set());
   const [userTrophies, setUserTrophies] = useState<Record<number, CompendiumTrophy[]>>({});
   const [resetLeft, setResetLeft] = useState(msToDailyReset());
   const [error, setError] = useState("");
@@ -136,8 +136,12 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
   }, []);
 
   async function toggleUser(uid: number) {
-    if (expandedUser === uid) { setExpandedUser(null); return; }
-    setExpandedUser(uid);
+    // Раскрытых полок может быть НЕСКОЛЬКО — удобно сравнивать людей.
+    if (expandedUsers.has(uid)) {
+      setExpandedUsers((prev) => { const n = new Set(prev); n.delete(uid); return n; });
+      return;
+    }
+    setExpandedUsers((prev) => new Set(prev).add(uid));
     if (!userTrophies[uid]) {
       try {
         const res = await compendiumApi.user(uid);
@@ -348,7 +352,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                         {r.gas} ⛽
                       </span>
                     </div>
-                    {expandedUser === r.user_id && (
+                    {expandedUsers.has(r.user_id) && (
                       <div style={{ padding: "8px 12px 14px 52px", borderBottom: "1px solid var(--border)" }}>
                         {!userTrophies[r.user_id]?.length ? (
                           <span style={{ ...mono, fontSize: 12, color: "var(--text-muted)" }}>Полка пока пустая</span>
@@ -559,7 +563,7 @@ function Stat({ mono, label, value }: { mono: React.CSSProperties; label: string
 function TrophyChip({ t, isNeo }: { t: CompendiumTrophy; isNeo: boolean }) {
   const bad = t.cat === "anti";
   return (
-    <span style={{
+    <span title={t.desc || undefined} style={{
       fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 700, padding: "3px 8px",
       color: bad ? BLOOD : "var(--accent)",
       border: `1px solid ${bad ? BLOOD : "var(--accent)"}`,

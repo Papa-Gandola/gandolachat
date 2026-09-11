@@ -22,6 +22,7 @@ export interface ChatRowData {
   // into their profile. Undefined for groups.
   peerId?: number;
   avatarUrl?: string | null;
+  isNotes?: boolean;
   createdBy?: number;
   allowAllWrite?: boolean;
 }

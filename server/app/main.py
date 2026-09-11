@@ -50,6 +50,12 @@ async def lifespan(app: FastAPI):
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(cleanup_expired_messages, "interval", hours=1)
+    # Напоминания из «Заметок»: раз в 30с постим созревшие + Web Push.
+    from app import notes as notes_mod
+    scheduler.add_job(
+        notes_mod.fire_due_reminders, "interval",
+        seconds=30, max_instances=1, coalesce=True,
+    )
     # Зеркало APK: первый прогон сразу при старте (next_run_time=now),
     # дальше проверка раз в 30 минут — новый релиз mobile-latest подтянется
     # сам без передеплоя.
@@ -117,6 +123,8 @@ app.include_router(poker.router)
 app.include_router(dota.router)
 app.include_router(compendium.router)
 app.include_router(apk_mirror.router)
+from app import notes as _notes
+app.include_router(_notes.router)
 
 
 @app.websocket("/ws")

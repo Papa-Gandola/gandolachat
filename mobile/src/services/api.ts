@@ -45,6 +45,7 @@ export interface CompendiumTrophy {
   quest_id: string;
   name: string;
   cat: string;
+  desc?: string;
   gas: number;
   completed_at: string;
   title?: string;
@@ -128,6 +129,14 @@ export interface ChatOut {
   avatar_url?: string | null;
   description?: string | null;
   admin_ids?: number[];
+  compendium_enabled?: boolean;
+  is_notes?: boolean;
+}
+
+export interface ReminderOut {
+  id: number;
+  text: string;
+  remind_at: string;
 }
 
 export interface TokenResponse {
@@ -429,6 +438,17 @@ export const pokerApi = {
   leave: (tableId: number) => getInstance().post<PokerTableOut | null>(`/api/poker/${tableId}/leave`),
   start: (tableId: number) => getInstance().post<PokerTableOut>(`/api/poker/${tableId}/start`),
   close: (tableId: number) => getInstance().post<{ ok: boolean }>(`/api/poker/${tableId}/close`),
+};
+
+export const notesApi = {
+  open: () => getInstance().get<ChatOut>("/api/chats/notes"),
+  createReminder: (text: string, remindAtIso: string) =>
+    getInstance().post<ReminderOut & { message_id: number; chat_id: number }>("/api/notes/reminders", {
+      text,
+      remind_at: remindAtIso,
+    }),
+  listReminders: () => getInstance().get<ReminderOut[]>("/api/notes/reminders"),
+  cancelReminder: (id: number) => getInstance().delete(`/api/notes/reminders/${id}`),
 };
 
 export const compendiumApi = {

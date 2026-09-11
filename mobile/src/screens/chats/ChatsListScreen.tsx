@@ -9,6 +9,7 @@ import { IconBtn } from "../../components/IconBtn";
 import { PlusIcon, SearchIcon, SettingsIcon } from "../../components/icons";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import { ChatsStackParamList } from "../../navigation/types";
+import { notesApi } from "../../services/api";
 import { useChats } from "../../services/useChats";
 import { useTheme, useThemeControls } from "../../theme";
 
@@ -46,6 +47,23 @@ export function ChatsListScreen({ navigation }: Props) {
         }
         right={
           <View style={{ flexDirection: "row" }}>
+            <IconBtn
+              onPress={() => {
+                // «Заметки»: get-or-create личного чата и сразу в него.
+                notesApi
+                  .open()
+                  .then((res: { data: { id: number } }) =>
+                    navigation.navigate("Chat", {
+                      chatId: String(res.data.id),
+                      name: "Заметки",
+                      isNotes: true,
+                    }),
+                  )
+                  .catch(() => {});
+              }}
+            >
+              <Text style={{ fontSize: 17 }}>📝</Text>
+            </IconBtn>
             <IconBtn onPress={() => navigation.navigate("Search")}>
               <SearchIcon color={theme.colors.ink} />
             </IconBtn>
@@ -143,6 +161,7 @@ export function ChatsListScreen({ navigation }: Props) {
                 isGroup: c.group,
                 allowAllWrite: c.allowAllWrite,
                 createdBy: c.createdBy,
+                isNotes: c.isNotes,
               })
             }
           />

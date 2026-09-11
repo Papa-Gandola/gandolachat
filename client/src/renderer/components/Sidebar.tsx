@@ -14,11 +14,12 @@ interface Props {
   onLogout: () => void;
   onAvatarUpdate: (user: UserOut) => void;
   onOpenProfile: () => void;
+  onOpenNotes?: () => void;
   width?: number;
 }
 
 export default function Sidebar({
-  chats, currentUser, activeChatId, onSelectChat, onChatsUpdate, onLogout, onAvatarUpdate, onOpenProfile, width = 240
+  chats, currentUser, activeChatId, onSelectChat, onChatsUpdate, onLogout, onAvatarUpdate, onOpenProfile, onOpenNotes, width = 240
 }: Props) {
   const [search, setSearch] = useState("");
   const [searchResults, setSearchResults] = useState<UserOut[]>([]);
@@ -270,6 +271,7 @@ export default function Sidebar({
   }
 
   function getChatName(chat: ChatOut): string {
+    if (chat.is_notes) return chat.name || "Заметки";
     if (chat.is_group) return chat.name || "Группа";
     const other = chat.members.find((m) => m.id !== currentUser.id);
     return other?.username || "Неизвестный";
@@ -354,6 +356,15 @@ export default function Sidebar({
           </span>
         ) : (
           <span style={s.headerTitle}>GandolaChat</span>
+        )}
+        {onOpenNotes && (
+          <button
+            title="Заметки"
+            onClick={onOpenNotes}
+            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, padding: 2, opacity: 0.85 }}
+          >
+            📝
+          </button>
         )}
       </div>
 

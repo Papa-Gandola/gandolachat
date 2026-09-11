@@ -162,6 +162,8 @@ async def my_compendium(
             continue
         trophies.append({
             "quest_id": c.quest_id, "name": q.name, "cat": q.category,
+            # Своя полка: полное описание, включая тайные (сам же выполнил).
+            "desc": q.desc,
             "gas": c.gas, "completed_at": c.completed_at.isoformat(),
             **({"title": q.title} if q.title else {}),
         })
@@ -350,6 +352,8 @@ async def user_trophies(
             continue
         trophies.append({
             "quest_id": c.quest_id, "name": q.name, "cat": q.category,
+            # Чужая полка: описание для тултипа, у тайных — интрига «???».
+            "desc": "???" if q.category == "secret" else q.desc,
             "gas": c.gas, "completed_at": c.completed_at.isoformat(),
             **({"title": q.title} if q.title else {}),
         })

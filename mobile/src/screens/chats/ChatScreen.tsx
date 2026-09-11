@@ -26,7 +26,8 @@ import { ScreenContainer } from "../../components/ScreenContainer";
 import { SwipeableMessage } from "../../components/SwipeableMessage";
 import { VoiceMessage } from "../../components/VoiceMessage";
 import { ChatsStackParamList } from "../../navigation/types";
-import { apiErrorMessage, chatApi, ChatOut, MessageOut, userApi } from "../../services/api";
+import { apiErrorMessage, chatApi, ChatOut, MessageOut, notesApi, userApi } from "../../services/api";
+import { cancelLocalReminder, scheduleLocalReminder } from "../../services/reminders";
 import { API_URL } from "../../services/config";
 import { useAuth } from "../../services/AuthContext";
 import { useCall } from "../../services/CallContext";
@@ -81,7 +82,8 @@ export function ChatScreen({ navigation, route }: Props) {
   const theme = useTheme();
   const { user } = useAuth();
   const call = useCall();
-  const { chatId, name, userId, avatarUrl, allowAllWrite, createdBy } = route.params;
+  const { chatId, name, userId, avatarUrl, allowAllWrite, createdBy, isNotes } = route.params;
+  const [showReminderSheet, setShowReminderSheet] = useState(false);
   // Плашка «в созвоне»: кто сейчас в звонке этого чата (по call_active).
   const callParticipants = call.activeCalls.get(Number(chatId)) ?? [];
   const inThisCall = call.inCall && call.callChatId === Number(chatId);
@@ -658,11 +660,13 @@ export function ChatScreen({ navigation, route }: Props) {
         <IconBtn onPress={toggleMute}>
           <Text style={{ fontSize: 18, opacity: muted ? 0.55 : 1 }}>{muted ? "🔕" : "🔔"}</Text>
         </IconBtn>
-        <IconBtn onPress={() => navigation.navigate("Poker", { chatId, chatName: name })}>
-          <Text style={{ fontSize: 18 }}>🎴</Text>
-        </IconBtn>
+        {!isNotes && (
+          <IconBtn onPress={() => navigation.navigate("Poker", { chatId, chatName: name })}>
+            <Text style={{ fontSize: 18 }}>🎴</Text>
+          </IconBtn>
+        )}
         <IconBtn
-          disabled={userId == null && callParticipants.length === 0 && !inThisCall}
+          disabled={isNotes || (userId == null && callParticipants.length === 0 && !inThisCall)}
           onPress={() => {
             // Живой созвон → мгновенно подключаемся (или разворачиваем свой);
             // созвона нет → обычный дозвон (только ЛС).
@@ -776,6 +780,19 @@ export function ChatScreen({ navigation, route }: Props) {
                 onOpen={() => navigation.navigate("Poker", { chatId, chatName: name })}
               />
             );
+          }
+          // Карточка напоминания — только в «Заметках» (анти-спуф: в чужих
+          // чатах маркер остаётся обычным текстом).
+          if (isNotes && m.content?.startsWith("/reminder ")) {
+            let rp: { id: number; text: string; remind_at: string; fired?: boolean } | null = null;
+            try {
+              rp = JSON.parse(m.content.slice(10));
+            } catch {
+              /* покажем как текст */
+            }
+            if (rp) {
+              return <ReminderCardMobile key={m.id} theme={theme} mine={mine} payload={rp} />;
+            }
           }
           const callMatch = m.content?.match(/^\/call_record (completed|missed|declined|cancelled)\|(\d+)\|(\d+)\|(\d+)$/);
           if (callMatch) {
@@ -1030,6 +1047,21 @@ export function ChatScreen({ navigation, route }: Props) {
               }}
             />
           </View>
+          {isNotes && (
+            <Pressable
+              onPress={() => setShowReminderSheet(true)}
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: theme.radius.md,
+                backgroundColor: theme.colors.bgElev,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Text style={{ fontSize: 18 }}>⏰</Text>
+            </Pressable>
+          )}
           {recording ? (
             <>
               <Pressable
@@ -1180,6 +1212,14 @@ export function ChatScreen({ navigation, route }: Props) {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {isNotes && (
+        <ReminderSheet
+          visible={showReminderSheet}
+          onClose={() => setShowReminderSheet(false)}
+          theme={theme}
+        />
+      )}
     </ScreenContainer>
   );
 }
@@ -1552,5 +1592,225 @@ function CallRecordCard({
         <Text style={{ fontFamily: theme.fonts.mono, fontSize: 13, color, fontWeight: "600" }}>{title}</Text>
       </View>
     </View>
+  );
+}
+
+// «Заметки»: карточка напоминания — срок, текст, отмена до срабатывания.
+function ReminderCardMobile({ theme, mine, payload }: {
+  theme: ThemeT;
+  mine: boolean;
+  payload: { id: number; text: string; remind_at: string; fired?: boolean };
+}) {
+  const at = new Date(payload.remind_at);
+  const when = at.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const fired = !!payload.fired;
+  const edge = fired ? theme.colors.inkMuted : theme.colors.accent;
+  return (
+    <View
+      style={{
+        alignSelf: mine ? "flex-end" : "flex-start",
+        maxWidth: "82%",
+        borderWidth: 1,
+        borderColor: edge,
+        borderRadius: theme.radius.md,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        marginVertical: 3,
+        gap: 3,
+      }}
+    >
+      <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, fontWeight: "700", color: edge }}>
+        {fired ? "✓ сработало" : `⏰ на ${when}`}
+      </Text>
+      <Text style={{ fontFamily: theme.fonts.body, fontSize: 14, color: theme.colors.ink }}>{payload.text}</Text>
+      {!fired && (
+        <Pressable
+          onPress={() => {
+            notesApi
+              .cancelReminder(payload.id)
+              .then(() => cancelLocalReminder(payload.id))
+              .catch(() => {});
+          }}
+          hitSlop={6}
+        >
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: edge, textDecorationLine: "underline" }}>
+            отменить
+          </Text>
+        </Pressable>
+      )}
+    </View>
+  );
+}
+
+// «Заметки»: шторка создания напоминания — текст + пресеты + своё время
+// (без нативных пикеров: чипы «сегодня/завтра» + поле ЧЧ:ММ, JS-only → OTA).
+function ReminderSheet({ visible, onClose, theme }: {
+  visible: boolean;
+  onClose: () => void;
+  theme: ThemeT;
+}) {
+  const [text, setText] = useState("");
+  const [day, setDay] = useState<"today" | "tomorrow">("today");
+  const [hhmm, setHhmm] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const create = async (at: Date) => {
+    if (!text.trim()) {
+      setErr("Напиши текст напоминания");
+      return;
+    }
+    if (at.getTime() <= Date.now()) {
+      setErr("Время уже прошло");
+      return;
+    }
+    setBusy(true);
+    setErr("");
+    try {
+      const res = await notesApi.createReminder(text.trim(), at.toISOString());
+      // Офлайн-гарантия на нативе: планируем локальное уведомление сразу.
+      scheduleLocalReminder(res.data.id, res.data.text, res.data.remind_at).catch(() => {});
+      setText("");
+      setHhmm("");
+      setBusy(false);
+      onClose(); // карточка прилетит по WS
+    } catch (e) {
+      setErr(apiErrorMessage(e));
+      setBusy(false);
+    }
+  };
+
+  const customDate = (): Date | null => {
+    const m = hhmm.trim().match(/^(\d{1,2})[:.](\d{2})$/);
+    if (!m) return null;
+    const h = Number(m[1]);
+    const min = Number(m[2]);
+    if (h > 23 || min > 59) return null;
+    const d = new Date();
+    if (day === "tomorrow") d.setDate(d.getDate() + 1);
+    d.setHours(h, min, 0, 0);
+    return d;
+  };
+
+  const presets: Array<[string, () => Date]> = [
+    ["Через 30 мин", () => new Date(Date.now() + 30 * 60000)],
+    ["Через час", () => new Date(Date.now() + 60 * 60000)],
+    ["Через 3 часа", () => new Date(Date.now() + 180 * 60000)],
+    ["Завтра в 10:00", () => {
+      const d = new Date();
+      d.setDate(d.getDate() + 1);
+      d.setHours(10, 0, 0, 0);
+      return d;
+    }],
+  ];
+
+  const chip = (label: string, active: boolean, onPress: () => void) => (
+    <Pressable
+      key={label}
+      onPress={onPress}
+      style={{
+        paddingHorizontal: 12,
+        paddingVertical: 7,
+        borderRadius: theme.radius.md,
+        borderWidth: 1,
+        borderColor: active ? theme.colors.accent : theme.colors.border,
+        backgroundColor: active ? `${theme.colors.accent}22` : theme.colors.bgElev,
+      }}
+    >
+      <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: active ? theme.colors.accent : theme.colors.ink }}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.65)", justifyContent: "center", padding: 22 }} onPress={onClose}>
+        <Pressable
+          onPress={() => {}}
+          style={{
+            backgroundColor: theme.colors.bg,
+            borderRadius: theme.decorate ? 0 : 14,
+            borderWidth: 1,
+            borderColor: theme.decorate ? theme.colors.accent : theme.colors.border,
+            padding: 18,
+            gap: 12,
+          }}
+        >
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 15, fontWeight: "700", color: theme.colors.accent }}>
+            {theme.decorate ? "// НАПОМИНАНИЕ" : "⏰ Напоминание"}
+          </Text>
+          <TextInput
+            value={text}
+            onChangeText={setText}
+            placeholder="О чём напомнить?"
+            placeholderTextColor={theme.colors.inkMuted}
+            maxLength={500}
+            style={{
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              borderRadius: theme.radius.md,
+              backgroundColor: theme.colors.bgInput,
+              color: theme.colors.ink,
+              fontFamily: theme.fonts.body,
+              paddingHorizontal: 12,
+              paddingVertical: 9,
+              fontSize: 14,
+            }}
+          />
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+            {presets.map(([label, fn]) => chip(label, false, () => !busy && create(fn())))}
+          </View>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            {chip("сегодня", day === "today", () => setDay("today"))}
+            {chip("завтра", day === "tomorrow", () => setDay("tomorrow"))}
+            <TextInput
+              value={hhmm}
+              onChangeText={setHhmm}
+              placeholder="18:45"
+              placeholderTextColor={theme.colors.inkMuted}
+              keyboardType="numbers-and-punctuation"
+              style={{
+                width: 74,
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                borderRadius: theme.radius.md,
+                backgroundColor: theme.colors.bgInput,
+                color: theme.colors.ink,
+                fontFamily: theme.fonts.mono,
+                textAlign: "center",
+                paddingVertical: 8,
+                fontSize: 13,
+              }}
+            />
+            <Pressable
+              disabled={busy}
+              onPress={() => {
+                const d = customDate();
+                if (!d) {
+                  setErr("Время в формате ЧЧ:ММ");
+                  return;
+                }
+                create(d);
+              }}
+              style={{
+                flex: 1,
+                paddingVertical: 10,
+                borderRadius: theme.decorate ? 0 : theme.radius.md,
+                backgroundColor: theme.colors.accent,
+                alignItems: "center",
+              }}
+            >
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 13, fontWeight: "700", color: theme.colors.accentText }}>
+                Создать
+              </Text>
+            </Pressable>
+          </View>
+          {err ? (
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.danger }}>{err}</Text>
+          ) : null}
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }

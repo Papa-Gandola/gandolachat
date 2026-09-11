@@ -62,9 +62,16 @@ class WebRTCService {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private videoSenders = new Map<number, any>();
 
+  // Какая камера сейчас: фронталка (user) или задняя (environment).
+  private facing: "user" | "environment" = "user";
+
   onStream: StreamCb | null = null;
   onPeerLeft: LeftCb | null = null;
   onCallEnded: EndedCb | null = null;
+
+  getFacing() {
+    return this.facing;
+  }
 
   init(myId: number) {
     this.myId = myId;
@@ -411,7 +418,10 @@ class WebRTCService {
     }
     try {
       await ensurePermissions(true);
-      const cam = await mediaDevices.getUserMedia({ audio: false, video: true });
+      const cam = await mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: this.facing } as unknown as boolean,
+      });
       const track = cam.getVideoTracks()[0];
       if (!track) return false;
       ls.addTrack(track);
@@ -462,6 +472,56 @@ class WebRTCService {
     }
   }
 
+  /** Переключить фронталку/заднюю во время звонка. Натив умеет мгновенно
+   *  (track._switchCamera — без ренегосиации); веб — новая дорожка с нужным
+   *  facingMode + replaceTrack во все соединения. */
+  async switchCamera(): Promise<void> {
+    const ls = this.localStream;
+    const track = ls?.getVideoTracks()[0];
+    if (!ls || !track) return;
+    const next = this.facing === "user" ? "environment" : "user";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const nativeSwitch = (track as any)._switchCamera;
+    if (typeof nativeSwitch === "function") {
+      try {
+        nativeSwitch.call(track);
+        this.facing = next;
+        return;
+      } catch {
+        // не вышло — попробуем веб-путь ниже
+      }
+    }
+    try {
+      const cam = await mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: next } as unknown as boolean,
+      });
+      const newTrack = cam.getVideoTracks()[0];
+      if (!newTrack) return;
+      for (const sender of this.videoSenders.values()) {
+        try {
+          await sender.replaceTrack(newTrack);
+        } catch {
+          // ignore
+        }
+      }
+      try {
+        track.stop();
+      } catch {
+        // ignore
+      }
+      try {
+        ls.removeTrack(track);
+      } catch {
+        // ignore
+      }
+      ls.addTrack(newTrack);
+      this.facing = next;
+    } catch (err) {
+      console.warn("[webrtc] switchCamera failed", err);
+    }
+  }
+
   endCall() {
     if (this.chatId != null) wsService.send({ type: "call_end", chat_id: this.chatId });
     this._teardown();
@@ -483,6 +543,7 @@ class WebRTCService {
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.localStream = null;
     this.chatId = null;
+    this.facing = "user";
     this.onCallEnded?.();
   }
 }

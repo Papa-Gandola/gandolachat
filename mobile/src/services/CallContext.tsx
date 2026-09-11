@@ -69,6 +69,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const [remotes, setRemotes] = useState<Remote[]>([]);
   const [muted, setMuted] = useState(false);
   const [videoOff, setVideoOff] = useState(false);
+  const [facing, setFacing] = useState<"user" | "environment">("user");
   const [minimized, setMinimized] = useState(false);
   const [callSec, setCallSec] = useState(0);
   const [callChatId, setCallChatId] = useState<number | null>(null);
@@ -155,6 +156,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       setRemotes([]);
       setMuted(false);
       setVideoOff(false);
+      setFacing("user");
       setPeerVideoOff(new Set());
       setPeerInfo(new Map());
     };
@@ -426,6 +428,11 @@ export function CallProvider({ children }: { children: ReactNode }) {
       sendVideoStatus(true);
     }
   };
+  // Фронталка ↔ задняя (кнопка видна только при включённой камере).
+  const flipCamera = async () => {
+    await webrtcService.switchCamera();
+    setFacing(webrtcService.getFacing());
+  };
 
   // Group-call grid data: tile per remote participant.
   const remoteTiles = remotes.map((r) => ({
@@ -524,6 +531,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
           <LocalPip
             stream={localStream}
             videoOff={videoOff}
+            mirror={facing === "user"}
             meLetter={(user?.username?.[0] ?? "?").toUpperCase()}
             meAvatar={user?.avatar_url ?? null}
             meColor={colorFor(user?.id ?? 0)}
@@ -566,6 +574,11 @@ export function CallProvider({ children }: { children: ReactNode }) {
             <CircleBtn bg={videoOff ? theme.colors.danger : "rgba(255,255,255,0.16)"} onPress={toggleVideo}>
               {videoOff ? <VideoOffIcon color="#fff" size={24} /> : <VideoIcon color="#fff" size={24} />}
             </CircleBtn>
+            {!videoOff && (
+              <CircleBtn bg="rgba(255,255,255,0.16)" onPress={flipCamera}>
+                <Text style={{ fontSize: 22 }}>🔄</Text>
+              </CircleBtn>
+            )}
             <CircleBtn bg={theme.colors.danger} size={64} onPress={end}>
               <HangupIcon color="#fff" size={26} />
             </CircleBtn>
@@ -706,12 +719,14 @@ function RemoteTile({ tile, fallbackName }: { tile: RemoteTileData; fallbackName
 function LocalPip({
   stream,
   videoOff,
+  mirror,
   meLetter,
   meAvatar,
   meColor,
 }: {
   stream: MediaStream | null;
   videoOff: boolean;
+  mirror: boolean;
   meLetter: string;
   meAvatar: string | null;
   meColor: string;
@@ -774,7 +789,13 @@ function LocalPip({
           // No zOrder — with positive zOrder the SurfaceView can outlive its
           // React unmount on Android, sticking the camera frame over the avatar
           // when the user turns video off.
-          <RTCView streamURL={stream.toURL()} objectFit="cover" mirror style={{ flex: 1 }} />
+          <RTCView
+            key={stream.getVideoTracks()[0]?.id ?? "self"}
+            streamURL={stream.toURL()}
+            objectFit="cover"
+            mirror={mirror}
+            style={{ flex: 1 }}
+          />
         ) : (
           <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
             <Avatar letter={meLetter} size={56} bg={meColor} uri={meAvatar} />
