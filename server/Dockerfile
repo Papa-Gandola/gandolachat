@@ -1,18 +1,35 @@
-FROM python:3.12-slim
-
-# Без этого print-диагностика ([apk-mirror], [push], [steam-*]) копится в
-# буфере stdout и в `docker compose logs` появляется с опозданием на часы.
-ENV PYTHONUNBUFFERED=1
+# Без PYTHONUNBUFFERED print-диагностика ([apk-mirror], [push], [steam-*])
+# копится в буфере stdout и в `docker compose logs` появляется с опозданием
+# на часы (env выставлен в основной стадии ниже).
 
 # pg_dump 16 для ночных бэкапов (app/backups.py). В bookworm из коробки
-# только 15-я версия клиента, а она отказывается дампить сервер 16 —
-# поэтому официальный репозиторий PGDG.
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
- && install -d /usr/share/postgresql-common/pgdg \
- && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
- && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
- && apt-get update && apt-get install -y --no-install-recommends postgresql-client-16 \
- && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+# только 15-я версия клиента (сервер 16 она не дампит), а репозиторий PGDG
+# из РФ недоступен/душится — сборка на VPS падала с exit 100 (та же беда,
+# что с GitHub CDN, грабля №12). Поэтому берём бинарники из образа
+# postgres:16 — он и так скачан локально (на нём крутится db), интернет
+# сборке не нужен. Обе базы — bookworm, glibc совпадает; библиотеки
+# собираем ldd-ом в свой каталог и грузим через LD_LIBRARY_PATH.
+FROM postgres:16 AS pgtools
+RUN mkdir -p /pgtools/lib \
+ && cp /usr/lib/postgresql/16/bin/pg_dump /usr/lib/postgresql/16/bin/pg_restore /pgtools/ \
+ && ldd /usr/lib/postgresql/16/bin/pg_dump /usr/lib/postgresql/16/bin/pg_restore \
+    | awk '/=> \//{print $3}' | grep -v 'libc.so.6' | sort -u | xargs -I{} cp -L {} /pgtools/lib/
+# libc НЕ копируем: системный загрузчик обязан работать со своей libc, а
+# бинарники под старый glibc прекрасно живут на новом (обратная совместимость)
+
+# База прибита к bookworm НАРОЧНО: плавающий python:3.12-slim недавно
+# переехал на Debian 13 (trixie) и молча сломал сборку (PGDG-строка была
+# bookworm, libldap-2.5-0 в trixie нет — exit 100). Пин = никаких
+# сюрпризов от смены дистрибутива под ногами; и glibc совпадает с
+# postgres:16 (тоже bookworm).
+FROM python:3.12-slim-bookworm
+
+ENV PYTHONUNBUFFERED=1
+
+COPY --from=pgtools /pgtools /opt/pgtools
+RUN printf '#!/bin/sh\nexec env LD_LIBRARY_PATH=/opt/pgtools/lib /opt/pgtools/pg_dump "$@"\n' > /usr/local/bin/pg_dump \
+ && printf '#!/bin/sh\nexec env LD_LIBRARY_PATH=/opt/pgtools/lib /opt/pgtools/pg_restore "$@"\n' > /usr/local/bin/pg_restore \
+ && chmod +x /usr/local/bin/pg_dump /usr/local/bin/pg_restore
 
 WORKDIR /app
 
