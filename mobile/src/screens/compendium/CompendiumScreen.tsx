@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Platform, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 
 import { AppBar } from "../../components/AppBar";
 import { Avatar } from "../../components/Avatar";
@@ -394,7 +394,12 @@ function TrophyChip({ theme, t }: { theme: ThemeT; t: CompendiumTrophy }) {
   return (
     <Pressable
       // Тап по ачивке — короткое описание (у тайных сервер шлёт «???»).
-      onPress={() => Alert.alert(`${bad ? "💀 " : ""}${t.name}`, t.desc || "")}
+      // В вебе RN-овский Alert — пустышка, поэтому window.alert.
+      onPress={() => {
+        const title = `${bad ? "💀 " : ""}${t.name}`;
+        if (Platform.OS === "web") window.alert(`${title}\n\n${t.desc || ""}`);
+        else Alert.alert(title, t.desc || "");
+      }}
       style={{ paddingHorizontal: 7, paddingVertical: 3, borderWidth: 1, borderColor: c, borderRadius: theme.radius.sm, backgroundColor: `${c}14` }}
     >
       <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, fontWeight: "700", color: c }}>

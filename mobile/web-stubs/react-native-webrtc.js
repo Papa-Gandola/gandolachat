@@ -35,7 +35,7 @@ function flattenStyle(style) {
 }
 
 export function RTCView(props) {
-  const { streamURL, objectFit, mirror, style, zOrder, ...rest } = props || {};
+  const { streamURL, objectFit, mirror, muted, style, zOrder, ...rest } = props || {};
   const ref = React.useRef(null);
   React.useEffect(() => {
     if (ref.current && streamURL) {
@@ -58,9 +58,11 @@ export function RTCView(props) {
     ref,
     autoPlay: true,
     playsInline: true,
-    // Mute only the local (mirrored) preview to avoid echo; remote streams
-    // must play their audio.
-    muted: !!mirror,
+    // Локальное превью глушится ЯВНЫМ пропом muted — раньше mute висел на
+    // mirror, и переключение на заднюю камеру (mirror=false) размьючивало
+    // собственный микрофон → эхо на всю комнату. Удалённые потоки должны
+    // играть звук, поэтому по умолчанию unmuted.
+    muted: muted !== undefined ? !!muted : !!mirror,
     style: domStyle,
     ...rest,
   });

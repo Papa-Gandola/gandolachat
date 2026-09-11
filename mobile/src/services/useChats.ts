@@ -234,10 +234,12 @@ export function useChats(): ChatsState {
         last: senderPrefix + lastText,
         ts: formatTs(last?.created_at),
         unread: unread[String(c.id)] ?? 0,
-        online: isOnline,
+        // Заметки — «сам с собой»: без зелёной точки, своего аватара и
+        // peerId (иначе шапка открывала бы собственный профиль).
+        online: c.is_notes ? false : isOnline,
         group: isGroup,
-        peerId: counterpart?.id,
-        avatarUrl,
+        peerId: c.is_notes ? undefined : counterpart?.id,
+        avatarUrl: c.is_notes ? null : avatarUrl,
         createdBy: c.created_by,
         allowAllWrite: c.allow_all_write,
         isNotes: !!c.is_notes,

@@ -21,6 +21,12 @@ def upgrade() -> None:
         "chats",
         sa.Column("is_notes", sa.Boolean(), nullable=False, server_default="false"),
     )
+    # Один чат «Заметки» на юзера — гонка двух устройств на get-or-create
+    # ловится этим индексом (паттерн как с dota_account_id).
+    op.create_index(
+        "uq_chats_notes_owner", "chats", ["created_by"],
+        unique=True, postgresql_where=sa.text("is_notes"),
+    )
     op.create_table(
         "reminders",
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -38,6 +44,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_index("uq_chats_notes_owner", table_name="chats")
     op.drop_index("ix_reminders_due", table_name="reminders")
     op.drop_index("ix_reminders_remind_at", table_name="reminders")
     op.drop_index("ix_reminders_user_id", table_name="reminders")

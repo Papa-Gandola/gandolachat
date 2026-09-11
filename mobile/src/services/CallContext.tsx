@@ -795,6 +795,9 @@ function LocalPip({
             objectFit="cover"
             mirror={mirror}
             style={{ flex: 1 }}
+            // В вебе RTCView — это <video>: своё превью ВСЕГДА без звука,
+            // независимо от зеркала (иначе задняя камера = эхо микрофона).
+            {...({ muted: true } as Record<string, unknown>)}
           />
         ) : (
           <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>

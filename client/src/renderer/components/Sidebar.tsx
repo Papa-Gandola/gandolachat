@@ -88,7 +88,9 @@ export default function Sidebar({
     const onOnline = (data: any) => setOnlineUsers((prev) => new Set([...prev, data.user_id]));
     const onOffline = (data: any) => setOnlineUsers((prev) => { const n = new Set(prev); n.delete(data.user_id); return n; });
     const onMsg = (data: any) => {
-      if (data.sender_id !== currentUser.id && (data.chat_id !== activeChatId || !document.hasFocus())) {
+      // reminder_fired — «своё» сообщение-будильник из Заметок: бейдж нужен.
+      const notify = data.sender_id !== currentUser.id || data.reminder_fired;
+      if (notify && (data.chat_id !== activeChatId || !document.hasFocus())) {
         setUnread((prev) => new Map(prev).set(data.chat_id, (prev.get(data.chat_id) || 0) + 1));
       }
     };

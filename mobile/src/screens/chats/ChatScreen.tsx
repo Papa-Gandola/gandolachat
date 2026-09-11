@@ -608,6 +608,7 @@ export function ChatScreen({ navigation, route }: Props) {
         <Pressable
           style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 10 }}
           onPress={() => {
+            if (isNotes) return; // «Заметки»: инфо-экранов у чата с собой нет
             if (isGroup) navigation.navigate("ChatInfo", { chatId });
             else if (userId != null) navigation.navigate("OtherProfile", { userId });
           }}

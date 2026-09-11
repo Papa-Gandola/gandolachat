@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { ChatOut, UserOut, chatApi, notesApi } from "../services/api";
 import { wsService } from "../services/ws";
 import { webrtcService } from "../services/webrtc";
-import { playCallRing } from "../services/sounds";
+import { playCallRing, playMessageSound } from "../services/sounds";
 import Sidebar from "../components/Sidebar";
 import ChatArea from "../components/ChatArea";
 import MemberList from "../components/MemberList";
@@ -95,6 +95,15 @@ export default function Main({ token, user, onLogout }: Props) {
           c.id === data.chat_id ? { ...c, last_message: data } : c
         )
       );
+      // Сработавшее напоминание приходит как «своё» сообщение — обычная
+      // логика уведомлений его молча пропустила бы. Будильник обязан быть
+      // слышен: звук + системное уведомление.
+      if (data.reminder_fired && data.sender_id === user.id) {
+        playMessageSound();
+        try {
+          new Notification("⏰ Напоминание", { body: String(data.content || "").replace(/^⏰ /, "") });
+        } catch { /* без разрешения — хотя бы звук */ }
+      }
     });
 
     wsService.on("message_edited", (data) => {

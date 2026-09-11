@@ -16,7 +16,8 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -32,24 +33,41 @@ MAX_PENDING = 50
 
 
 async def _get_or_create_notes_chat(db: AsyncSession, user: User) -> Chat:
-    res = await db.execute(
-        select(Chat)
-        .options(selectinload(Chat.members))
-        .where(Chat.is_notes == True, Chat.created_by == user.id)  # noqa: E712
-        .limit(1)
-    )
-    chat = res.scalar_one_or_none()
-    if chat:
-        return chat
-    chat = Chat(name="Заметки", is_group=False, is_notes=True, created_by=user.id)
-    db.add(chat)
-    await db.flush()
-    await db.execute(chat_members.insert().values(chat_id=chat.id, user_id=user.id))
-    await db.commit()
-    res = await db.execute(
-        select(Chat).options(selectinload(Chat.members)).where(Chat.id == chat.id)
-    )
-    return res.scalar_one()
+    async def _find() -> Chat | None:
+        res = await db.execute(
+            select(Chat)
+            .options(selectinload(Chat.members))
+            .where(Chat.is_notes == True, Chat.created_by == user.id)  # noqa: E712
+            .order_by(Chat.id)
+            .limit(1)
+        )
+        return res.scalar_one_or_none()
+
+    chat = await _find()
+    if chat is None:
+        chat = Chat(name="Заметки", is_group=False, is_notes=True, created_by=user.id)
+        db.add(chat)
+        try:
+            await db.flush()
+            await db.execute(chat_members.insert().values(chat_id=chat.id, user_id=user.id))
+            await db.commit()
+        except IntegrityError:
+            # Гонка двух устройств: уникальный частичный индекс (0007) пустил
+            # только одного — забираем чат победителя.
+            await db.rollback()
+            chat = await _find()
+            if chat is None:
+                raise HTTPException(500, "Не получилось создать Заметки")
+        else:
+            res = await db.execute(
+                select(Chat).options(selectinload(Chat.members)).where(Chat.id == chat.id)
+            )
+            chat = res.scalar_one()
+    # КРИТИЧНО: живые сокеты юзера подключались ДО появления этого чата и в
+    # manager.chat_users его нет — без join_chat все бродкасты (эхо сообщений,
+    # карточки, «⏰») уходили бы в никуда до самого реконнекта.
+    manager.join_chat(user.id, chat.id)
+    return chat
 
 
 @router.get("/api/chats/notes", response_model=ChatOut)
@@ -195,47 +213,72 @@ async def cancel_reminder(
 
 async def fire_due_reminders():
     """Джоба (каждые 30с): созревшие напоминания → «⏰ …» в Заметки,
-    карточка помечается сработавшей, юзеру летит Web Push."""
+    карточка помечается сработавшей, юзеру летит Web Push.
+
+    Порядок ВАЖЕН: каждое напоминание — атомарный UPDATE-захват (гонка с
+    отменой = 0 строк = скип), КОММИТ и только потом бродкасты/пуш. Иначе
+    клиент успевал mark_read по незакоммиченному сообщению (FK-взрыв ронял
+    его сокет), а StaleData от параллельной отмены откатывал весь батч и
+    дублировал «⏰» всем остальным на следующем тике."""
     async with AsyncSessionLocal() as db:
         now = datetime.now(timezone.utc)
         res = await db.execute(
-            select(Reminder)
+            select(Reminder.id, Reminder.user_id, Reminder.text, Reminder.message_id, Reminder.remind_at)
             .where(Reminder.fired == False, Reminder.remind_at <= now)  # noqa: E712
             .order_by(Reminder.remind_at)
             .limit(100)
         )
-        due = res.scalars().all()
-        if not due:
+        snaps = [tuple(row) for row in res.all()]
+        if not snaps:
             return
-        for r in due:
-            # Снапшоты примитивов (грабли №2) — после commit/ошибок к ORM-
-            # атрибутам не возвращаемся.
-            rid, uid, text, mid, at = r.id, r.user_id, r.text, r.message_id, r.remind_at
-            r.fired = True
+        for rid, uid, text, mid, at in snaps:
             try:
+                # Атомарный захват: параллельная отмена уже удалила строку →
+                # rowcount 0 → пропускаем без сайд-эффектов.
+                claimed = await db.execute(
+                    update(Reminder)
+                    .where(Reminder.id == rid, Reminder.fired == False)  # noqa: E712
+                    .values(fired=True)
+                )
+                if claimed.rowcount != 1:
+                    await db.commit()
+                    continue
                 user = await db.get(User, uid)
                 if not user:
+                    await db.commit()
                     continue
                 chat_res = await db.execute(
-                    select(Chat).where(Chat.is_notes == True, Chat.created_by == uid).limit(1)  # noqa: E712
+                    select(Chat)
+                    .where(Chat.is_notes == True, Chat.created_by == uid)  # noqa: E712
+                    .order_by(Chat.id)
+                    .limit(1)
                 )
                 chat = chat_res.scalar_one_or_none()
+                fired_payload = None
+                edited_payload = None
                 if chat:
                     fired_msg = Message(chat_id=chat.id, sender_id=uid, content=f"⏰ {text}")
                     db.add(fired_msg)
                     await db.flush()
-                    await db.refresh(fired_msg)
-                    await manager.broadcast_to_chat(chat.id, _message_payload(fired_msg, user))
+                    fired_payload = _message_payload(fired_msg, user)
+                    # Флаг для клиентов: «своё» сообщение, но уведомить надо
+                    # (иначе на десктопе срабатывание было бы немым).
+                    fired_payload["reminder_fired"] = True
                     if mid:
                         card = await db.get(Message, mid)
                         if card and card.content.startswith("/reminder "):
                             card.content = _reminder_marker(rid, text, at, fired=True)
-                            await manager.broadcast_to_chat(chat.id, {
+                            edited_payload = {
                                 "type": "message_edited",
                                 "message_id": mid,
                                 "chat_id": chat.id,
                                 "content": card.content,
-                            })
+                            }
+                await db.commit()
+                if chat and fired_payload:
+                    await manager.broadcast_to_chat(chat.id, fired_payload)
+                if edited_payload:
+                    await manager.broadcast_to_chat(edited_payload["chat_id"], edited_payload)
                 from app.webpush import send_web_push
                 await send_web_push(
                     db, [uid], "⏰ Напоминание", text,
@@ -243,5 +286,8 @@ async def fire_due_reminders():
                     tag=f"reminder-{rid}",
                 )
             except Exception as e:
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
                 print(f"[notes] fire reminder {rid} failed: {type(e).__name__}: {e}")
-        await db.commit()
