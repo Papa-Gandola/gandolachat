@@ -69,6 +69,13 @@ async def update_profile(
         about = (data.get("about") or "").strip()[:500]
         current_user.about = about or None
 
+    if "dota_presence_visible" in data:
+        current_user.dota_presence_visible = bool(data.get("dota_presence_visible"))
+        if not current_user.dota_presence_visible:
+            # Невидимка сработала сразу — не ждём следующего опроса Steam
+            from app import steam_presence
+            await steam_presence.drop_user(current_user.id)
+
     await db.commit()
     await db.refresh(current_user)
     await _broadcast_profile(db, current_user)

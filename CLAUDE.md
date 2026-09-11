@@ -107,7 +107,8 @@ print-логи видны в `docker compose logs` с опозданием (не
   message_edited/deleted, reaction_*, user_online/offline, typing,
   new_chat, chat_updated/deleted, profile_updated, new_pending_user,
   dota_ready_update, poker_table_created/updated/removed, poker_state,
-  call_signal/call_end/call_taken/call_active.
+  call_signal/call_end/call_taken/call_active, dota_presence (смена
+  состава + снимок на подключение).
 - `app/push.py` — send_push бьёт в ОБА канала: Expo (native Android) и
   Web Push (`app/webpush.py`, PWA/айфоны — VAPID-ключи генерятся сами в
   uploads/vapid/, pywebpush в тредпуле, мёртвые подписки 404/410
@@ -143,6 +144,13 @@ print-логи видны в `docker compose logs` с опозданием (не
   БД, join/leave/start/close; после commit — перечитка с
   `populate_existing=True`, см. грабли №1).
 - `app/api/dota.py` — POST /call: сообщение `/dota_call` + пуш всем.
+- `app/steam_presence.py` — «🎮 в Доте сейчас»: джоба раз в 2 мин,
+  GetPlayerSummaries батчами по 100 (IPv4-клиент opendota, грабля №3),
+  in-memory набор, WS `dota_presence {playing}` при СМЕНЕ состава +
+  снимок каждому новому сокету. Невидимка: users.dota_presence_visible
+  (дефолт true, тумблер в профиле; PATCH /me гасит значок сразу через
+  drop_user). Ошибка Steam — состав НЕ трогаем (не мигать). Без
+  STEAM_API_KEY джоба спит.
 
 ### Гандолиум (компендиум) — `app/compendium/`
 
@@ -177,6 +185,29 @@ print-логи видны в `docker compose logs` с опозданием (не
   rampage/fullstack; items, gas_total, level, new_level) — БЕЗ expires_at.
   `_post_card(db, chat, sender, payload, push_title/body)` — общий постилка
   карточек (поллер + финал).
+- `bets.py` — **ставки** ⛽ на катки (свои и чужие): рынки match/kills/
+  kda/roshan/streak (смертей НЕТ — некуда фидить). Анти-руин: на себя
+  только «за успех» (win/over), ставка на другого аннулируется если
+  ставивший сам в катке (по account_id состава), линии kills/KDA — от
+  средних цели (20 каток, «принтер» не собрать), стейк 10..100 (стрик
+  меньше: выплата ×2^K, джекпот ≤320). Эскроу списывается сразу
+  атомарным UPDATE (gas >= stake), выплата/возврат — атомарным UPSERT в
+  профиль сезона КАТКИ + ratchet comp_max_level. Резолюция в
+  _process_new_match (первая катка цели с started_at > placed_at; стрик
+  копит progress/progress_at — поздняя катка задним числом серию не
+  путает), рошан-ставка липнет к катке (match_id) и ждёт recheck_parses.
+  TTL-возвраты в sweep_expired (конец poll_matches): 24ч без катки,
+  стрик 7 дней, без парса 48ч. Карточка `/quest_card kind=bet_result`
+  (одна на катку, все итоги) в компендиум-чаты цели + адресные пуши.
+  Одна открытая ставка на пару (ставящий, цель). API: GET/POST
+  /api/compendium/bets (обзор: газ, цели с линиями, открытые всех,
+  моя история; отмены ставок НЕТ — поставил, терпи).
+- `weekly.py` — «Итоги недели»: Вс 21:00 МСК (18:00 UTC) карточка
+  week_recap — топ-3 по газу за неделю (QuestCompletion с Пн 00:00 МСК),
+  винрейт (мин. 3 катки), «Граммар-наци недели» (прирост
+  grammar_errors над users.grammar_wk_base; база срезается тут же
+  ВСЕМ). Пустая неделя — молчим; пропущенное воскресенье не догоняем.
+  Отправитель в чате — топ-газ участник, фолбэк создатель.
 - `finale.py` — **финал сезона**: cron 1-го числа 12:00 МСК (09:00 UTC,
   misfire 20ч; полдень — зазор под parse-рецеки и ночные даунтаймы
   OpenDota), под общим `_JOB_LOCK` поллера + дополнительный прогон при
@@ -216,7 +247,8 @@ print-логи видны в `docker compose logs` с опозданием (не
 - Миграции `alembic/versions/`: 0001 базовая, 0002 push_tokens,
   0003 компендиум, 0004 косметика, 0005 BIGINT+unique на dota_account_id,
   0006 web_push_subscriptions, 0007 chats.is_notes + reminders,
-  0008 season_results (unique season+user).
+  0008 season_results (unique season+user), 0009 bets,
+  0010 users.dota_presence_visible + grammar_wk_base.
   Только добавления; прогоняются сами на старте.
 
 ## Клиент десктоп (`client/`, Electron + React + Vite)
@@ -369,16 +401,12 @@ useChats/getChatName, иначе показывался бы сам юзер.
 
 ## Бэклог (одобрено хозяином, порядок согласован)
 
-1. Пакет «Гандолиум-социалка»: ставки на катки (⛽ за/против, поллер сам
-   рассудит), «Итоги недели» воскресной карточкой (топ по газу, винрейт,
-   «Граммар-наци недели» — счётчик уже копится), статус «🎮 в Доте сейчас»
-   (Steam API уже подключён).
-2. Опросы в чатах — С ВОЗМОЖНОСТЬЮ вписывать свои варианты (требование
+1. Опросы в чатах — С ВОЗМОЖНОСТЬЮ вписывать свои варианты (требование
    хозяина); закреплённые сообщения в группах.
-3. Релиз мобилки 0.8 (новый APK, versionCode 8): динамик/громкая связь +
+2. Релиз мобилки 0.8 (новый APK, versionCode 8): динамик/громкая связь +
    персональная громкость участников (нативный модуль).
-4. Адаптивность PWA на широких экранах (два столбца, как договорились).
-5. Хвосты звонков: ретраи сигналинга/ICE-restart на мобилке, приём шеринга
+3. Адаптивность PWA на широких экранах (два столбца, как договорились).
+4. Хвосты звонков: ретраи сигналинга/ICE-restart на мобилке, приём шеринга
    экрана на телефоне; самсунг ANR/нагрев — наблюдать после камеры-офф.
 
 ОТКЛОНЕНО хозяином: «страховка от дна» (сжечь газ и стереть анти-ачивку) —

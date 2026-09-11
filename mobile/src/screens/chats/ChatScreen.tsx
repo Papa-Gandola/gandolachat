@@ -1493,6 +1493,88 @@ function QuestCardMobile({ theme, mine, payload }: {
     : (payload.username || "");
   const items: Array<{ name: string; gas: number }> = payload.items || [];
 
+  // Итоги недели (воскресная карточка)
+  if (kind === "week_recap") {
+    const topGas: Array<{ username: string; gas: number }> = payload.top_gas || [];
+    const winrate: Array<{ username: string; wins: number; games: number; pct: number }> = payload.winrate || [];
+    const grammar: { username: string; errors: number } | null = payload.grammar || null;
+    const medals = ["🥇", "🥈", "🥉"];
+    return (
+      <View style={{ flexDirection: "row", justifyContent: mine ? "flex-end" : "flex-start", paddingHorizontal: 14, paddingVertical: 4 }}>
+        <View style={{ maxWidth: "85%", padding: 10, borderRadius: theme.radius.bubble, borderWidth: 1, borderLeftWidth: 3, borderColor: theme.colors.accent, backgroundColor: theme.colors.bgElev }}>
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "800", color: theme.colors.accent, letterSpacing: 0.5 }}>
+            📅 ИТОГИ НЕДЕЛИ
+          </Text>
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkDim, marginTop: 1 }}>
+            {payload.week_label}
+          </Text>
+          {topGas.map((r, i) => (
+            <View key={i} style={{ flexDirection: "row", justifyContent: "space-between", gap: 12, marginTop: i === 0 ? 6 : 3 }}>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12.5, fontWeight: "700", color: theme.colors.ink }}>
+                {medals[i] || `${i + 1}.`} {r.username}
+              </Text>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "800", color: theme.colors.accent }}>
+                +{r.gas} ⛽
+              </Text>
+            </View>
+          ))}
+          {winrate.length ? (
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted, marginTop: 6 }}>
+              🎯 {winrate.map((w) => `${w.username} ${w.pct}% (${w.wins}/${w.games})`).join(" · ")}
+            </Text>
+          ) : null}
+          {grammar ? (
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted, marginTop: 4 }}>
+              📖 Граммар-наци недели отмечает: {grammar.username} — {grammar.errors} очепяток
+            </Text>
+          ) : null}
+        </View>
+      </View>
+    );
+  }
+
+  // Ставки рассудились: итоги по одной катке (зеркало десктопной)
+  if (kind === "bet_result") {
+    const m = payload.match || {};
+    const bitems: Array<{ bettor: string; label: string; outcome: string; delta: number; stake: number }> =
+      payload.items || [];
+    const oColor = (o: string) => (o === "won" ? "#57f287" : o === "lost" ? BLOOD : theme.colors.inkMuted);
+    const oText = (it: any) =>
+      it.outcome === "won" ? `✅ +${it.delta}⛽` : it.outcome === "lost" ? `❌ -${it.stake}⛽` : "↩ возврат";
+    return (
+      <View style={{ flexDirection: "row", justifyContent: mine ? "flex-end" : "flex-start", paddingHorizontal: 14, paddingVertical: 4 }}>
+        <View
+          style={{
+            maxWidth: "85%",
+            padding: 10,
+            borderRadius: theme.radius.bubble,
+            borderWidth: 1,
+            borderLeftWidth: 3,
+            borderColor: theme.colors.accent,
+            backgroundColor: theme.colors.bgElev,
+          }}
+        >
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "800", color: theme.colors.accent, letterSpacing: 0.5 }}>
+            🎲 СТАВКИ РАССУЖЕНЫ
+          </Text>
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkDim, marginTop: 1 }}>
+            катка {payload.target}: {m.is_win ? "победа" : "поражение"} · {m.kills}/{m.deaths}/{m.assists}
+          </Text>
+          {bitems.map((it, i) => (
+            <View key={i} style={{ flexDirection: "row", justifyContent: "space-between", gap: 12, marginTop: i === 0 ? 6 : 3 }}>
+              <Text numberOfLines={1} style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "700", color: theme.colors.ink, flexShrink: 1 }}>
+                {it.bettor}: {it.label}
+              </Text>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11.5, fontWeight: "800", color: oColor(it.outcome) }}>
+                {oText(it)}
+              </Text>
+            </View>
+          ))}
+        </View>
+      </View>
+    );
+  }
+
   // Финал сезона: карточка-подиум 🥇🥈🥉 (зеркало десктопной)
   if (kind === "season_final") {
     const podium: Array<{ place: number; username: string; gas: number; level: number }> = payload.podium || [];

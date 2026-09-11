@@ -2078,6 +2078,107 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
     window.dispatchEvent(new CustomEvent("set-app-mode", { detail: { mode: "compendium" } }));
   };
 
+  // Итоги недели: топ газа, винрейт, граммар-наци (воскресная карточка).
+  if (kind === "week_recap") {
+    const topGas: Array<{ username: string; gas: number }> = payload.top_gas || [];
+    const winrate: Array<{ username: string; wins: number; games: number; pct: number }> = payload.winrate || [];
+    const grammar: { username: string; errors: number } | null = payload.grammar || null;
+    const medals = ["🥇", "🥈", "🥉"];
+    return (
+      <div
+        onClick={openCompendium}
+        title="Открыть Гандолиум"
+        style={{
+          padding: "10px 12px",
+          background: cardBg,
+          border: `1px solid ${edge}`,
+          borderLeft: `3px solid ${edge}`,
+          borderRadius: isNeo ? 0 : 8,
+          margin: "4px 0",
+          maxWidth: 380,
+          cursor: "pointer",
+        }}
+      >
+        <div style={{ ...mono, fontWeight: 800, fontSize: 12.5, letterSpacing: "0.06em", color: headerColor }}>
+          📅 ИТОГИ НЕДЕЛИ
+        </div>
+        <div style={{ ...mono, color: subColor, fontSize: 12, marginTop: 2 }}>{payload.week_label}</div>
+        {topGas.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 8 }}>
+            {topGas.map((r, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
+                <span style={{ ...mono, fontSize: 13, fontWeight: 700, color: titleColor }}>
+                  {medals[i] || `${i + 1}.`} {r.username}
+                </span>
+                <span style={{ ...mono, fontSize: 12.5, fontWeight: 800, color: gasColor, whiteSpace: "nowrap" }}>
+                  +{r.gas} ⛽
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        {winrate.length > 0 && (
+          <div style={{ ...mono, fontSize: 11.5, color: subColor, marginTop: 8 }}>
+            🎯 Винрейт: {winrate.map((w) => `${w.username} ${w.pct}% (${w.wins}/${w.games})`).join(" · ")}
+          </div>
+        )}
+        {grammar && (
+          <div style={{ ...mono, fontSize: 11.5, color: subColor, marginTop: 4 }}>
+            📖 Граммар-наци недели отмечает: <b style={{ color: titleColor }}>{grammar.username}</b> — {grammar.errors} очепяток
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Ставки рассудились: итоги по одной катке (постится от имени цели).
+  if (kind === "bet_result") {
+    const m = payload.match || {};
+    const items: Array<{ bettor: string; label: string; outcome: string; delta: number; stake: number }> =
+      payload.items || [];
+    const outcomeColor = (o: string) =>
+      darkOnLime ? "#0a0a0a" : o === "won" ? "#57f287" : o === "lost" ? BLOOD : subColor;
+    const outcomeText = (it: any) =>
+      it.outcome === "won" ? `✅ +${it.delta}⛽`
+        : it.outcome === "lost" ? `❌ -${it.stake}⛽`
+        : `↩ возврат`;
+    return (
+      <div
+        onClick={openCompendium}
+        title="Открыть Гандолиум"
+        style={{
+          padding: "10px 12px",
+          background: cardBg,
+          border: `1px solid ${edge}`,
+          borderLeft: `3px solid ${edge}`,
+          borderRadius: isNeo ? 0 : 8,
+          margin: "4px 0",
+          maxWidth: 380,
+          cursor: "pointer",
+        }}
+      >
+        <div style={{ ...mono, fontWeight: 800, fontSize: 12.5, letterSpacing: "0.06em", color: headerColor }}>
+          🎲 СТАВКИ РАССУЖЕНЫ
+        </div>
+        <div style={{ ...mono, color: subColor, fontSize: 12, marginTop: 2 }}>
+          катка {payload.target}: {m.is_win ? "победа" : "поражение"} · {m.kills}/{m.deaths}/{m.assists}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 8 }}>
+          {items.map((it, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
+              <span style={{ ...mono, fontSize: 12.5, fontWeight: 700, color: titleColor, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {it.bettor}: {it.label}
+              </span>
+              <span style={{ ...mono, fontSize: 12, fontWeight: 800, color: outcomeColor(it.outcome), whiteSpace: "nowrap" }}>
+                {outcomeText(it)}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   // Финал сезона: карточка-подиум 🥇🥈🥉 (постится от имени чемпиона).
   if (kind === "season_final") {
     const podium: Array<{ place: number; username: string; gas: number; level: number; quests_done: number }> =

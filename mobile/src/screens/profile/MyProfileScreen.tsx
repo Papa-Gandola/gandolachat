@@ -387,6 +387,18 @@ function DotaSection({ theme }: { theme: ThemeT }) {
       {err ? (
         <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.danger }}>{err}</Text>
       ) : null}
+      <Pressable
+        onPress={() => run(() => userApi.updateProfile({ dota_presence_visible: !(u?.dota_presence_visible !== false) }))}
+        disabled={busy}
+        style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
+      >
+        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 13 }}>
+          {u?.dota_presence_visible !== false ? "☑" : "☐"}
+        </Text>
+        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkMuted, flex: 1 }}>
+          🎮 показывать чату, что я сейчас в Доте (выключи для невидимки)
+        </Text>
+      </Pressable>
       <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
         <Pressable onPress={() => run(() => userApi.refreshSteam())} disabled={busy} style={btn(theme.colors.bgElev, theme.colors.ink, theme.colors.border)}>
           <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.ink }}>

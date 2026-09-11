@@ -17,6 +17,7 @@ export interface UserOut {
   dota_account_id?: number | null;
   dota_rank_tier?: number | null;
   dota_leaderboard_rank?: number | null;
+  dota_presence_visible?: boolean;
   // Косметика Гандолиума
   comp_max_level?: number;
   comp_badge?: boolean;
@@ -227,7 +228,7 @@ export const userApi = {
   me: () => getInstance().get<TokenResponse>("/api/users/me"),
   getUser: (userId: number) => getInstance().get<UserOut>(`/api/users/${userId}`),
   search: (q: string) => getInstance().get<UserOut[]>(`/api/users/search?q=${encodeURIComponent(q)}`),
-  updateProfile: (data: { username?: string; status?: string; about?: string }) =>
+  updateProfile: (data: { username?: string; status?: string; about?: string; dota_presence_visible?: boolean }) =>
     getInstance().patch<UserOut>("/api/users/me", data),
   // Steam/Dota: ссылка на профиль, steamID64 или Friend ID из Доты
   linkSteam: (input: string) => getInstance().post<UserOut>("/api/users/me/steam", { input }),
@@ -470,11 +471,56 @@ export const notesApi = {
   cancelReminder: (id: number) => getInstance().delete(`/api/notes/reminders/${id}`),
 };
 
+// === Ставки Гандолиума ===
+export interface BetOut {
+  id: number;
+  bettor_id: number;
+  bettor: string;
+  target_id: number;
+  target: string;
+  market: string;
+  side: string;
+  line: number;
+  label: string;
+  stake: number;
+  status: string;
+  progress: number;
+  payout: number;
+  placed_at: string;
+  resolved_at: string | null;
+  pending_parse: boolean;
+}
+
+export interface BetTarget {
+  user_id: number;
+  username: string;
+  avatar_url: string | null;
+  kills_line: number;
+  kda_line: number;
+  roshan_line: number;
+  is_me: boolean;
+}
+
+export interface BetsOverview {
+  season: string;
+  my_gas: number;
+  linked: boolean;
+  stake_min: number;
+  stake_max: number;
+  streak_stake_max: Record<string, number>;
+  targets: BetTarget[];
+  open: BetOut[];
+  my_recent: BetOut[];
+}
+
 export const compendiumApi = {
   me: () => getInstance().get<CompendiumMe>("/api/compendium/me"),
   season: () =>
     getInstance().get<{ season: string; rows: CompendiumSeasonRow[]; me: number }>("/api/compendium/season"),
   seasons: () => getInstance().get<SeasonArchive[]>("/api/compendium/seasons"),
+  bets: () => getInstance().get<BetsOverview>("/api/compendium/bets"),
+  placeBet: (data: { target_id: number; market: string; side: string; line?: number; stake: number }) =>
+    getInstance().post<{ bet: BetOut; my_gas: number }>("/api/compendium/bets", data),
   user: (userId: number) =>
     getInstance().get<{
       user_id: number;

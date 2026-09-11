@@ -73,6 +73,20 @@ async def lifespan(app: FastAPI):
         backups_mod.run_backup, "cron", hour=1, minute=0,
         misfire_grace_time=12 * 3600, coalesce=True, max_instances=1,
     )
+    # «Итоги недели»: Вс 21:00 МСК (18:00 UTC) — топ газа, винрейт,
+    # граммар-наци. Пропущенное воскресенье не догоняем (misfire 4ч —
+    # только на случай занятого event loop в момент крона).
+    from app.compendium import weekly as weekly_mod
+    scheduler.add_job(
+        weekly_mod.week_recap, "cron", day_of_week="sun", hour=18, minute=0,
+        misfire_grace_time=4 * 3600, coalesce=True, max_instances=1,
+    )
+    # «🎮 в Доте сейчас»: Steam presence раз в 2 мин (без STEAM_API_KEY спит).
+    from app import steam_presence as presence_mod
+    scheduler.add_job(
+        presence_mod.poll_presence, "interval",
+        seconds=presence_mod.PRESENCE_POLL_SEC, max_instances=1, coalesce=True,
+    )
     # Напоминания из «Заметок»: раз в 30с постим созревшие + Web Push.
     from app import notes as notes_mod
     scheduler.add_job(

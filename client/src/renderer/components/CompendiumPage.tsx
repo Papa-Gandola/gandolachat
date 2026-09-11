@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   UserOut, compendiumApi, CompendiumMe, CompendiumCosmetics, CompendiumQuest, CompendiumSeasonRow, CompendiumTrophy,
-  SeasonArchive,
+  SeasonArchive, BetsOverview, BetOut,
 } from "../services/api";
 import { wsService } from "../services/ws";
 import { useTheme } from "../services/theme";
 import DotaRankBadge from "./DotaRankBadge";
 import { frameClass, frameStyle } from "./cosmetics";
+import { useDotaPlaying } from "../services/presence";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 const BLOOD = "#ff6a5e";
@@ -46,7 +47,9 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
   const isNeo = theme === "neo";
   const mono = { fontFamily: "var(--font-mono)" };
   const [data, setData] = useState<CompendiumMe | null>(null);
-  const [tab, setTab] = useState<"quests" | "season" | "archive" | "trophies" | "cosmetics">("quests");
+  const [tab, setTab] = useState<"quests" | "season" | "bets" | "archive" | "trophies" | "cosmetics">("quests");
+  const [betsTick, setBetsTick] = useState(0);
+  const dotaPlaying = useDotaPlaying();
   const [seasonRows, setSeasonRows] = useState<CompendiumSeasonRow[] | null>(null);
   const [seasonError, setSeasonError] = useState(false);
   const [archive, setArchive] = useState<SeasonArchive[] | null>(null);
@@ -126,6 +129,8 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
         loadSeason();
         // Карточка финала = архив пополнился (раз в месяц — лишний фетч не жмёт)
         if (m.content.includes("season_final")) loadArchive();
+        // Ставки рассудились — открытая вкладка СТАВКИ обновится сама
+        if (m.content.includes("bet_result")) setBetsTick((t) => t + 1);
         // Развёрнутые полки трофеев в таблице сезона могли устареть
         setUserTrophies({});
       }
@@ -265,7 +270,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
 
             {/* --- вкладки --- */}
             <div style={{ display: "flex", gap: 6, margin: "18px 0 14px", flexWrap: "wrap" }}>
-              {([["quests", "ЗАДАНИЯ"], ["season", "СЕЗОН"], ["archive", "АРХИВ"], ["trophies", "ТРОФЕИ"], ["cosmetics", "КОСМЕТИКА"]] as const).map(([key, label]) => (
+              {([["quests", "ЗАДАНИЯ"], ["season", "СЕЗОН"], ["bets", "СТАВКИ"], ["archive", "АРХИВ"], ["trophies", "ТРОФЕИ"], ["cosmetics", "КОСМЕТИКА"]] as const).map(([key, label]) => (
                 <button
                   key={key}
                   onClick={() => {
@@ -274,6 +279,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                     // восстановиться после неудачной загрузки
                     if (key === "season") loadSeason();
                     else if (key === "archive") loadArchive();
+                    else if (key === "bets") setBetsTick((t) => t + 1);
                     else load();
                   }}
                   style={{
@@ -356,6 +362,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                       )}
                       <span style={{ ...mono, flex: 1, fontWeight: 700, fontSize: 13.5, color: r.comp_color || "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {r.username}{r.comp_badge ? " ⛽" : ""}{r.user_id === currentUser.id ? " (ты)" : ""}
+                        {dotaPlaying.has(r.user_id) && <span title="Сейчас в Доте" style={{ marginLeft: 5, fontSize: 11 }}>🎮</span>}
                         {r.comp_title && <span style={{ color: GOLD, fontWeight: 500, fontSize: 11, marginLeft: 6 }}>«{r.comp_title}»</span>}
                       </span>
                       <DotaRankBadge rankTier={r.rank_tier} leaderboardRank={r.leaderboard_rank} isNeo={isNeo} size="sm" />
@@ -388,6 +395,10 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                   🥇🥈🥉 навсегда, чемпион — титул месяца (+чат покупает шаурму 😉)
                 </p>
               </div>
+            )}
+
+            {tab === "bets" && (
+              <BetsTab isNeo={isNeo} refreshTick={betsTick} currentUserId={currentUser.id} />
             )}
 
             {tab === "archive" && (
@@ -489,6 +500,218 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
             )}
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+const BET_MARKETS: Array<{ key: string; name: string; sides: Array<[string, string]> }> = [
+  { key: "match", name: "ИСХОД КАТКИ", sides: [["win", "победа"], ["lose", "поражение"]] },
+  { key: "kills", name: "УБИЙСТВА", sides: [["over", "больше"], ["under", "меньше"]] },
+  { key: "kda", name: "KDA", sides: [["over", "больше"], ["under", "меньше"]] },
+  { key: "roshan", name: "РОШАНЫ", sides: [["over", "возьмут"], ["under", "не возьмут"]] },
+  { key: "streak", name: "ВИНСТРИК", sides: [["win", "подряд"]] },
+];
+
+function betOutcomeText(b: BetOut): { text: string; color: string } {
+  if (b.status === "won") return { text: `✅ +${b.payout - b.stake}⛽`, color: "#57f287" };
+  if (b.status === "lost") return { text: `❌ -${b.stake}⛽`, color: BLOOD };
+  if (b.status === "refunded") return { text: `↩ возврат ${b.stake}⛽`, color: "var(--text-muted)" };
+  return { text: "…", color: "var(--text-muted)" };
+}
+
+function BetsTab({ isNeo, refreshTick, currentUserId }: {
+  isNeo: boolean;
+  refreshTick: number;
+  currentUserId: number;
+}) {
+  const mono = { fontFamily: "var(--font-mono)" };
+  const [ov, setOv] = useState<BetsOverview | null>(null);
+  const [loadErr, setLoadErr] = useState(false);
+  const [targetId, setTargetId] = useState<number | 0>(0);
+  const [market, setMarket] = useState("match");
+  const [side, setSide] = useState("win");
+  const [streakLen, setStreakLen] = useState(2);
+  const [stake, setStake] = useState("20");
+  const [busy, setBusy] = useState(false);
+  const [placeErr, setPlaceErr] = useState("");
+  const [placedOk, setPlacedOk] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    compendiumApi.bets()
+      .then((res) => { if (alive) { setOv(res.data); setLoadErr(false); } })
+      .catch(() => { if (alive) setLoadErr(true); });
+    return () => { alive = false; };
+  }, [refreshTick]);
+
+  if (loadErr) {
+    return <p style={{ ...mono, color: BLOOD, fontSize: 12 }}>⚠ Не удалось загрузить ставки — тыкни вкладку ещё раз</p>;
+  }
+  if (!ov) {
+    return <p style={{ ...mono, color: "var(--text-muted)", fontSize: 13 }}>Загружаю ставки…</p>;
+  }
+
+  const target = ov.targets.find((t) => t.user_id === targetId) || null;
+  const onSelf = target?.is_me ?? false;
+  const marketDef = BET_MARKETS.find((m) => m.key === market)!;
+  // Анти-руин: на себя — только «за успех»
+  const sides = onSelf ? marketDef.sides.filter(([k]) => k === "win" || k === "over") : marketDef.sides;
+  const effSide = sides.some(([k]) => k === side) ? side : sides[0][0];
+  const cap = market === "streak" ? (ov.streak_stake_max[String(streakLen)] ?? 10) : ov.stake_max;
+  const mult = market === "streak" ? 2 ** streakLen : 2;
+  const lineText = !target ? "" :
+    market === "kills" ? `линия: ${target.kills_line} (его средняя)` :
+    market === "kda" ? `линия: ${(target.kda_line / 10).toFixed(1)} (его средняя)` :
+    market === "roshan" ? `линия: ${target.roshan_line} рошана своей стороны (нужен парс 📼)` :
+    market === "streak" ? "победы строго подряд, любая катка" : "следующая рейтинговая катка";
+
+  const chip = (active: boolean): React.CSSProperties => ({
+    ...mono,
+    background: active ? "var(--accent)" : "var(--bg-tertiary)",
+    color: active ? "var(--accent-text)" : "var(--text-primary)",
+    border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
+    borderRadius: isNeo ? 0 : 6,
+    padding: "6px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer",
+  });
+
+  const place = async () => {
+    if (!target || busy) return;
+    setBusy(true);
+    setPlaceErr("");
+    setPlacedOk("");
+    try {
+      const res = await compendiumApi.placeBet({
+        target_id: target.user_id, market, side: effSide,
+        ...(market === "streak" ? { line: streakLen } : {}),
+        stake: Math.round(Number(stake) || 0),
+      });
+      setOv((prev) => prev ? { ...prev, my_gas: res.data.my_gas, open: [res.data.bet, ...prev.open] } : prev);
+      setPlacedOk(`Принято! ${res.data.bet.label} · ${res.data.bet.stake}⛽ (выплата ×${mult})`);
+    } catch (e: any) {
+      setPlaceErr(e.response?.data?.detail || "Не получилось поставить");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const betLine = (b: BetOut, showOutcome: boolean) => (
+    <div key={b.id} style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "7px 12px", borderBottom: "1px solid var(--border)" }}>
+      <span style={{ ...mono, fontSize: 12.5, fontWeight: 700, color: b.bettor_id === currentUserId ? "var(--accent)" : "var(--text-primary)", whiteSpace: "nowrap" }}>
+        {b.bettor_id === currentUserId ? "ты" : b.bettor}
+      </span>
+      <span style={{ ...mono, fontSize: 12, color: "var(--text-muted)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        → {b.target_id === b.bettor_id ? "себя" : b.target}: {b.label}
+        {b.market === "streak" && b.status === "open" ? ` · серия ${b.progress}/${b.line}` : ""}
+        {b.pending_parse ? " · 📼 ждёт парс" : ""}
+      </span>
+      {showOutcome ? (
+        <span style={{ ...mono, fontSize: 12, fontWeight: 800, color: betOutcomeText(b).color, whiteSpace: "nowrap" }}>
+          {betOutcomeText(b).text}
+        </span>
+      ) : (
+        <span style={{ ...mono, fontSize: 12, fontWeight: 800, color: "var(--accent)", whiteSpace: "nowrap" }}>{b.stake}⛽</span>
+      )}
+    </div>
+  );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={s.panel(isNeo)}>
+        <div style={{ padding: "10px 12px", display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, borderBottom: "1px solid var(--border)" }}>
+          <span style={{ ...mono, fontWeight: 800, fontSize: 12.5, letterSpacing: "0.08em", color: "var(--accent)" }}>// НОВАЯ СТАВКА</span>
+          <span style={{ ...mono, fontSize: 12, color: "var(--text-muted)" }}>твой газ: <b style={{ color: "var(--accent)" }}>{ov.my_gas} ⛽</b></span>
+        </div>
+        {!ov.linked ? (
+          <p style={{ ...mono, fontSize: 12.5, color: "var(--text-muted)", padding: "12px" }}>
+            Ставки — только для привязанных к Dota (Профиль → DOTA 2). Смотреть чужие можно и так 👇
+          </p>
+        ) : (
+          <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+              <span style={{ ...mono, fontSize: 11.5, color: "var(--text-muted)", minWidth: 60 }}>на кого</span>
+              {ov.targets.map((t) => (
+                <button key={t.user_id} style={chip(targetId === t.user_id)} onClick={() => { setTargetId(t.user_id); setPlacedOk(""); }}>
+                  {t.is_me ? "на себя 💪" : t.username}
+                </button>
+              ))}
+            </div>
+            {target && (
+              <>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                  <span style={{ ...mono, fontSize: 11.5, color: "var(--text-muted)", minWidth: 60 }}>рынок</span>
+                  {BET_MARKETS.map((m) => (
+                    <button key={m.key} style={chip(market === m.key)} onClick={() => { setMarket(m.key); setPlacedOk(""); }}>
+                      {m.name}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                  <span style={{ ...mono, fontSize: 11.5, color: "var(--text-muted)", minWidth: 60 }}>
+                    {market === "streak" ? "серия" : "ставлю на"}
+                  </span>
+                  {market === "streak" ? (
+                    [2, 3, 5].map((k) => (
+                      <button key={k} style={chip(streakLen === k)} onClick={() => setStreakLen(k)}>
+                        {k} побед ×{2 ** k}
+                      </button>
+                    ))
+                  ) : (
+                    sides.map(([k, label]) => (
+                      <button key={k} style={chip(effSide === k)} onClick={() => setSide(k)}>{label}</button>
+                    ))
+                  )}
+                  <span style={{ ...mono, fontSize: 11, color: "var(--text-muted)" }}>{lineText}</span>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  <span style={{ ...mono, fontSize: 11.5, color: "var(--text-muted)", minWidth: 60 }}>газ</span>
+                  <input
+                    type="number" min={ov.stake_min} max={cap} value={stake}
+                    onChange={(e) => setStake(e.target.value)}
+                    style={{ ...mono, width: 80, padding: "6px 8px", background: "var(--bg-tertiary)", color: "var(--text-primary)", border: "1px solid var(--border)", borderRadius: isNeo ? 0 : 6, fontSize: 13 }}
+                  />
+                  <span style={{ ...mono, fontSize: 11, color: "var(--text-muted)" }}>от {ov.stake_min} до {cap}⛽ · выплата ×{mult}</span>
+                  <button
+                    onClick={place}
+                    disabled={busy}
+                    style={{ ...mono, background: "var(--accent)", color: "var(--accent-text)", border: "none", borderRadius: isNeo ? 0 : 6, padding: "8px 18px", fontSize: 12.5, fontWeight: 800, cursor: "pointer", opacity: busy ? 0.6 : 1 }}
+                  >
+                    ПОСТАВИТЬ
+                  </button>
+                </div>
+                {onSelf && (
+                  <p style={{ ...mono, fontSize: 11, color: "var(--text-muted)", margin: 0 }}>
+                    На себя — только «за успех»: селф-челлендж. Руин не оплачивается 🙂
+                  </p>
+                )}
+                {placeErr && <p style={{ ...mono, color: BLOOD, fontSize: 12, margin: 0 }}>{placeErr}</p>}
+                {placedOk && <p style={{ ...mono, color: "#57f287", fontSize: 12, margin: 0 }}>{placedOk}</p>}
+              </>
+            )}
+            <p style={{ ...mono, fontSize: 10.5, color: "var(--text-muted)", margin: 0 }}>
+              Газ списывается сразу. Рассудит поллер по следующей рейтинговой катке; если ты сам
+              оказался в катке цели — ставка аннулируется (анти-руин). Нет катки за 24ч (стрик — 7 дней) — газ вернётся.
+            </p>
+          </div>
+        )}
+      </div>
+
+      <div style={s.panel(isNeo)}>
+        <div style={{ ...mono, fontWeight: 800, fontSize: 12.5, letterSpacing: "0.08em", color: "var(--accent)", padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
+          // ОТКРЫТЫЕ СТАВКИ · {ov.open.length}
+        </div>
+        {!ov.open.length ? (
+          <p style={{ ...mono, fontSize: 12.5, color: "var(--text-muted)", padding: 12, margin: 0 }}>Пока тихо — стол ждёт смелых ⛽</p>
+        ) : ov.open.map((b) => betLine(b, false))}
+      </div>
+
+      <div style={s.panel(isNeo)}>
+        <div style={{ ...mono, fontWeight: 800, fontSize: 12.5, letterSpacing: "0.08em", color: "var(--accent)", padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
+          // МОИ ПОСЛЕДНИЕ
+        </div>
+        {!ov.my_recent.length ? (
+          <p style={{ ...mono, fontSize: 12.5, color: "var(--text-muted)", padding: 12, margin: 0 }}>История пуста — сделай первую ставку</p>
+        ) : ov.my_recent.map((b) => betLine(b, true))}
       </div>
     </div>
   );

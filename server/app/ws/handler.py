@@ -58,6 +58,16 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                 "user_id": user_id,
             }, exclude_user=user_id)
 
+    # Снимок «кто сейчас в Доте» — presence летит только при смене состава.
+    from app import steam_presence
+    try:
+        await websocket.send_json({
+            "type": "dota_presence",
+            "playing": steam_presence.playing_ids(),
+        })
+    except Exception:
+        pass
+
     # Снимок идущих звонков по чатам юзера. Без него открывший приложение
     # ПОСРЕДИ разговора не узнал бы о нём: call_active летит только на
     # сигналах, а в устоявшемся звонке сигналов нет (медиа ходит P2P).

@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import String, Boolean, ForeignKey, DateTime, Text, Integer, BigInteger, Table, Column, UniqueConstraint
+from sqlalchemy import String, Boolean, ForeignKey, DateTime, Text, Integer, BigInteger, Table, Column, UniqueConstraint, Index, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -36,6 +36,10 @@ class User(Base):
     dota_rank_tier: Mapped[int | None] = mapped_column(Integer, nullable=True)
     dota_leaderboard_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
     dota_rank_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # «🎮 в Доте сейчас»: показывать себя (невидимка = False). По умолчанию вкл.
+    dota_presence_visible: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # База недельного среза grammar_errors: «Граммар-наци недели» = разница
+    grammar_wk_base: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     # Matches started before this moment are ignored by the compendium poller —
     # everyone starts collecting from the moment they link, no retro-farming.
     dota_linked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -177,6 +181,45 @@ class SeasonResult(Base):
     quests_done: Mapped[int] = mapped_column(Integer, default=0)
     anti_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class Bet(Base):
+    """Ставка ⛽ на катки друга (Гандолиум-социалка).
+
+    Рынки: match (победа/поражение следующей рейтинговой), kills (убийств
+    ≥ line — линию считает СЕРВЕР от средних игрока, анти-«принтер»),
+    roshan (рошанов своей стороны ≥ line, нужен парс), streak (line побед
+    подряд, выплата stake × 2^line). Газ списывается при ставке (эскроу),
+    выплата/возврат — атомарным UPDATE в профиль сезона катки.
+
+    Анти-руин: на себя ставить нельзя; если ставивший сам оказался в катке
+    (любая сторона) — ставка аннулируется с возвратом. Разрешает поллер:
+    первая рейтинговая катка цели с started_at > placed_at. match_id
+    заполняется у roshan-ставок, ожидающих парса конкретной катки.
+    Возвраты по TTL: обычные 24ч без катки, streak 7 дней, roshan без
+    парса 48ч."""
+    __tablename__ = "bets"
+    __table_args__ = (
+        # Одна ОТКРЫТАЯ ставка на пару — щит от гонки параллельных POST
+        Index("uq_bets_open_pair", "bettor_id", "target_id",
+              unique=True, postgresql_where=text("status = 'open'")),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bettor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    target_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    season: Mapped[str] = mapped_column(String(7), index=True)  # сезон на момент ставки
+    market: Mapped[str] = mapped_column(String(10))  # match | kills | roshan | streak
+    side: Mapped[str] = mapped_column(String(6))     # win/lose | over/under
+    line: Mapped[int] = mapped_column(Integer, default=0)
+    stake: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(8), default="open", index=True)  # open|won|lost|refunded
+    match_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # roshan: ждём парс этой катки
+    progress: Mapped[int] = mapped_column(Integer, default=0)      # streak: побед подряд
+    progress_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    payout: Mapped[int] = mapped_column(Integer, default=0)        # зачислено при won (или stake при возврате)
+    placed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class PushToken(Base):

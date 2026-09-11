@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { ChatOut, UserOut, userApi, chatApi } from "../services/api";
 import { CompBadge, CompTitle } from "./cosmetics";
 import { useTheme } from "../services/theme";
+import { useDotaPlaying } from "../services/presence";
 
 interface Props {
   chat: ChatOut;
@@ -18,6 +19,7 @@ export default function MemberList({ chat, currentUser, onChatUpdate, onDeleteCh
   const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
   const [search, setSearch] = useState("");
   const [results, setResults] = useState<UserOut[]>([]);
+  const dotaPlaying = useDotaPlaying();
 
   if (!chat.is_group) return null;
 
@@ -49,6 +51,9 @@ export default function MemberList({ chat, currentUser, onChatUpdate, onDeleteCh
                 {isNeo ? `@${m.username}` : m.username}
                 {m.id === currentUser.id ? (isNeo ? "_you" : " (вы)") : ""}
                 <CompBadge user={m} size={10} />
+                {dotaPlaying.has(m.id) && (
+                  <span title="Сейчас в Доте" style={{ fontSize: 10, marginLeft: 4 }}>🎮</span>
+                )}
               </span>
               <CompTitle user={m} size={10} />
             </div>
