@@ -45,6 +45,7 @@ export interface CompendiumTrophy {
   quest_id: string;
   name: string;
   cat: string;
+  desc?: string;
   gas: number;
   completed_at: string;
   title?: string;
@@ -59,6 +60,25 @@ export interface CompendiumCosmetics {
   earned_titles: string[];
   palette: string[];
   unlocks: Record<string, number>;
+  // Рамки за подиум финала сезона (место 1/2/3 в любом сезоне)
+  podium_frames?: { gold: boolean; silver: boolean; bronze: boolean };
+}
+
+// Архив закрытых сезонов (снапшот финальной таблицы)
+export interface SeasonArchiveRow {
+  place: number;
+  user_id: number;
+  username: string;
+  gas: number;
+  level: number;
+  quests_done: number;
+  anti_count: number;
+}
+
+export interface SeasonArchive {
+  season: string;       // "2026-08"
+  season_name: string;  // «августа»
+  rows: SeasonArchiveRow[];
 }
 
 export interface CompendiumMe {
@@ -128,6 +148,14 @@ export interface ChatOut {
   avatar_url?: string | null;
   description?: string | null;
   admin_ids?: number[];
+  compendium_enabled?: boolean;
+  is_notes?: boolean;
+}
+
+export interface ReminderOut {
+  id: number;
+  text: string;
+  remind_at: string;
 }
 
 export interface TokenResponse {
@@ -431,10 +459,22 @@ export const pokerApi = {
   close: (tableId: number) => getInstance().post<{ ok: boolean }>(`/api/poker/${tableId}/close`),
 };
 
+export const notesApi = {
+  open: () => getInstance().get<ChatOut>("/api/chats/notes"),
+  createReminder: (text: string, remindAtIso: string) =>
+    getInstance().post<ReminderOut & { message_id: number; chat_id: number }>("/api/notes/reminders", {
+      text,
+      remind_at: remindAtIso,
+    }),
+  listReminders: () => getInstance().get<ReminderOut[]>("/api/notes/reminders"),
+  cancelReminder: (id: number) => getInstance().delete(`/api/notes/reminders/${id}`),
+};
+
 export const compendiumApi = {
   me: () => getInstance().get<CompendiumMe>("/api/compendium/me"),
   season: () =>
     getInstance().get<{ season: string; rows: CompendiumSeasonRow[]; me: number }>("/api/compendium/season"),
+  seasons: () => getInstance().get<SeasonArchive[]>("/api/compendium/seasons"),
   user: (userId: number) =>
     getInstance().get<{
       user_id: number;

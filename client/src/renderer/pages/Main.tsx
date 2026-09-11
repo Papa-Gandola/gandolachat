@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ChatOut, UserOut, chatApi } from "../services/api";
+import { ChatOut, UserOut, chatApi, notesApi } from "../services/api";
 import { wsService } from "../services/ws";
 import { webrtcService } from "../services/webrtc";
-import { playCallRing } from "../services/sounds";
+import { playCallRing, playMessageSound } from "../services/sounds";
 import Sidebar from "../components/Sidebar";
 import ChatArea from "../components/ChatArea";
 import MemberList from "../components/MemberList";
@@ -95,6 +95,15 @@ export default function Main({ token, user, onLogout }: Props) {
           c.id === data.chat_id ? { ...c, last_message: data } : c
         )
       );
+      // Сработавшее напоминание приходит как «своё» сообщение — обычная
+      // логика уведомлений его молча пропустила бы. Будильник обязан быть
+      // слышен: звук + системное уведомление.
+      if (data.reminder_fired && data.sender_id === user.id) {
+        playMessageSound();
+        try {
+          new Notification("⏰ Напоминание", { body: String(data.content || "").replace(/^⏰ /, "") });
+        } catch { /* без разрешения — хотя бы звук */ }
+      }
     });
 
     wsService.on("message_edited", (data) => {
@@ -214,9 +223,10 @@ export default function Main({ token, user, onLogout }: Props) {
       ));
     });
 
-    // Трубку взяли на другом устройстве этого же аккаунта — мгновенно гасим.
+    // Трубку взяли (на любом устройстве, в т.ч. этом через «Войти») —
+    // гасим баннер безусловно: висящий баннер при живом звонке = рингтон
+    // играет фоном весь разговор.
     wsService.on("call_taken", (data) => {
-      if (webrtcService.isInCall()) return; // взяли именно здесь
       setIncomingCalls((prev) => prev.filter((c) => c.chatId !== data.chat_id));
     });
 
@@ -370,6 +380,9 @@ export default function Main({ token, user, onLogout }: Props) {
     setCallFrom(null);
     setCallJoinExisting(true);
     setActiveChat(chat);
+    // Вошёл через «Войти», пока баннер ещё звонил — гасим его и звонилку,
+    // иначе рингтон продолжает играть фоном весь разговор.
+    setIncomingCalls((prev) => prev.filter((c) => c.chatId !== chat.id));
     // Сторожок мёртвого входа: если за 12с сервер так и не зарегистрировал
     // нас в созвоне (звонок умер в момент нажатия — call_join тихо
     // проигнорирован), не сидим «в пустом звонке» с захваченным микро.
@@ -409,7 +422,21 @@ export default function Main({ token, user, onLogout }: Props) {
     setIncomingCalls([]);
   }
 
+  // «Заметки»: get-or-create личного чата + открыть его.
+  async function openNotes() {
+    try {
+      const res = await notesApi.open();
+      const chat = res.data;
+      setChats((prev) => (prev.some((c) => c.id === chat.id) ? prev : [chat, ...prev]));
+      setActiveChat(chat);
+      setViewingProfile(null);
+      setViewingGroupInfo(null);
+      leaveCompendiumForChat();
+    } catch { /* сеть — просто не открылось */ }
+  }
+
   function getChatName(chat: ChatOut) {
+    if (chat.is_notes) return chat.name || "Заметки";
     if (chat.is_group) return chat.name || "Группа";
     const other = chat.members.find((m) => m.id !== currentUser.id);
     return other?.username || "Unknown";
@@ -547,6 +574,7 @@ export default function Main({ token, user, onLogout }: Props) {
           onLogout={handleLogout}
           onAvatarUpdate={setCurrentUser}
           onOpenProfile={() => setViewingProfile(currentUser)}
+          onOpenNotes={openNotes}
           width={sidebarWidth}
         />
         <div style={s.resizer} onMouseDown={() => setResizing(true)} />

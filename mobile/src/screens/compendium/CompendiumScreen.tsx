@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Platform, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 
 import { AppBar } from "../../components/AppBar";
 import { Avatar } from "../../components/Avatar";
@@ -7,14 +7,14 @@ import { DotaRankBadge } from "../../components/DotaRankBadge";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import {
   apiErrorMessage, compendiumApi, CompendiumCosmetics, CompendiumMe, CompendiumQuest,
-  CompendiumSeasonRow, CompendiumTrophy,
+  CompendiumSeasonRow, CompendiumTrophy, SeasonArchive,
 } from "../../services/api";
 import { useAuth } from "../../services/AuthContext";
 import { wsService } from "../../services/ws";
 import { useTheme } from "../../theme";
 
 type ThemeT = ReturnType<typeof useTheme>;
-type TabKey = "quests" | "season" | "trophies" | "cosmetics";
+type TabKey = "quests" | "season" | "archive" | "trophies" | "cosmetics";
 
 const BLOOD = "#ff6a5e";
 const GOLD = "#ffd24a";
@@ -27,9 +27,12 @@ export function CompendiumScreen() {
   const [data, setData] = useState<CompendiumMe | null>(null);
   const [rows, setRows] = useState<CompendiumSeasonRow[] | null>(null);
   const [seasonErr, setSeasonErr] = useState(false);
+  const [archive, setArchive] = useState<SeasonArchive[] | null>(null);
+  const [archiveErr, setArchiveErr] = useState(false);
   const [tab, setTab] = useState<TabKey>("quests");
   const [refreshing, setRefreshing] = useState(false);
-  const [expandedUser, setExpandedUser] = useState<number | null>(null);
+  // Раскрытых полок может быть несколько — удобно сравнивать людей.
+  const [expandedUsers, setExpandedUsers] = useState<Set<number>>(new Set());
   const [userTrophies, setUserTrophies] = useState<Record<number, CompendiumTrophy[]>>({});
 
   const load = useCallback(async () => {
@@ -48,24 +51,37 @@ export function CompendiumScreen() {
     }
   }, []);
 
+  const loadArchive = useCallback(async () => {
+    try {
+      const res = await compendiumApi.seasons();
+      setArchive(res.data);
+      setArchiveErr(false);
+    } catch {
+      setArchiveErr(true);
+    }
+  }, []);
+
   useEffect(() => {
     load();
     // Карточка задания в чате = что-то засчитали — обновляем экран живьём
     const onMsg = (m: { content?: string }) => {
       if (typeof m?.content === "string" && m.content.startsWith("/quest_card")) {
         load();
+        // Карточка финала = архив пополнился
+        if (m.content.includes("season_final")) loadArchive();
         setUserTrophies({});
       }
     };
     wsService.on("message", onMsg);
     return () => wsService.off("message", onMsg);
-  }, [load]);
+  }, [load, loadArchive]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await load();
+    // На вкладке АРХИВ свайп обновляет архив, не только /me
+    await (tab === "archive" ? loadArchive() : load());
     setRefreshing(false);
-  }, [load]);
+  }, [load, loadArchive, tab]);
 
   const seasonTitle = useMemo(() => {
     if (!data?.season) return "";
@@ -74,11 +90,15 @@ export function CompendiumScreen() {
   }, [data?.season]);
 
   const toggleUser = async (uid: number) => {
-    if (expandedUser === uid) {
-      setExpandedUser(null);
+    if (expandedUsers.has(uid)) {
+      setExpandedUsers((prev) => {
+        const n = new Set(prev);
+        n.delete(uid);
+        return n;
+      });
       return;
     }
-    setExpandedUser(uid);
+    setExpandedUsers((prev) => new Set(prev).add(uid));
     if (!userTrophies[uid]) {
       try {
         const res = await compendiumApi.user(uid);
@@ -159,6 +179,7 @@ export function CompendiumScreen() {
                 [
                   ["quests", "ЗАДАНИЯ"],
                   ["season", "СЕЗОН"],
+                  ["archive", "АРХИВ"],
                   ["trophies", "ТРОФЕИ"],
                   ["cosmetics", "КОСМЕТИКА"],
                 ] as [TabKey, string][]
@@ -167,7 +188,8 @@ export function CompendiumScreen() {
                   key={key}
                   onPress={() => {
                     setTab(key);
-                    load();
+                    if (key === "archive") loadArchive();
+                    else load();
                   }}
                   style={{
                     paddingHorizontal: 13,
@@ -245,7 +267,7 @@ export function CompendiumScreen() {
                             {r.gas} ⛽
                           </Text>
                         </Pressable>
-                        {expandedUser === r.user_id ? (
+                        {expandedUsers.has(r.user_id) ? (
                           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 5, paddingVertical: 8, paddingLeft: 34 }}>
                             {!userTrophies[r.user_id]?.length ? (
                               <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted }}>Полка пока пустая</Text>
@@ -257,6 +279,60 @@ export function CompendiumScreen() {
                       </View>
                     ))
                   )}
+                </View>
+              )}
+
+              {tab === "archive" && (
+                <View style={{ gap: 14 }}>
+                  {archiveErr ? (
+                    <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: BLOOD }}>
+                      ⚠ Не удалось загрузить архив — тыкни вкладку ещё раз
+                    </Text>
+                  ) : null}
+                  {!archive && !archiveErr ? <ActivityIndicator color={theme.colors.accent} /> : null}
+                  {archive && archive.length === 0 && !archiveErr ? (
+                    <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.inkMuted, lineHeight: 18 }}>
+                      Архив пуст — первый сезон ещё не закрыт. Финал случается сам в ночь на 1-е число 🏁
+                    </Text>
+                  ) : null}
+                  {archive?.map((arc) => (
+                    <View key={arc.season} style={{ backgroundColor: theme.colors.bgElev, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.md, overflow: "hidden" }}>
+                      <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, fontWeight: "800", color: theme.colors.accent, letterSpacing: 1, padding: 11, borderBottomWidth: 1, borderBottomColor: theme.colors.border }}>
+                        СЕЗОН {arc.season_name.toUpperCase()} · {arc.season.slice(0, 4)}
+                      </Text>
+                      {arc.rows.map((r) => (
+                        <View
+                          key={r.user_id}
+                          style={{
+                            flexDirection: "row", alignItems: "center", gap: 9,
+                            paddingVertical: 8, paddingHorizontal: 11,
+                            borderBottomWidth: 1, borderBottomColor: theme.colors.border,
+                            backgroundColor: r.user_id === auth.user?.id ? `${theme.colors.accent}14` : "transparent",
+                          }}
+                        >
+                          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 13, fontWeight: "800", width: 26, color: r.place === 1 ? GOLD : r.place === 2 ? "#c0c6cf" : r.place === 3 ? "#cd7f32" : theme.colors.inkMuted }}>
+                            {r.place === 1 ? "🥇" : r.place === 2 ? "🥈" : r.place === 3 ? "🥉" : r.place}
+                          </Text>
+                          <View style={{ flex: 1, minWidth: 0 }}>
+                            <Text numberOfLines={1} style={{ fontFamily: theme.fonts.mono, fontSize: 12.5, fontWeight: "700", color: theme.colors.ink }}>
+                              {r.username}{r.user_id === auth.user?.id ? " (ты)" : ""}
+                            </Text>
+                            <Text numberOfLines={1} style={{ fontFamily: theme.fonts.mono, fontSize: 9.5, color: r.place === 1 ? GOLD : theme.colors.inkMuted }}>
+                              {r.place === 1 ? `«Чемпион ${arc.season_name}» · ` : ""}ур.{r.level} · ✓{r.quests_done}{r.anti_count ? ` · 💀${r.anti_count}` : ""}
+                            </Text>
+                          </View>
+                          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12.5, fontWeight: "800", color: theme.colors.accent }}>
+                            {r.gas} ⛽
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  ))}
+                  {archive && archive.length > 0 ? (
+                    <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: theme.colors.inkMuted }}>
+                      Ники — на момент закрытия сезона. Рамки подиума — в КОСМЕТИКЕ.
+                    </Text>
+                  ) : null}
                 </View>
               )}
 
@@ -387,11 +463,20 @@ function TrophyChip({ theme, t }: { theme: ThemeT; t: CompendiumTrophy }) {
   const bad = t.cat === "anti";
   const c = bad ? BLOOD : theme.colors.accent;
   return (
-    <View style={{ paddingHorizontal: 7, paddingVertical: 3, borderWidth: 1, borderColor: c, borderRadius: theme.radius.sm, backgroundColor: `${c}14` }}>
+    <Pressable
+      // Тап по ачивке — короткое описание (у тайных сервер шлёт «???»).
+      // В вебе RN-овский Alert — пустышка, поэтому window.alert.
+      onPress={() => {
+        const title = `${bad ? "💀 " : ""}${t.name}`;
+        if (Platform.OS === "web") window.alert(`${title}\n\n${t.desc || ""}`);
+        else Alert.alert(title, t.desc || "");
+      }}
+      style={{ paddingHorizontal: 7, paddingVertical: 3, borderWidth: 1, borderColor: c, borderRadius: theme.radius.sm, backgroundColor: `${c}14` }}
+    >
       <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, fontWeight: "700", color: c }}>
         {bad ? "💀 " : ""}{t.name}
       </Text>
-    </View>
+    </Pressable>
   );
 }
 
@@ -435,13 +520,14 @@ function CosmeticsTab({ theme, cos, onSaved }: {
       color: active ? theme.colors.accentText : theme.colors.ink,
     }) as const;
 
-  const Row = ({ need, name, desc, children }: { need: number; name: string; desc: string; children?: React.ReactNode }) => {
-    const locked = lvl < need;
+  // trophy: разблокировка не уровнем, а местом в финале — замки́ на кнопках
+  const Row = ({ need, name, desc, children, trophy }: { need: number; name: string; desc: string; children?: React.ReactNode; trophy?: boolean }) => {
+    const locked = !trophy && lvl < need;
     return (
       <View style={{ gap: 7, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: theme.colors.border, opacity: locked ? 0.65 : 1 }}>
         <View style={{ flexDirection: "row", gap: 8, alignItems: "baseline" }}>
           <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, fontWeight: "800", color: locked ? theme.colors.inkMuted : theme.colors.accent, minWidth: 38 }}>
-            {locked ? `🔒 ${need}` : `ур.${need}`}
+            {trophy ? "🏆" : locked ? `🔒 ${need}` : `ур.${need}`}
           </Text>
           <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12.5, fontWeight: "700", color: theme.colors.ink }}>{name}</Text>
         </View>
@@ -465,7 +551,7 @@ function CosmeticsTab({ theme, cos, onSaved }: {
         </Pressable>
       </Row>
 
-      <Row need={U.title ?? 4} name="Титул под ником" desc="Из заработанных — прожарочные тоже считаются">
+      <Row need={U.title ?? 4} trophy={lvl < (U.title ?? 4) && !!cos.podium_frames?.gold} name="Титул под ником" desc="Из заработанных — прожарочные тоже считаются">
         {cos.earned_titles.length === 0 ? (
           <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkMuted, fontStyle: "italic" }}>
             Пока ни одного — закрывай громкие задания
@@ -475,7 +561,7 @@ function CosmeticsTab({ theme, cos, onSaved }: {
             <Pressable onPress={() => save({ title: "" })} disabled={busy} style={chip(!cos.title)}>
               <Text style={chipText(!cos.title)}>без титула</Text>
             </Pressable>
-            {cos.earned_titles.map((t) => (
+            {cos.earned_titles.filter((t) => lvl >= (U.title ?? 4) || t.startsWith("Чемпион ")).map((t) => (
               <Pressable key={t} onPress={() => save({ title: t })} disabled={busy} style={chip(cos.title === t)}>
                 <Text style={chipText(cos.title === t)}>«{t}»</Text>
               </Pressable>
@@ -524,6 +610,26 @@ function CosmeticsTab({ theme, cos, onSaved }: {
               переливающаяся{lvl < (U.frame_animated ?? 12) ? ` 🔒${U.frame_animated ?? 12}` : ""}
             </Text>
           </Pressable>
+        </View>
+      </Row>
+
+      <Row trophy need={0} name="Рамки подиума" desc="За место в финале сезона — остаются навсегда">
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+          {(cos.podium_frames?.gold || cos.podium_frames?.silver || cos.podium_frames?.bronze) ? (
+            <Pressable onPress={() => save({ frame: "" })} disabled={busy} style={chip(!cos.frame)}>
+              <Text style={chipText(!cos.frame)}>без рамки</Text>
+            </Pressable>
+          ) : null}
+          {(["gold", "silver", "bronze"] as const).map((f) => {
+            const pf = cos.podium_frames || { gold: false, silver: false, bronze: false };
+            const has = pf[f];
+            const label = f === "gold" ? "🥇 золотая" : f === "silver" ? "🥈 серебряная" : "🥉 бронзовая";
+            return (
+              <Pressable key={f} onPress={() => has && save({ frame: f })} disabled={busy || !has} style={chip(cos.frame === f, !has)}>
+                <Text style={chipText(cos.frame === f)}>{label}{has ? "" : " 🔒"}</Text>
+              </Pressable>
+            );
+          })}
         </View>
       </Row>
 

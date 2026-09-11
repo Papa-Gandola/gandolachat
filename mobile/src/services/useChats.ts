@@ -31,6 +31,7 @@ function markerPreview(content: string): string | null {
   if (content.startsWith("/quest_card ")) {
     try {
       const p = JSON.parse(content.slice(12));
+      if (p.kind === "season_final") return `🏆 Итоги сезона: чемпион — ${p.podium?.[0]?.username ?? "?"}`;
       if (p.special === "rampage") return `🚨 РАМПАГА: ${p.username}!`;
       if (p.special === "fullstack") return "🏆 СТАК ПОБЕДИЛ";
       if (p.kind === "anti") return `💀 Прожарка: ${p.username}`;
@@ -41,6 +42,7 @@ function markerPreview(content: string): string | null {
     }
   }
   if (content === "/dota_call") return "⚔️ Газуем в дотан";
+  if (content.startsWith("/reminder ")) return "⏰ Напоминание";
   if (/^\/poker_table \d+$/.test(content)) return "🃏 Покерный стол";
   if (/^\/call_record (completed|missed|declined|cancelled)\|/.test(content)) return "📞 Звонок";
   return null;
@@ -206,7 +208,13 @@ export function useChats(): ChatsState {
       // For a DM the row should display the OTHER participant — not "Pavel ↔
       // Marina", just "Marina". For groups, show the group name.
       const counterpart = isGroup ? null : c.members.find((m) => m.id !== user.id) ?? c.members[0];
-      const displayName = isGroup ? c.name ?? "Группа" : counterpart?.username ?? "Без имени";
+      // «Заметки» — ЛС без собеседника: без этой ветки чат назывался бы
+      // именем самого юзера.
+      const displayName = c.is_notes
+        ? c.name ?? "Заметки"
+        : isGroup
+          ? c.name ?? "Группа"
+          : counterpart?.username ?? "Без имени";
       const isOnline = !isGroup && counterpart ? online.has(counterpart.id) : false;
       const avatarUrl = isGroup ? c.avatar_url ?? null : counterpart?.avatar_url ?? null;
       const last = c.last_message;
@@ -227,12 +235,15 @@ export function useChats(): ChatsState {
         last: senderPrefix + lastText,
         ts: formatTs(last?.created_at),
         unread: unread[String(c.id)] ?? 0,
-        online: isOnline,
+        // Заметки — «сам с собой»: без зелёной точки, своего аватара и
+        // peerId (иначе шапка открывала бы собственный профиль).
+        online: c.is_notes ? false : isOnline,
         group: isGroup,
-        peerId: counterpart?.id,
-        avatarUrl,
+        peerId: c.is_notes ? undefined : counterpart?.id,
+        avatarUrl: c.is_notes ? null : avatarUrl,
         createdBy: c.created_by,
         allowAllWrite: c.allow_all_write,
+        isNotes: !!c.is_notes,
         typing: typingChats.has(c.id),
       };
     });

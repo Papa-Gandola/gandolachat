@@ -3,6 +3,7 @@ import { createContext, ReactNode, useContext, useEffect, useMemo, useState } fr
 
 import { apiErrorMessage, authApi, UserOut, userApi } from "./api";
 import { registerForPushNotifications, unregisterCurrentPushToken } from "./notifications";
+import { initReminderResync, resyncLocalReminders } from "./reminders";
 import { wsService } from "./ws";
 
 interface AuthState {
@@ -71,6 +72,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Re-register the push token after relog so the server has a
         // fresh user_id↔token mapping (handles account switches too).
         registerForPushNotifications().catch(() => {});
+        initReminderResync();
+        resyncLocalReminders().catch(() => {});
         return "ok";
       } catch (err) {
         return isAuthRejection(err) ? "auth" : "net";
@@ -144,6 +147,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(u);
           wsService.connect(access_token);
           registerForPushNotifications().catch(() => {});
+        initReminderResync();
+        resyncLocalReminders().catch(() => {});
         } catch (err) {
           setError(apiErrorMessage(err));
           throw err;

@@ -70,6 +70,8 @@ class Chat(Base):
     # Компендиум: quest-completion cards from the Dota poller land in every
     # group that has this flag on (toggled by the creator in group settings).
     compendium_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Личный чат «Заметки» (сам с собой): один на юзера, создаётся лениво.
+    is_notes: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
     members: Mapped[list["User"]] = relationship(secondary=chat_members, back_populates="chats")
     messages: Mapped[list["Message"]] = relationship(back_populates="chat", cascade="all, delete-orphan")
@@ -138,6 +140,43 @@ class PokerTable(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     seats: Mapped[list["PokerSeat"]] = relationship(back_populates="table", cascade="all, delete-orphan")
+
+
+class Reminder(Base):
+    """Напоминание из «Заметок»: в remind_at юзеру прилетает пуш и сообщение
+    «⏰ …» в его личный чат. message_id — карточка `/reminder` в Заметках
+    (для отмены и пометки «сработало»)."""
+    __tablename__ = "reminders"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    text: Mapped[str] = mapped_column(String(500))
+    remind_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    fired: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class SeasonResult(Base):
+    """Итог сезона Гандолиума: снапшот финальной таблицы на момент закрытия
+    месяца (ники меняются, привязки отвязываются — а история должна стоять).
+    place=1..N по газу; топ-3 открывают рамки gold/silver/bronze, первое
+    место — титул «Чемпион <месяца>»."""
+    __tablename__ = "season_results"
+    __table_args__ = (UniqueConstraint("season", "user_id", name="uq_season_user"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    season: Mapped[str] = mapped_column(String(7), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    place: Mapped[int] = mapped_column(Integer)
+    username: Mapped[str] = mapped_column(String(50))
+    gas: Mapped[int] = mapped_column(Integer, default=0)
+    level: Mapped[int] = mapped_column(Integer, default=1)
+    quests_done: Mapped[int] = mapped_column(Integer, default=0)
+    anti_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class PushToken(Base):

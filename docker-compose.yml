@@ -33,6 +33,9 @@ services:
       SECRET_KEY: "${SECRET_KEY:-change-me-in-production-please}"
     volumes:
       - uploads:/app/uploads
+      # Ночные дампы БД (app/backups.py). ОТДЕЛЬНЫЙ том, НЕ uploads:
+      # uploads раздаётся статикой публично, а дамп — это вся переписка.
+      - backups:/app/backups
       # Bind-mount the web PWA bundle from the host so deploying a new build
       # is just `scp` of fresh files — no image rebuild needed.
       - ./server/web:/app/web
@@ -43,3 +46,4 @@ services:
 volumes:
   pgdata:
   uploads:
+  backups:

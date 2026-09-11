@@ -101,6 +101,10 @@ async def reject_user(
     user = await db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    # Reject — только для заявок. Промах по id действующего юзера снёс бы
+    # его каскадом вместе с сообщениями и архивом сезонов.
+    if user.is_approved:
+        raise HTTPException(status_code=400, detail="Юзер уже одобрен — отклонять поздно")
 
     await db.delete(user)
     await db.commit()

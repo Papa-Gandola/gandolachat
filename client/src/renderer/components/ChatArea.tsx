@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ChatOut, MessageOut, UserOut, chatApi, dotaApi } from "../services/api";
+import { ChatOut, MessageOut, UserOut, chatApi, dotaApi, notesApi } from "../services/api";
 import { wsService } from "../services/ws";
 import { playMessageSound } from "../services/sounds";
 import EmojiPicker from "./EmojiPicker";
@@ -49,6 +49,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
   const [dragOver, setDragOver] = useState(false);
   const dragCounterRef = useRef(0);
   const [showEmoji, setShowEmoji] = useState(false);
+  const [showReminderModal, setShowReminderModal] = useState(false);
   const [hoverEmoji, setHoverEmoji] = useState("😊");
   const RANDOM_EMOJI = ["😊", "😂", "🤣", "😍", "🥰", "😎", "🤔", "😭", "🥺", "🤡", "💀", "🗿", "🔥", "💯", "👻", "🤓", "🫠", "🤯", "😈", "🥴"];
   const [previewImage, setPreviewImage] = useState<string | null>(null);
@@ -815,6 +816,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
   }
 
   function getChatTitle() {
+    if (chat.is_notes) return chat.name || "Заметки";
     if (chat.is_group) return chat.name;
     const other = chat.members.find((m) => m.id !== currentUser.id);
     return other?.username || "Unknown";
@@ -974,7 +976,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
           <button style={s.headerBtn} title="Поиск" onClick={() => setShowSearch(!showSearch)}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           </button>
-          <button style={s.headerBtn} title="Звонок" onClick={onStartCall}>
+          <button style={{ ...s.headerBtn, ...(chat.is_notes ? { display: "none" } : {}) }} title="Звонок" onClick={onStartCall}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M6.6 10.8a15.4 15.4 0 006.6 6.6l2.2-2.2a1 1 0 011.1-.2 11.5 11.5 0 003.6.7 1 1 0 011 1V21a1 1 0 01-1 1A17 17 0 012 5a1 1 0 011-1h3.5a1 1 0 011 1c0 1.25.2 2.45.7 3.6a1 1 0 01-.2 1.1L6.6 10.8z"/>
             </svg>
@@ -1240,6 +1242,15 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
                             try { qp = JSON.parse(msg.content.slice(12)); } catch { /* покажем как текст */ }
                             if (qp) {
                               return <QuestCardMsg payload={qp} isNeo={isNeo} isMine={isMine} senderName={msg.sender_username} />;
+                            }
+                          }
+                          // Карточка напоминания — только в «Заметках»
+                          // (в чужих чатах маркер остаётся текстом: анти-спуф).
+                          if (chat.is_notes && msg.content.startsWith("/reminder ")) {
+                            let rp: { id: number; text: string; remind_at: string; fired?: boolean } | null = null;
+                            try { rp = JSON.parse(msg.content.slice(10)); } catch { /* текстом */ }
+                            if (rp) {
+                              return <ReminderCard payload={rp} isNeo={isNeo} isMine={isMine} />;
                             }
                           }
                           const callMatch = msg.content.match(/^\/call_record (completed|missed|declined|cancelled)\|(\d+)\|(\d+)\|(\d+)$/);
@@ -1695,6 +1706,9 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
       })()}
       <form onSubmit={sendMessage} style={{ ...s.inputBar, ...(chat.is_group && chat.allow_all_write === false && chat.created_by !== currentUser.id ? { display: "none" } : {}) }}>
         <button type="button" style={s.attachBtn} onClick={() => fileRef.current?.click()} title="Прикрепить файл">+</button>
+        {chat.is_notes && (
+          <button type="button" style={s.attachBtn} onClick={() => setShowReminderModal(true)} title="Напоминание">⏰</button>
+        )}
         <input type="file" multiple ref={fileRef} style={{ display: "none" }} onChange={handleFileInput} />
         <button
           type="button"
@@ -1763,6 +1777,130 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
           disabled={pendingAttachments.length > 0 || !text.trim()}
         >{isNeo ? "SEND" : "➤"}</button>
       </form>
+
+      {showReminderModal && (
+        <ReminderModal isNeo={isNeo} onClose={() => setShowReminderModal(false)} />
+      )}
+    </div>
+  );
+}
+
+// «Заметки»: модалка создания напоминания — текст + пресеты времени/своё.
+function ReminderModal({ isNeo, onClose }: { isNeo: boolean; onClose: () => void }) {
+  const [text, setText] = useState("");
+  const [custom, setCustom] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function create(at: Date) {
+    if (!text.trim()) { setErr("Напиши текст напоминания"); return; }
+    if (at.getTime() <= Date.now()) { setErr("Время уже прошло"); return; }
+    setBusy(true);
+    setErr("");
+    try {
+      await notesApi.createReminder(text.trim(), at.toISOString());
+      onClose(); // карточка прилетит по WS
+    } catch (e: any) {
+      setErr(e.response?.data?.detail || "Не получилось — попробуй ещё раз");
+      setBusy(false);
+    }
+  }
+
+  const presets: Array<[string, () => Date]> = [
+    ["Через 30 минут", () => new Date(Date.now() + 30 * 60000)],
+    ["Через час", () => new Date(Date.now() + 60 * 60000)],
+    ["Через 3 часа", () => new Date(Date.now() + 180 * 60000)],
+    ["Завтра в 10:00", () => {
+      const d = new Date();
+      d.setDate(d.getDate() + 1);
+      d.setHours(10, 0, 0, 0);
+      return d;
+    }],
+  ];
+
+  const box: React.CSSProperties = {
+    width: "min(400px, calc(100vw - 48px))", background: "var(--bg-primary)",
+    border: `1px solid ${isNeo ? "var(--accent)" : "var(--border)"}`,
+    borderRadius: isNeo ? 0 : 12, padding: 18,
+    ...(isNeo ? { fontFamily: "var(--font-mono)" } : {}),
+  };
+  const btn: React.CSSProperties = {
+    padding: "8px 10px", borderRadius: isNeo ? 0 : 6, border: "1px solid var(--border)",
+    background: "var(--bg-secondary)", color: "var(--text-primary)", cursor: "pointer", fontSize: 12.5,
+  };
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1500 }}
+      onClick={onClose}
+    >
+      <div style={box} onClick={(e) => e.stopPropagation()}>
+        <div style={{ color: "var(--text-header)", fontWeight: 700, fontSize: 15, marginBottom: 12 }}>
+          {isNeo ? "// НАПОМИНАНИЕ" : "⏰ Напоминание"}
+        </div>
+        <input
+          autoFocus
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="О чём напомнить?"
+          maxLength={500}
+          style={{ width: "100%", boxSizing: "border-box", padding: "9px 11px", borderRadius: isNeo ? 0 : 6, border: "1px solid var(--border)", background: "var(--bg-input)", color: "var(--text-primary)", fontSize: 13, marginBottom: 12 }}
+        />
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+          {presets.map(([label, fn]) => (
+            <button key={label} disabled={busy} style={btn} onClick={() => create(fn())}>{label}</button>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <input
+            type="datetime-local"
+            value={custom}
+            onChange={(e) => setCustom(e.target.value)}
+            style={{ flex: 1, padding: "7px 9px", borderRadius: isNeo ? 0 : 6, border: "1px solid var(--border)", background: "var(--bg-input)", color: "var(--text-primary)", fontSize: 12.5 }}
+          />
+          <button
+            disabled={busy || !custom}
+            style={{ ...btn, background: "var(--accent, #5865f2)", color: isNeo ? "#0a0a0a" : "#fff", border: "none", fontWeight: 700 }}
+            onClick={() => custom && create(new Date(custom))}
+          >
+            Создать
+          </button>
+        </div>
+        {err && <div style={{ color: "#ed4245", fontSize: 12, marginTop: 10 }}>{err}</div>}
+      </div>
+    </div>
+  );
+}
+
+// Карточка напоминания в «Заметках»: текст, срок, отмена до срабатывания.
+function ReminderCard({ payload, isNeo, isMine }: {
+  payload: { id: number; text: string; remind_at: string; fired?: boolean };
+  isNeo: boolean;
+  isMine: boolean;
+}) {
+  const at = new Date(payload.remind_at);
+  const when = at.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const fired = !!payload.fired;
+  const edge = fired ? "var(--text-muted)" : "var(--accent, #5865f2)";
+  return (
+    <div style={{
+      border: `1px solid ${edge}`, borderRadius: isNeo ? 0 : 8, padding: "8px 12px",
+      display: "flex", flexDirection: "column", gap: 4, minWidth: 180,
+      ...(isNeo ? { fontFamily: "var(--font-mono)" } : {}),
+    }}>
+      <span style={{ fontSize: 11, fontWeight: 700, color: edge }}>
+        {fired ? "✓ сработало" : `⏰ на ${when}`}
+      </span>
+      <span style={{ fontSize: 13.5, color: isNeo && isMine ? "#0a0a0a" : isMine ? "#fff" : "var(--text-primary)" }}>
+        {payload.text}
+      </span>
+      {!fired && (
+        <button
+          style={{ alignSelf: "flex-start", marginTop: 2, background: "none", border: "none", cursor: "pointer", fontSize: 11, color: edge, textDecoration: "underline", padding: 0 }}
+          onClick={() => notesApi.cancelReminder(payload.id).catch(() => {})}
+        >
+          отменить
+        </button>
+      )}
     </div>
   );
 }
@@ -1939,6 +2077,61 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
   const openCompendium = () => {
     window.dispatchEvent(new CustomEvent("set-app-mode", { detail: { mode: "compendium" } }));
   };
+
+  // Финал сезона: карточка-подиум 🥇🥈🥉 (постится от имени чемпиона).
+  if (kind === "season_final") {
+    const podium: Array<{ place: number; username: string; gas: number; level: number; quests_done: number }> =
+      payload.podium || [];
+    const medals: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
+    const placeColor = (place: number) =>
+      darkOnLime ? "#0a0a0a"
+        : place === 1 ? GOLD
+        : place === 2 ? "#c0c6cf"
+        : "#cd7f32";
+    return (
+      <div
+        onClick={openCompendium}
+        title="Открыть Гандолиум"
+        style={{
+          padding: "10px 12px",
+          background: cardBg,
+          border: `1px solid ${darkOnLime ? "rgba(0,0,0,0.55)" : GOLD}`,
+          borderLeft: `3px solid ${darkOnLime ? "rgba(0,0,0,0.55)" : GOLD}`,
+          borderRadius: isNeo ? 0 : 8,
+          margin: "4px 0",
+          maxWidth: 380,
+          cursor: "pointer",
+        }}
+      >
+        <div style={{ ...mono, fontWeight: 800, fontSize: 12.5, letterSpacing: "0.06em", color: darkOnLime ? "#0a0a0a" : GOLD }}>
+          🏆 ИТОГИ СЕЗОНА
+        </div>
+        <div style={{ ...mono, color: subColor, fontSize: 12, marginTop: 2 }}>
+          Сезон {payload.season_name || payload.season} закрыт · игроков: {payload.players ?? podium.length}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 8 }}>
+          {podium.map((p) => (
+            <div key={p.place} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
+              <span style={{ ...mono, fontSize: p.place === 1 ? 14 : 13, fontWeight: 800, color: placeColor(p.place) }}>
+                {medals[p.place] || p.place} {p.username}
+                {p.place === 1 && (
+                  <span style={{ color: titleGold, fontSize: 11, marginLeft: 6 }}>
+                    титул «Чемпион {payload.season_name || ""}»
+                  </span>
+                )}
+              </span>
+              <span style={{ ...mono, fontSize: 12.5, fontWeight: 800, color: gasColor, whiteSpace: "nowrap" }}>
+                {p.gas} ⛽ · ур. {p.level}
+              </span>
+            </div>
+          ))}
+        </div>
+        <div style={{ ...mono, fontSize: 11.5, color: subColor, marginTop: 8 }}>
+          Подиум получил рамки, полная таблица — в архиве Гандолиума
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

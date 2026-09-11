@@ -40,6 +40,13 @@ export function CompTitle({ user, size = 11, center }: { user?: Pick<UserOut, "c
   );
 }
 
+// Подиумные рамки финала сезона (место 1/2/3 в любом сезоне).
+export const PODIUM_FRAMES: Record<string, { color: string; glow: string; label: string }> = {
+  gold:   { color: "#ffd24a", glow: "rgba(255,210,74,0.5)",  label: "🥇 Золото" },
+  silver: { color: "#c0c6cf", glow: "rgba(192,198,207,0.5)", label: "🥈 Серебро" },
+  bronze: { color: "#cd7f32", glow: "rgba(205,127,50,0.5)",  label: "🥉 Бронза" },
+};
+
 // Стиль рамки аватарки. animated дополняется css-классом comp-frame-animated
 // (keyframes живут в global.css — inline-стили анимацию не умеют).
 export function frameStyle(u?: Pick<UserOut, "comp_frame"> | null): React.CSSProperties {
@@ -48,6 +55,10 @@ export function frameStyle(u?: Pick<UserOut, "comp_frame"> | null): React.CSSPro
   }
   if (u?.comp_frame === "animated") {
     return { border: "2.5px solid #c6ff3d" }; // цвет крутит css-анимация
+  }
+  const podium = u?.comp_frame ? PODIUM_FRAMES[u.comp_frame] : undefined;
+  if (podium) {
+    return { border: `2.5px solid ${podium.color}`, boxShadow: `0 0 12px ${podium.glow}` };
   }
   return {};
 }

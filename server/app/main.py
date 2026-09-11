@@ -50,6 +50,35 @@ async def lifespan(app: FastAPI):
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(cleanup_expired_messages, "interval", hours=1)
+    # Финал сезона: 1-го числа в 12:00 МСК (09:00 UTC) закрываем прошлый
+    # месяц — снапшот таблицы, карточка-подиум, титул чемпиона. Полдень —
+    # зазор для parse-рецеков и ночных даунтаймов OpenDota. Идемпотентно.
+    # Джобстор in-memory, поэтому misfire_grace спасает только живой
+    # процесс; рестарт поверх крона страхует прогон при старте ниже
+    # (внутри finalize_season гард: 1-го числа до полудня МСК — рано).
+    from app.compendium import finale as finale_mod
+    scheduler.add_job(
+        finale_mod.finalize_season, "cron", day=1, hour=9, minute=0,
+        misfire_grace_time=20 * 3600, coalesce=True, max_instances=1,
+    )
+    scheduler.add_job(
+        finale_mod.finalize_season, "date",
+        run_date=datetime.now(timezone.utc),
+        misfire_grace_time=3600,
+    )
+    # Ночной бэкап базы: 04:00 МСК (01:00 UTC), храним последние 14 дампов.
+    # misfire_grace: если сервер спал в 4 утра — догоняем в течение дня.
+    from app import backups as backups_mod
+    scheduler.add_job(
+        backups_mod.run_backup, "cron", hour=1, minute=0,
+        misfire_grace_time=12 * 3600, coalesce=True, max_instances=1,
+    )
+    # Напоминания из «Заметок»: раз в 30с постим созревшие + Web Push.
+    from app import notes as notes_mod
+    scheduler.add_job(
+        notes_mod.fire_due_reminders, "interval",
+        seconds=30, max_instances=1, coalesce=True,
+    )
     # Зеркало APK: первый прогон сразу при старте (next_run_time=now),
     # дальше проверка раз в 30 минут — новый релиз mobile-latest подтянется
     # сам без передеплоя.
@@ -117,6 +146,8 @@ app.include_router(poker.router)
 app.include_router(dota.router)
 app.include_router(compendium.router)
 app.include_router(apk_mirror.router)
+from app import notes as _notes
+app.include_router(_notes.router)
 
 
 @app.websocket("/ws")

@@ -86,6 +86,7 @@ class ChatOut(BaseModel):
     description: str | None = None
     admin_ids: list[int] = []
     compendium_enabled: bool = False
+    is_notes: bool = False
 
     model_config = {"from_attributes": True}
 

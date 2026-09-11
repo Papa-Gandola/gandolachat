@@ -66,7 +66,25 @@ export interface ChatOut {
   description?: string | null;
   admin_ids?: number[];
   compendium_enabled?: boolean;
+  is_notes?: boolean;
 }
+
+export interface ReminderOut {
+  id: number;
+  text: string;
+  remind_at: string;
+}
+
+export const notesApi = {
+  open: () => api.get<ChatOut>("/api/chats/notes"),
+  createReminder: (text: string, remindAtIso: string) =>
+    api.post<ReminderOut & { message_id: number; chat_id: number }>("/api/notes/reminders", {
+      text,
+      remind_at: remindAtIso,
+    }),
+  listReminders: () => api.get<ReminderOut[]>("/api/notes/reminders"),
+  cancelReminder: (id: number) => api.delete(`/api/notes/reminders/${id}`),
+};
 
 export interface ChatStats {
   media_count: number;
@@ -129,6 +147,7 @@ export interface CompendiumTrophy {
   quest_id: string;
   name: string;
   cat: string;
+  desc?: string;
   gas: number;
   completed_at: string;
   title?: string;
@@ -143,6 +162,25 @@ export interface CompendiumCosmetics {
   earned_titles: string[];
   palette: string[];
   unlocks: Record<string, number>;
+  // Рамки за подиум финала сезона (место 1/2/3 в любом сезоне)
+  podium_frames?: { gold: boolean; silver: boolean; bronze: boolean };
+}
+
+// Архив закрытых сезонов (снапшот финальной таблицы)
+export interface SeasonArchiveRow {
+  place: number;
+  user_id: number;
+  username: string;
+  gas: number;
+  level: number;
+  quests_done: number;
+  anti_count: number;
+}
+
+export interface SeasonArchive {
+  season: string;       // "2026-08"
+  season_name: string;  // «августа»
+  rows: SeasonArchiveRow[];
 }
 
 export interface CompendiumMe {
@@ -190,6 +228,7 @@ export const compendiumApi = {
   updateCosmetics: (data: { badge?: boolean; title?: string; color?: string; frame?: string }) =>
     api.patch<CompendiumCosmetics>("/api/compendium/cosmetics", data),
   season: () => api.get<{ season: string; rows: CompendiumSeasonRow[]; me: number }>("/api/compendium/season"),
+  seasons: () => api.get<SeasonArchive[]>("/api/compendium/seasons"),
   user: (userId: number) =>
     api.get<{ user_id: number; username: string; season: string; gas: number; level: number; trophies: CompendiumTrophy[]; rank_tier: number | null; leaderboard_rank: number | null }>(
       `/api/compendium/user/${userId}`

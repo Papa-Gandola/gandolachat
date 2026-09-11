@@ -22,6 +22,17 @@ Notifications.setNotificationHandler({
     // and the call_signal WS event drives the modal anyway. Users mute chats
     // to silence chatter, not to dodge phone calls.
     const isCall = data.type === "call";
+    // Напоминания из «Заметок» показываем ВСЕГДА, даже в форграунде: человек
+    // ставил будильник — он должен сработать заметно, а не утонуть в чате.
+    if (data.type === "reminder") {
+      return {
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+        shouldShowBanner: true,
+        shouldShowList: true,
+      } as unknown as Notifications.NotificationBehavior;
+    }
     if (isMuted && !isCall) {
       return {
         shouldShowAlert: false,
