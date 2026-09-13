@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     # 20 минут держат ~15-20 привязанных игроков в бесплатном лимите OpenDota
     # (2000 запросов/день) вместе с допарсом и ежечасными рангами.
     DOTA_POLL_MINUTES: int = 20
+    # Офсайт-копия ночного дампа по WebDAV (Яндекс.Диск: https://webdav.yandex.ru
+    # + логин + «пароль приложения»). Не заданы — выгрузка выключена.
+    BACKUP_WEBDAV_URL: str | None = None
+    BACKUP_WEBDAV_USER: str | None = None
+    BACKUP_WEBDAV_PASSWORD: str | None = None
 
     class Config:
         env_file = ".env"
