@@ -75,7 +75,10 @@ def _run_backup_sync() -> None:
     print(f"[backup] ok: {final.name} ({size // 1024} KiB), хранится {min(len(dumps), KEEP)} шт.")
 
     # Офсайт-копия: локальные дампы умирают вместе с VPS (блокировка/
-    # изъятие) — выгружаем на WebDAV, если настроен. Ошибка выгрузки не
+    # изъятие) — выгружаем на WebDAV, если настроен. Хозяин не хочет
+    # российские сервисы: рекомендованный приёмник — Koofr (ЕС, 10 ГБ
+    # бесплатно, https://app.koofr.net/dav/Koofr + app-пароль); подойдёт
+    # любой WebDAV (pCloud, Nextcloud...). Ошибка выгрузки не
     # роняет бэкап: локальный дамп уже на месте.
     try:
         _offsite_sync(final)
@@ -96,8 +99,9 @@ def _webdav_client() -> "httpx.Client":
 def _offsite_sync(dump: Path) -> None:
     """PUT свежего дампа на WebDAV + удалённая ротация (KEEP новейших).
 
-    Рассчитано на Яндекс.Диск (https://webdav.yandex.ru + «пароль
-    приложения»), но подойдёт любой WebDAV: Nextcloud, Koofr и т.п.
+    Приёмник — любой WebDAV. Рекомендуется НЕроссийский (решение
+    хозяина): Koofr (app.koofr.net/dav/Koofr + app-пароль, 10 ГБ
+    бесплатно), pCloud, Nextcloud; Яндекс.Диск тоже работал бы.
     Имена дампов содержат таймстамп — сортировка по имени = по времени."""
     url = (settings.BACKUP_WEBDAV_URL or "").rstrip("/")
     if not url:

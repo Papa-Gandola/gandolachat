@@ -133,9 +133,9 @@ print-логи видны в `docker compose logs` с опозданием (не
   ОТДЕЛЬНЫЙ том `backups:/app/backups` (НЕ uploads — тот публичен!),
   ротация 14 шт. **Офсайт**: при заданных BACKUP_WEBDAV_URL/USER/
   PASSWORD (compose из .env или server/.env) свежий дамп улетает PUT-ом
-  на WebDAV (Яндекс.Диск: webdav.yandex.ru + пароль приложения) +
-  удалённая ротация KEEP через PROPFIND; httpx IPv4, ошибка выгрузки
-  не роняет локальный бэкап. pg_dump-16 в Dockerfile КОПИРУЕТСЯ из образа
+  на любой WebDAV + удалённая ротация KEEP через PROPFIND; httpx IPv4,
+  ошибка выгрузки не роняет локальный бэкап. Приёмник — НЕроссийский
+  (решение хозяина): Koofr app.koofr.net/dav/Koofr + app-пароль. pg_dump-16 в Dockerfile КОПИРУЕТСЯ из образа
   postgres:16 (multi-stage + ldd-сбор библиотек БЕЗ libc, обёртки с
   LD_LIBRARY_PATH в /usr/local/bin) — PGDG из РФ шаток, а главное
   плавающий python:3.12-slim уехал на trixie и bookworm-PGDG стал
