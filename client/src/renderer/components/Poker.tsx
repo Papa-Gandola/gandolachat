@@ -755,10 +755,11 @@ function LiveTableLayout({ table, game, currentUserId, isNeo }: {
 function CardView({ code, isNeo, small, large }: { code: string | null; isNeo: boolean; small?: boolean; large?: boolean }) {
   // Three size buckets. small = player hole cards in tile, normal = pre-game placeholder,
   // large = community cards on the felt where suits need to be clearly visible.
-  const w = large ? 64 : small ? 40 : 50;
-  const h = large ? 92 : small ? 58 : 72;
-  const rankSize = large ? 22 : small ? 14 : 18;
-  const suitSize = large ? 28 : small ? 18 : 22;
+  // Подросли на ~15% по просьбе Гандолы («увеличить карты немного»)
+  const w = large ? 72 : small ? 46 : 56;
+  const h = large ? 104 : small ? 66 : 80;
+  const rankSize = large ? 24 : small ? 16 : 20;
+  const suitSize = large ? 30 : small ? 20 : 24;
   if (!code) {
     return (
       <div style={{
@@ -770,7 +771,9 @@ function CardView({ code, isNeo, small, large }: { code: string | null; isNeo: b
       }}/>
     );
   }
-  const rank = code.slice(0, code.length - 1);
+  // Движок хранит десятку как "T" — людям привычнее «10»
+  const rawRank = code.slice(0, code.length - 1);
+  const rank = rawRank === "T" ? "10" : rawRank;
   const suit = code.slice(-1);
   const isRed = suit === "h" || suit === "d";
   const suitChar = { s: "♠", h: "♥", d: "♦", c: "♣" }[suit] || "?";
