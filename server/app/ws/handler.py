@@ -239,6 +239,12 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                             "emoji": emoji,
                         })
 
+            elif event == "dota_client_presence":
+                # Десктоп сам увидел запущенный dota2.exe (или его закрытие).
+                # Работает при стим-невидимке; наша невидимка уважается внутри.
+                from app import steam_presence as _sp
+                await _sp.set_client_presence(user_id, bool(data.get("running")), db)
+
             elif event == "mark_read":
                 chat_id = data.get("chat_id")
                 msg_id = data.get("message_id")

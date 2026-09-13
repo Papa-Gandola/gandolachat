@@ -131,7 +131,11 @@ print-логи видны в `docker compose logs` с опозданием (не
   `uploads/apk/` синк не затирает (обновит только скачав новый целиком).
 - `app/backups.py` — ночные дампы БД: 04:00 МСК `pg_dump -Fc` в
   ОТДЕЛЬНЫЙ том `backups:/app/backups` (НЕ uploads — тот публичен!),
-  ротация 14 шт., pg_dump-16 в Dockerfile КОПИРУЕТСЯ из образа
+  ротация 14 шт. **Офсайт**: при заданных BACKUP_WEBDAV_URL/USER/
+  PASSWORD (compose из .env или server/.env) свежий дамп улетает PUT-ом
+  на WebDAV (Яндекс.Диск: webdav.yandex.ru + пароль приложения) +
+  удалённая ротация KEEP через PROPFIND; httpx IPv4, ошибка выгрузки
+  не роняет локальный бэкап. pg_dump-16 в Dockerfile КОПИРУЕТСЯ из образа
   postgres:16 (multi-stage + ldd-сбор библиотек БЕЗ libc, обёртки с
   LD_LIBRARY_PATH в /usr/local/bin) — PGDG из РФ шаток, а главное
   плавающий python:3.12-slim уехал на trixie и bookworm-PGDG стал
@@ -162,9 +166,16 @@ print-логи видны в `docker compose logs` с опозданием (не
   drop_user; перед публикацией опроса состав пересекается с актуальным
   visible-набором — гонка тумблера с летящим опросом). Ошибка Steam —
   состав НЕ трогаем (не мигать). Без STEAM_API_KEY джоба спит.
+  ВТОРОЙ ИСТОЧНИК: десктоп детектит процесс dota2.exe (Electron main,
+  tasklist раз в 30с, только win32) и шлёт WS dota_client_presence с
+  хартбитом 60с — сервер держит отметку с TTL 180с (_client_until) и
+  мержит со Steam-набором; работает при СТИМ-невидимке, наша невидимка
+  уважается (проверка на set + drop_user чистит оба источника; prune
+  протухших — в начале poll_presence, живёт и без STEAM_API_KEY).
   КЛИЕНТЫ: хендлер dota_presence перевешивается initPresence()/
   initDotaPresence() при каждом коннекте — логаут стирает ВСЕ
-  WS-хендлеры (тот же класс бага, что чинили в webrtc.init).
+  WS-хендлеры (тот же класс бага, что чинили в webrtc.init); десктоп
+  переотправляет клиентскую отметку на _ws_open.
 
 ### Гандолиум (компендиум) — `app/compendium/`
 

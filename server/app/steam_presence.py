@@ -22,12 +22,55 @@ from app.ws.manager import manager
 
 PRESENCE_POLL_SEC = 120
 DOTA_GAME_ID = "570"
+CLIENT_TTL_SEC = 180  # хартбит десктопа раз в 60с — 3 пропуска и отметка гаснет
 
 _playing: set[int] = set()
+# Второй источник: десктоп сам видит запущенный dota2.exe и шлёт
+# dota_client_presence (работает при стим-невидимке). user_id → дедлайн.
+_client_until: dict[int, float] = {}
+
+
+def _client_alive() -> set[int]:
+    import time
+    now = time.monotonic()
+    return {uid for uid, t in _client_until.items() if t > now}
 
 
 def playing_ids() -> list[int]:
-    return sorted(_playing)
+    return sorted(set(_playing) | _client_alive())
+
+
+async def set_client_presence(user_id: int, running: bool, db) -> None:
+    """Отметка «Дота запущена на компе» от самого клиента. Невидимка
+    уважается: у выключивших показ отметка игнорируется."""
+    import time
+    if running:
+        from sqlalchemy import select as _select
+        vis = await db.execute(
+            _select(User.dota_presence_visible).where(User.id == user_id)
+        )
+        if not vis.scalar_one_or_none():
+            running = False
+    before = playing_ids()
+    if running:
+        _client_until[user_id] = time.monotonic() + CLIENT_TTL_SEC
+    else:
+        _client_until.pop(user_id, None)
+    if playing_ids() != before:
+        await _broadcast()
+
+
+async def _prune_client() -> None:
+    """Протухшие клиентские отметки (закрыл Гандолу вместе с Дотой —
+    хартбиты кончились). Зовётся из джобы опроса, работает и БЕЗ
+    STEAM_API_KEY — клиентский источник живёт сам по себе."""
+    import time
+    now = time.monotonic()
+    expired = [uid for uid, t in _client_until.items() if t <= now]
+    if expired:
+        for uid in expired:
+            _client_until.pop(uid, None)
+        await _broadcast()
 
 
 async def _broadcast() -> None:
@@ -41,13 +84,16 @@ async def _broadcast() -> None:
 
 async def drop_user(user_id: int) -> None:
     """Невидимка включена — гасим значок сразу, не ждём опроса."""
-    if user_id in _playing:
-        _playing.discard(user_id)
+    changed = user_id in _playing or user_id in _client_alive()
+    _playing.discard(user_id)
+    _client_until.pop(user_id, None)
+    if changed:
         await _broadcast()
 
 
 async def poll_presence() -> None:
     global _playing
+    await _prune_client()
     if not settings.STEAM_API_KEY:
         return
     async with AsyncSessionLocal() as db:
