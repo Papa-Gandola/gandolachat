@@ -3,6 +3,7 @@ import * as KeepAwake from "expo-keep-awake";
 import { createContext, ReactNode, useContext, useEffect, useRef, useState } from "react";
 import { Animated, Dimensions, Modal, PanResponder, Platform, Pressable, StyleSheet, Text, Vibration, View, ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import InCallManager from "react-native-incall-manager";
 import { MediaStream, RTCView } from "react-native-webrtc";
 
 import { Avatar } from "../components/Avatar";
@@ -10,6 +11,18 @@ import { HangupIcon, MicIcon, MicOffIcon, PhoneIcon, VideoIcon, VideoOffIcon } f
 import { useTheme } from "../theme";
 import { UserOut, userApi } from "./api";
 import { useAuth } from "./AuthContext";
+import {
+  applyVolume,
+  DEFAULT_GAIN,
+  getAllVolumes,
+  loadCallAudio,
+  getVolume,
+  isSpeakerOn,
+  setSpeakerPref,
+  setVolume as persistVolume,
+  stepVolume,
+  volumeLabel,
+} from "./callAudio";
 import { startCallForegroundService, stopCallForegroundService } from "./callForegroundService";
 import { webrtcService } from "./webrtc";
 import { wsService } from "./ws";
@@ -76,6 +89,13 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const [activeCalls, setActiveCalls] = useState<Map<number, number[]>>(new Map());
   const [peerInfo, setPeerInfo] = useState<Map<number, PeerInfo>>(new Map());
   const [peerVideoOff, setPeerVideoOff] = useState<Set<number>>(new Set());
+  // Громкая связь и персональная громкость участников (см. callAudio.ts).
+  const [speakerOn, setSpeakerOn] = useState(isSpeakerOn());
+  const [volumes, setVolumes] = useState<Map<number, number>>(() => getAllVolumes());
+  // Трогал ли пользователь динамик В ЭТОМ звонке: если нет — включение
+  // своей камеры само переводит звук на громкую связь (с видео телефон
+  // держат перед собой, а не у уха). Ручной выбор не переигрываем.
+  const speakerTouchedRef = useRef(false);
   const activeRef = useRef(false);
   const ringRef = useRef<Audio.Sound | null>(null);
   // Ref-зеркала для WS-хендлеров (их замыкание живёт от первого рендера).
@@ -88,6 +108,16 @@ export function CallProvider({ children }: { children: ReactNode }) {
     userIdRef.current = user?.id ?? null;
   }, [user?.id]);
   const insets = useSafeAreaInsets();
+
+  // Сохранённые настройки звука (маршрут + персональные громкости) лежат в
+  // сторе: стартовое состояние взято из пустого кэша, поэтому после
+  // прогрева синхронизируем его один раз на запуск приложения.
+  useEffect(() => {
+    void loadCallAudio().then(() => {
+      setSpeakerOn(isSpeakerOn());
+      setVolumes(getAllVolumes());
+    });
+  }, []);
 
   // Секундомер звонка — для шапки и мини-бара свёрнутого режима.
   useEffect(() => {
@@ -408,6 +438,62 @@ export function CallProvider({ children }: { children: ReactNode }) {
     setIncoming(null);
   };
 
+  // Маршрут звука: пока идёт звонок, аудиосессией рулит InCallManager
+  // (андроидный AudioManager). Стартуем ТОЛЬКО на активном звонке, не на
+  // входящем: до «ответить» играет наш рингтон через expo-av, а
+  // IN_COMMUNICATION-режим его бы придушил.
+  useEffect(() => {
+    if (!inCall) return;
+    try {
+      InCallManager.start({ media: "audio" });
+      InCallManager.setForceSpeakerphoneOn(speakerOn);
+    } catch {
+      // Нет модуля (веб-стаб) — звук останется на системном маршруте
+    }
+    return () => {
+      try {
+        InCallManager.stop();
+      } catch {
+        // s'ok
+      }
+      speakerTouchedRef.current = false;
+    };
+    // speakerOn намеренно НЕ в зависимостях: переключение маршрута внутри
+    // звонка делает toggleSpeaker, перезапускать сессию ради этого нельзя.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inCall]);
+
+  // Персональная громкость: применяем при КАЖДОЙ смене состава и приходе
+  // дорожек. Аудиодорожка участника может появиться позже самого участника
+  // (аудио-старт, ренегосиация), поэтому одного раза на входе мало.
+  useEffect(() => {
+    if (!inCall) return;
+    for (const r of remotes) applyVolume(r.stream, volumes.get(r.userId) ?? getVolume(r.userId));
+  }, [inCall, remotes, volumes]);
+
+  const toggleSpeaker = () => {
+    const on = !speakerOn;
+    speakerTouchedRef.current = true;
+    setSpeakerOn(on);
+    void setSpeakerPref(on);
+    try {
+      InCallManager.setForceSpeakerphoneOn(on);
+    } catch {
+      // веб-стаб
+    }
+  };
+
+  /** −/+ громкости конкретного участника (шкала в callAudio). */
+  const changeVolume = (userId: number, dir: 1 | -1) => {
+    const cur = volumes.get(userId) ?? getVolume(userId);
+    const next = stepVolume(cur, dir);
+    if (next === cur) return;
+    setVolumes((prev) => new Map(prev).set(userId, next));
+    void persistVolume(userId, next);
+    const r = remotes.find((x) => x.userId === userId);
+    if (r) applyVolume(r.stream, next); // не ждём ре-рендера — слышно сразу
+  };
+
   const end = () => webrtcService.endCall();
   const toggleMute = () => {
     const m = !muted;
@@ -422,6 +508,16 @@ export function CallProvider({ children }: { children: ReactNode }) {
       if (!ok) return; // камеру не дали — остаёмся с аватаркой
       setVideoOff(false);
       sendVideoStatus(false);
+      // Включил камеру — телефон держат перед собой: сами уводим звук на
+      // громкую связь, если человек не выбирал маршрут руками в этом звонке.
+      if (!speakerTouchedRef.current && !speakerOn) {
+        setSpeakerOn(true);
+        try {
+          InCallManager.setForceSpeakerphoneOn(true);
+        } catch {
+          // веб-стаб
+        }
+      }
     } else {
       webrtcService.disableCamera();
       setVideoOff(true);
@@ -524,7 +620,12 @@ export function CallProvider({ children }: { children: ReactNode }) {
               </Text>
             </View>
           ) : (
-            <RemoteGrid tiles={remoteTiles} fallbackName={callName} />
+            <RemoteGrid
+              tiles={remoteTiles}
+              fallbackName={callName}
+              volumes={volumes}
+              onVolume={changeVolume}
+            />
           )}
 
           {/* Local PiP (draggable) */}
@@ -567,10 +668,19 @@ export function CallProvider({ children }: { children: ReactNode }) {
           </Pressable>
 
           {/* Controls */}
-          <View style={{ position: "absolute", left: 0, right: 0, bottom: 44, flexDirection: "row", justifyContent: "center", gap: 20 }}>
+          {/* gap поджат и разрешён перенос: с кнопкой динамика их до пяти,
+              на узком экране в один ряд по 20px уже не помещались */}
+          <View style={{ position: "absolute", left: 0, right: 0, bottom: 44, flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 12 }}>
             <CircleBtn bg={muted ? theme.colors.danger : "rgba(255,255,255,0.16)"} onPress={toggleMute}>
               {muted ? <MicOffIcon color="#fff" size={24} /> : <MicIcon color="#fff" size={24} />}
             </CircleBtn>
+            {/* Динамик ↔ разговорный. В вебе маршрутом звука рулит система —
+                кнопке там нечего делать. */}
+            {Platform.OS !== "web" && (
+              <CircleBtn bg={speakerOn ? theme.colors.online : "rgba(255,255,255,0.16)"} onPress={toggleSpeaker}>
+                <Text style={{ fontSize: 22 }}>{speakerOn ? "🔊" : "🔈"}</Text>
+              </CircleBtn>
+            )}
             <CircleBtn bg={videoOff ? theme.colors.danger : "rgba(255,255,255,0.16)"} onPress={toggleVideo}>
               {videoOff ? <VideoOffIcon color="#fff" size={24} /> : <VideoIcon color="#fff" size={24} />}
             </CircleBtn>
@@ -631,12 +741,27 @@ interface RemoteTileData {
 // Adaptive grid of remote video tiles for group calls. Layout depends on
 // the number of participants; single-remote falls through to a full-screen
 // tile so 1:1 calls look the same as before.
-function RemoteGrid({ tiles, fallbackName }: { tiles: RemoteTileData[]; fallbackName: string }) {
+function RemoteGrid({
+  tiles,
+  fallbackName,
+  volumes,
+  onVolume,
+}: {
+  tiles: RemoteTileData[];
+  fallbackName: string;
+  volumes: Map<number, number>;
+  onVolume: (userId: number, dir: 1 | -1) => void;
+}) {
   return (
     <View style={{ ...StyleSheet.absoluteFillObject, flexDirection: "row", flexWrap: "wrap" }}>
       {tiles.map((t, i) => (
         <View key={t.userId} style={[{ padding: tiles.length > 1 ? 1 : 0 }, tileSize(tiles.length, i)]}>
-          <RemoteTile tile={t} fallbackName={fallbackName} />
+          <RemoteTile
+            tile={t}
+            fallbackName={fallbackName}
+            gain={volumes.get(t.userId) ?? DEFAULT_GAIN}
+            onVolume={onVolume}
+          />
         </View>
       ))}
     </View>
@@ -656,13 +781,30 @@ function tileSize(count: number, idx: number): { width: ViewStyle["width"]; heig
   return { width: "33.3333%", height: "50%" };
 }
 
-function RemoteTile({ tile, fallbackName }: { tile: RemoteTileData; fallbackName: string }) {
+function RemoteTile({
+  tile,
+  fallbackName,
+  gain,
+  onVolume,
+}: {
+  tile: RemoteTileData;
+  fallbackName: string;
+  gain: number;
+  onVolume: (userId: number, dir: 1 | -1) => void;
+}) {
   const theme = useTheme();
   const { stream, info, videoOff, userId } = tile;
   const name = info?.username ?? fallbackName;
   const showVideo = !videoOff && stream.getVideoTracks().length > 0;
+  // Тап по участнику разворачивает его регулятор громкости прямо в подписи.
+  // Отдельную панель сюда не поставить: сверху шапка звонка и «свернуть»,
+  // снизу по центру — кнопки управления, а подпись живёт в свободном углу.
+  const [showVol, setShowVol] = useState(false);
   return (
-    <View style={{ flex: 1, backgroundColor: "#111", overflow: "hidden" }}>
+    <Pressable
+      onPress={() => setShowVol((v) => !v)}
+      style={{ flex: 1, backgroundColor: "#111", overflow: "hidden" }}
+    >
       {/* RTCView рендерим ВСЕГДА: в вебе (PWA) это <video>, через который
           играет и ЗВУК. Если рендерить его только при включённой камере,
           собеседник без камеры в PWA был бы НЕМЫМ (главная причина «плохих
@@ -694,25 +836,60 @@ function RemoteTile({ tile, fallbackName }: { tile: RemoteTileData; fallbackName
           />
         </View>
       )}
-      {/* Tile label — only shows in group calls (2+ remotes) since a single
-          full-screen tile already has the call header above. */}
+      {/* Подпись участника, она же регулятор его громкости по тапу.
+          Не-стопроцентная громкость видна и в свёрнутом виде — иначе
+          «почему он такой тихий» выяснялось бы методом тыка. */}
       <View
-        pointerEvents="none"
         style={{
           position: "absolute",
           left: 6,
           bottom: 6,
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 8,
           paddingHorizontal: 6,
-          paddingVertical: 2,
+          paddingVertical: 3,
           backgroundColor: "rgba(0,0,0,0.55)",
           borderRadius: 4,
         }}
       >
         <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: "#fff" }} numberOfLines={1}>
-          {name}
+          {gain === 0 ? `🔇 ${name}` : gain !== DEFAULT_GAIN ? `${name} · ${volumeLabel(gain)}` : name}
         </Text>
+        {showVol && (
+          <>
+            <VolBtn label="−" onPress={() => onVolume(userId, -1)} />
+            <Text
+              style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: "#fff", minWidth: 34, textAlign: "center" }}
+            >
+              {volumeLabel(gain)}
+            </Text>
+            <VolBtn label="+" onPress={() => onVolume(userId, 1)} />
+          </>
+        )}
       </View>
-    </View>
+    </Pressable>
+  );
+}
+
+/** Кнопка −/+ в подписи участника. Мелкая по площади, но с hitSlop:
+ *  пальцем по плитке 1/6 экрана иначе не попасть. */
+function VolBtn({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={10}
+      style={{
+        width: 22,
+        height: 22,
+        borderRadius: 11,
+        backgroundColor: "rgba(255,255,255,0.2)",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <Text style={{ color: "#fff", fontSize: 14, lineHeight: 16, fontWeight: "700" }}>{label}</Text>
+    </Pressable>
   );
 }
 
