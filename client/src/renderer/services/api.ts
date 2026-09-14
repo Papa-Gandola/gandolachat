@@ -287,6 +287,8 @@ export interface PollOptionOut {
   id: number;
   text: string;
   votes: number;
+  // Кто голосовал за вариант — mine каждое устройство считает само
+  voter_ids?: number[];
   mine: boolean;
   author: string | null; // у дописанных вариантов — кто добавил
 }

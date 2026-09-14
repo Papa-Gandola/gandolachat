@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update
 from datetime import datetime, timedelta, timezone
 import asyncio
+import re
 import time
 from app.models import Chat, Message, User, Reaction, read_receipts, chat_members
 from app.ws.manager import manager
@@ -651,7 +652,10 @@ async def handle_message(data: dict, sender_id: int, db: AsyncSession):
 
     # Карточки компендиума создаёт только поллер. Руками набитый /quest_card
     # отрисовался бы как настоящая ачивка — фейковые достижения режем на входе.
-    if content.startswith("/quest_card"):
+    if content.startswith("/quest_card") or re.match(r"^/poll \d+$", content):
+        # /poll — носитель опроса, создаётся ТОЛЬКО сервером (polls.py);
+        # рукописный маркер с СУЩЕСТВУЮЩИМ опросом этого чата рисовал бы
+        # вторую живую карточку от чужого имени (грабля №6, 4-е место)
         return
 
     result = await db.execute(
@@ -779,7 +783,7 @@ async def handle_edit_message(data: dict, user_id: int, db: AsyncSession):
 
     # Тот же щит, что и на новых сообщениях: карточку компендиума нельзя
     # получить и через «отправил безобидное — отредактировал в /quest_card».
-    if new_content.startswith("/quest_card"):
+    if new_content.startswith("/quest_card") or re.match(r"^/poll \d+$", new_content):
         return
 
     result = await db.execute(select(Message).where(Message.id == msg_id, Message.sender_id == user_id))
@@ -810,6 +814,14 @@ async def handle_delete_message(data: dict, user_id: int, db: AsyncSession):
         return
 
     chat_id = msg.chat_id
+    # Закреплённое? Каскад БД снесёт пин, но клиентам нужен свежий список —
+    # иначе плашка показывает удалённое до перезахода в чат
+    from app.models import PinnedMessage
+    was_pinned = (await db.execute(
+        select(PinnedMessage.id).where(
+            PinnedMessage.chat_id == chat_id, PinnedMessage.message_id == msg_id
+        ).limit(1)
+    )).first() is not None
     await db.delete(msg)
     await db.commit()
 
@@ -832,6 +844,13 @@ async def handle_delete_message(data: dict, user_id: int, db: AsyncSession):
         "message_id": msg_id,
         "chat_id": chat_id,
     })
+
+    if was_pinned:
+        try:
+            from app.api.polls import _broadcast_pins
+            await _broadcast_pins(db, chat_id)
+        except Exception as e:
+            print(f"[pins] broadcast after delete failed: {type(e).__name__}: {e}")
 
 
 async def handle_poker_action(data: dict, user_id: int, db: AsyncSession):

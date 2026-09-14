@@ -276,17 +276,8 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
     const onPollUpdated = (m: any) => {
       const p: PollOut | undefined = m?.poll;
       if (!p || p.chat_id !== chat.id) return;
-      setPolls((prev) => {
-        const old = prev[p.id];
-        const merged = {
-          ...p,
-          options: p.options.map((o) => ({
-            ...o,
-            mine: old?.options.find((x) => x.id === o.id)?.mine ?? false,
-          })),
-        };
-        return { ...prev, [p.id]: merged };
-      });
+      // mine считаем при рендере из voter_ids — бродкаст авторитетен
+      setPolls((prev) => ({ ...prev, [p.id]: p }));
     };
     const onChatPins = (m: any) => {
       if (m?.chat_id === chat.id && Array.isArray(m?.pins)) setPins(m.pins);
@@ -1342,7 +1333,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
                                 chatId={chat.id}
                                 isNeo={isNeo}
                                 isMine={isMine}
-                                canModerate={canPin}
+                                canModerate={chat.is_group && canPin}
                                 currentUserId={currentUser.id}
                                 onNeedLoad={loadPoll}
                                 onChanged={(pl) => setPolls((prev) => ({ ...prev, [pl.id]: pl }))}
@@ -2683,15 +2674,19 @@ function PollCardMsg({ poll, pollId, chatId, isNeo, isMine, canModerate, current
   }
 
   const total = Math.max(1, ...poll.options.map((o) => o.votes));
-  const act = async (fn: () => Promise<{ data: PollOut }>) => {
-    if (busy) return;
+  const votedMine = (o: { voter_ids?: number[]; mine: boolean }) =>
+    o.voter_ids ? o.voter_ids.includes(currentUserId) : o.mine;
+  const act = async (fn: () => Promise<{ data: PollOut }>): Promise<boolean> => {
+    if (busy) return false;
     setBusy(true);
     setErr("");
     try {
       const res = await fn();
       onChanged(res.data);
+      return true;
     } catch (e: any) {
       setErr(e.response?.data?.detail || "Не получилось");
+      return false;
     } finally {
       setBusy(false);
     }
@@ -2709,7 +2704,7 @@ function PollCardMsg({ poll, pollId, chatId, isNeo, isMine, canModerate, current
       <div style={{ ...mono, fontWeight: 700, fontSize: 14, color: titleColor, marginTop: 4 }}>{poll.question}</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 8 }}>
         {poll.options.map((o) => {
-          const pct = poll.total_voters ? Math.round((o.votes / Math.max(1, poll.total_voters)) * 100) : 0;
+          const mineOpt = votedMine(o);
           return (
             <div
               key={o.id}
@@ -2717,8 +2712,8 @@ function PollCardMsg({ poll, pollId, chatId, isNeo, isMine, canModerate, current
               style={{ cursor: poll.closed ? "default" : "pointer", opacity: busy ? 0.7 : 1 }}
             >
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12.5 }}>
-                <span style={{ ...mono, color: titleColor, fontWeight: o.mine ? 800 : 500 }}>
-                  {o.mine ? "☑ " : poll.closed ? "" : "☐ "}{o.text}
+                <span style={{ ...mono, color: titleColor, fontWeight: mineOpt ? 800 : 500 }}>
+                  {mineOpt ? "☑ " : poll.closed ? "" : "☐ "}{o.text}
                   {o.author && <span style={{ color: subColor, fontSize: 10.5 }}> · от {o.author}</span>}
                 </span>
                 <span style={{ ...mono, color: subColor, whiteSpace: "nowrap" }}>{o.votes}</span>
@@ -2737,7 +2732,9 @@ function PollCardMsg({ poll, pollId, chatId, isNeo, isMine, canModerate, current
               e.preventDefault();
               const t = addText.trim();
               if (!t) return;
-              act(() => pollsApi.addOption(poll.id, t)).then(() => { setAddText(""); setAddOpen(false); });
+              act(() => pollsApi.addOption(poll.id, t)).then((ok) => {
+                if (ok) { setAddText(""); setAddOpen(false); }
+              });
             }}
             style={{ display: "flex", gap: 6, marginTop: 8 }}
           >

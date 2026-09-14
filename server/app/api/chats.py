@@ -12,6 +12,9 @@ from app.schemas import ChatOut, UserOut, MessageOut, CreateGroupChat, AddMember
 from app.auth import get_current_user
 from app.ws.manager import manager
 from app.config import settings
+import re as _re_mod
+# Щит грабли №6 для подписи файла: /poll создаёт только сервер (polls.py)
+__re_poll = _re_mod.compile(r"^/poll \d+$")
 
 import json
 
@@ -603,7 +606,7 @@ async def upload_file(
     # Карточки компендиума создаёт только поллер — /quest_card в подписи файла
     # отрисовался бы как настоящая ачивка (тот же щит, что в WS-обработчике).
     clean_caption = caption.strip()
-    if clean_caption.startswith("/quest_card"):
+    if clean_caption.startswith("/quest_card") or __re_poll.match(clean_caption):
         clean_caption = ""
 
     msg = Message(

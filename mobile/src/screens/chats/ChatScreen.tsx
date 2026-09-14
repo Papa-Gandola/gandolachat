@@ -33,6 +33,7 @@ import { useAuth } from "../../services/AuthContext";
 import { useCall } from "../../services/CallContext";
 import { clearDraft, getDraft, setDraft as persistDraft } from "../../services/drafts";
 import { useMessages } from "../../services/useMessages";
+import { markerPreview } from "../../services/useChats";
 import { wsService } from "../../services/ws";
 import { useTheme } from "../../theme";
 
@@ -304,20 +305,8 @@ export function ChatScreen({ navigation, route }: Props) {
     const onPollUpdated = (m: { poll?: PollOut }) => {
       const p = m?.poll;
       if (!p || p.chat_id !== cid) return;
-      // mine в бродкасте пустой — мержим со своим прежним состоянием
-      setPolls((prev) => {
-        const old = prev[p.id];
-        return {
-          ...prev,
-          [p.id]: {
-            ...p,
-            options: p.options.map((o) => ({
-              ...o,
-              mine: old?.options.find((x) => x.id === o.id)?.mine ?? false,
-            })),
-          },
-        };
-      });
+      // mine считаем при рендере из voter_ids — бродкаст авторитетен
+      setPolls((prev) => ({ ...prev, [p.id]: p }));
     };
     const onChatPins = (m: { chat_id?: number; pins?: PinOut[] }) => {
       if (m?.chat_id === cid && Array.isArray(m?.pins)) setPins(m.pins);
@@ -800,7 +789,7 @@ export function ChatScreen({ navigation, route }: Props) {
             const t = pins[0];
             if (Platform.OS === "web") window.alert(`📌 ${t.sender_username}: ${t.content ?? t.file_name ?? ""}`);
             else Alert.alert(`📌 Закреплено (${pins.length})`,
-              pins.map((pn) => `• ${pn.sender_username}: ${(pn.content ?? pn.file_name ?? "").slice(0, 80)}`).join("\n"),
+              pins.map((pn) => `• ${pn.sender_username}: ${pinPreview(pn).slice(0, 80)}`).join("\n"),
               pins.length === 1
                 ? [{ text: "Открепить", onPress: () => togglePin(pins[0].message_id), style: "destructive" }, { text: "Ок" }]
                 : [{ text: "Ок" }]);
@@ -815,7 +804,7 @@ export function ChatScreen({ navigation, route }: Props) {
           <Text style={{ fontSize: 12 }}>📌</Text>
           <Text numberOfLines={1} style={{ flex: 1, fontFamily: theme.fonts.mono, fontSize: 11.5, color: theme.colors.inkDim }}>
             <Text style={{ color: theme.colors.inkMuted }}>{pins[0].sender_username}: </Text>
-            {pins[0].content ?? (pins[0].file_name ? `📎 ${pins[0].file_name}` : "")}
+            {pinPreview(pins[0])}
           </Text>
           {pins.length > 1 ? (
             <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted }}>+{pins.length - 1}</Text>
@@ -2083,6 +2072,11 @@ function ReminderSheet({ visible, onClose, theme }: {
 }
 
 
+function pinPreview(pn: PinOut): string {
+  const marker = pn.content ? markerPreview(pn.content) : null;
+  return marker ?? pn.content ?? (pn.file_name ? `📎 ${pn.file_name}` : "");
+}
+
 // ===== Опросы =====
 function PollCardMobile({ theme, mine, poll, pollId, chatId, meId, onNeedLoad, onChanged }: {
   theme: ThemeT;
@@ -2112,15 +2106,19 @@ function PollCardMobile({ theme, mine, poll, pollId, chatId, meId, onNeedLoad, o
   }
 
   const maxVotes = Math.max(1, ...poll.options.map((o) => o.votes));
-  const act = async (fn: () => Promise<{ data: PollOut }>) => {
-    if (busy) return;
+  const votedMine = (o: { voter_ids?: number[]; mine: boolean }) =>
+    o.voter_ids ? o.voter_ids.includes(meId) : o.mine;
+  const act = async (fn: () => Promise<{ data: PollOut }>): Promise<boolean> => {
+    if (busy) return false;
     setBusy(true);
     try {
       const res = await fn();
       onChanged(res.data);
+      return true;
     } catch (e) {
       if (Platform.OS === "web") window.alert(apiErrorMessage(e));
       else Alert.alert("Опрос", apiErrorMessage(e));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -2139,8 +2137,8 @@ function PollCardMobile({ theme, mine, poll, pollId, chatId, meId, onNeedLoad, o
           {poll.options.map((o) => (
             <Pressable key={o.id} disabled={poll.closed || busy} onPress={() => act(() => pollsApi.vote(poll.id, o.id))}>
               <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 8 }}>
-                <Text style={{ flex: 1, fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: o.mine ? "800" : "500", color: theme.colors.ink }}>
-                  {o.mine ? "☑ " : poll.closed ? "" : "☐ "}{o.text}
+                <Text style={{ flex: 1, fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: votedMine(o) ? "800" : "500", color: theme.colors.ink }}>
+                  {votedMine(o) ? "☑ " : poll.closed ? "" : "☐ "}{o.text}
                   {o.author ? <Text style={{ color: theme.colors.inkMuted, fontSize: 10 }}> · от {o.author}</Text> : null}
                 </Text>
                 <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11.5, color: theme.colors.inkMuted }}>{o.votes}</Text>
@@ -2164,7 +2162,9 @@ function PollCardMobile({ theme, mine, poll, pollId, chatId, meId, onNeedLoad, o
                 onPress={() => {
                   const t = addText.trim();
                   if (!t) return;
-                  act(() => pollsApi.addOption(poll.id, t)).then(() => { setAddText(""); setAddOpen(false); });
+                  act(() => pollsApi.addOption(poll.id, t)).then((ok) => {
+                    if (ok) { setAddText(""); setAddOpen(false); }
+                  });
                 }}
                 style={{ backgroundColor: theme.colors.accent, borderRadius: theme.radius.sm, paddingHorizontal: 12, justifyContent: "center" }}
               >

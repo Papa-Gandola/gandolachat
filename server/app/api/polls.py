@@ -2,9 +2,10 @@
 
 Опросы (требование хозяина — участники ДОПИСЫВАЮТ свои варианты):
 носитель — обычное сообщение `/poll {id}`, создаётся ТОЛЬКО сервером в
-одной транзакции с опросом. Клиент рендерит карточку по данным опроса и
-сверяет poll.chat_id с чатом — спуф `/poll 999` руками покажет просто
-текст (щит грабли №6 тут не нужен: маркер бесполезен без строки в БД).
+одной транзакции с опросом. Рукописный маркер режется щитами грабли №6
+(ws message/edit + caption файла): с СУЩЕСТВУЮЩИМ опросом чата он
+рисовал бы вторую живую карточку от чужого имени; несуществующий
+клиент и так показывает текстом (сверка poll.chat_id).
 Живые обновления — WS `poll_updated` с ПОЛНЫМ PollOut (просто и
 надёжно; опросы редкие, трафик копеечный).
 
@@ -20,6 +21,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select, delete, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -86,11 +88,11 @@ async def _poll_out(db: AsyncSession, poll: Poll, me_id: int) -> dict:
         select(PollVote.option_id, PollVote.user_id).where(PollVote.poll_id == poll.id)
     )
     votes = votes_res.all()
-    by_opt: dict[int, int] = {}
+    by_opt: dict[int, list[int]] = {}
     mine: set[int] = set()
     voters: set[int] = set()
     for oid, uid in votes:
-        by_opt[oid] = by_opt.get(oid, 0) + 1
+        by_opt.setdefault(oid, []).append(uid)
         voters.add(uid)
         if uid == me_id:
             mine.add(oid)
@@ -114,7 +116,11 @@ async def _poll_out(db: AsyncSession, poll: Poll, me_id: int) -> dict:
             {
                 "id": o.id,
                 "text": o.text,
-                "votes": by_opt.get(o.id, 0),
+                "votes": len(by_opt.get(o.id, [])),
+                # voter_ids — чтобы КАЖДОЕ устройство считало mine само:
+                # бродкаст с mine=false затирал галочку у второго девайса,
+                # и клик там РАЗВОРАЧИВАЛ действие (снимал голос)
+                "voter_ids": sorted(by_opt.get(o.id, [])),
                 "mine": o.id in mine,
                 # Автора показываем только у ДОПИСАННЫХ вариантов
                 "author": names.get(o.created_by) if o.created_by != poll.created_by else None,
@@ -125,13 +131,9 @@ async def _poll_out(db: AsyncSession, poll: Poll, me_id: int) -> dict:
 
 
 async def _broadcast_poll(db: AsyncSession, poll: Poll) -> None:
-    # me_id=0 — «ничей» снапшот: mine у получателей клиенты не берут из
-    # бродкаста, а мержат со своим прошлым состоянием? Нет — проще: клиент
-    # при poll_updated подставляет mine из СВОЕГО прежнего стейта только
-    # если сам не голосовал этим действием. Чтобы не мудрить, шлём без
-    # mine (все false) + отдельно голосовавшему возвращаем его PollOut
-    # ответом ручки. Клиент мержит: votes/options/closed из бродкаста,
-    # mine — локально.
+    # mine в бродкасте не значим (me_id=0): каждое устройство считает своё
+    # mine из voter_ids — иначе второй девайс терял галочку и клик там
+    # разворачивал действие.
     out = await _poll_out(db, poll, me_id=0)
     await manager.broadcast_to_chat(poll.chat_id, {"type": "poll_updated", "poll": out})
 
@@ -146,6 +148,10 @@ async def create_poll(
     chat = await _require_member(db, chat_id, current_user.id)
     if chat.is_notes:
         raise HTTPException(400, "В Заметках опрашивать некого 🙂")
+    # Режим канала: писать (и опрашивать) может только создатель — тот же
+    # гард, что у сообщений/файлов/пересылки
+    if chat.is_group and not chat.allow_all_write and chat.created_by != current_user.id:
+        raise HTTPException(403, "В канале опросы создаёт только создатель")
     q = data.question.strip()
     if not q:
         raise HTTPException(400, "Вопрос пустой")
@@ -200,6 +206,11 @@ async def create_poll(
                 )
             )
             recipients = [r[0] for r in mem_res.all()]
+            # Для ЛС деп-линку мобилки нужен peer_user_id — иначе тап по
+            # пушу откроет ЛС как группу (тот же расчёт, что в ws-хендлере)
+            peer_user_id = None
+            if not chat.is_group and recipients:
+                peer_user_id = current_user.id
             title = chat.name if chat.is_group else current_user.username
             await send_push(
                 db, recipients,
@@ -207,6 +218,7 @@ async def create_poll(
                 body=f"📊 Опрос: {q[:80]}",
                 data={"type": "message", "chat_id": chat_id, "message_id": msg.id,
                       "is_group": chat.is_group,
+                      "peer_user_id": peer_user_id,
                       "chat_name": chat.name or current_user.username,
                       "notification_tag": f"chat-{chat_id}"},
                 channel_id="messages",
@@ -239,7 +251,11 @@ async def vote_poll(
 ):
     """Тоггл голоса: повторный клик по своему варианту снимает его; при
     одиночном выборе голос переезжает на новый вариант."""
-    poll = await db.get(Poll, poll_id)
+    # Лок опроса сериализует голоса/варианты/закрытие: без него дабл-клик
+    # ловил IntegrityError→500, а параллельные голоса за разные варианты в
+    # одиночном опросе оставляли ДВА голоса (delete не видит чужой
+    # незакоммиченный insert под READ COMMITTED)
+    poll = await db.get(Poll, poll_id, with_for_update=True)
     if not poll:
         raise HTTPException(404, "Опрос не найден")
     await _require_member(db, poll.chat_id, current_user.id)
@@ -265,7 +281,13 @@ async def vote_poll(
                 )
             )
         db.add(PollVote(poll_id=poll.id, option_id=opt.id, user_id=current_user.id))
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Ремень: гонка всё же проскочила (например, лок снят рестартом) —
+        # трактуем как «уже учтено» и отдаём свежий снапшот
+        await db.rollback()
+        return await _poll_out(db, poll, current_user.id)
 
     await _broadcast_poll(db, poll)
     return await _poll_out(db, poll, current_user.id)
@@ -279,7 +301,7 @@ async def add_option(
     current_user: User = Depends(get_current_user),
 ):
     """Свой вариант — главная фишка по требованию хозяина."""
-    poll = await db.get(Poll, poll_id)
+    poll = await db.get(Poll, poll_id, with_for_update=True)
     if not poll:
         raise HTTPException(404, "Опрос не найден")
     await _require_member(db, poll.chat_id, current_user.id)
@@ -314,11 +336,13 @@ async def close_poll(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    poll = await db.get(Poll, poll_id)
+    poll = await db.get(Poll, poll_id, with_for_update=True)
     if not poll:
         raise HTTPException(404, "Опрос не найден")
     chat = await _require_member(db, poll.chat_id, current_user.id)
-    if poll.created_by != current_user.id and not _is_chat_admin(chat, current_user.id):
+    # В группе — автор или админ чата; в ЛС — только автор («создатель
+    # ЛС-чата» админом собеседниковых опросов не считается)
+    if poll.created_by != current_user.id and not (chat.is_group and _is_chat_admin(chat, current_user.id)):
         raise HTTPException(403, "Завершить может автор опроса или админ чата")
     if poll.closed_at is None:
         poll.closed_at = datetime.now(timezone.utc)
