@@ -16,4 +16,6 @@ export default {
   setKeepScreenOn: noop,
   turnScreenOn: noop,
   turnScreenOff: noop,
+  startProximitySensor: noop,
+  stopProximitySensor: noop,
 };

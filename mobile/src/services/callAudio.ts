@@ -24,19 +24,44 @@ const SPK_KEY = "gandola.callSpeaker";
 export const VOLUME_STEPS = [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 3] as const;
 export const DEFAULT_GAIN = 1;
 
+/** Потолок шкалы: всё, что пришло из стора, зажимаем в [0, MAX_GAIN].
+ *  Битая запись (или ручная правка localStorage в PWA) иначе даёт NaN:
+ *  подпись «NaN%», NaN в натив, а сравнения с NaN ломают шаг громкости. */
+const MAX_GAIN = 3;
+
 let volumes: Map<number, number> | null = null;
+let loading: Promise<Map<number, number>> | null = null;
 let speaker = false;
+
+function sanitize(v: unknown): number | null {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(MAX_GAIN, Math.max(0, n));
+}
 
 async function loadVolumes(): Promise<Map<number, number>> {
   if (volumes) return volumes;
-  try {
-    const raw = await SecureStore.getItemAsync(VOL_KEY);
-    const obj = raw ? (JSON.parse(raw) as Record<string, number>) : {};
-    volumes = new Map(Object.entries(obj).map(([k, v]) => [Number(k), Number(v)]));
-  } catch {
-    volumes = new Map();
-  }
-  return volumes;
+  // Кэшируем ПРОМИС, а не только результат: иначе запись, вклинившаяся
+  // между стартом и концом чтения, была бы затёрта прочитанным.
+  if (loading) return loading;
+  loading = (async () => {
+    try {
+      const raw = await SecureStore.getItemAsync(VOL_KEY);
+      const obj = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+      const pairs: [number, number][] = [];
+      for (const [k, v] of Object.entries(obj)) {
+        const id = Number(k);
+        const gain = sanitize(v);
+        if (Number.isFinite(id) && gain !== null) pairs.push([id, gain]);
+      }
+      volumes = new Map(pairs);
+    } catch {
+      volumes = new Map();
+    }
+    loading = null;
+    return volumes;
+  })();
+  return loading;
 }
 
 /** Прогреть кэш на старте приложения: дальше всё читается синхронно —
@@ -51,7 +76,7 @@ export async function loadCallAudio(): Promise<void> {
 }
 
 export function getVolume(userId: number): number {
-  return volumes?.get(userId) ?? DEFAULT_GAIN;
+  return sanitize(volumes?.get(userId)) ?? DEFAULT_GAIN;
 }
 
 export function getAllVolumes(): Map<number, number> {
