@@ -1,7 +1,7 @@
 import { Audio } from "expo-av";
 import * as KeepAwake from "expo-keep-awake";
 import { createContext, ReactNode, useContext, useEffect, useRef, useState } from "react";
-import { Animated, Dimensions, Modal, PanResponder, Platform, Pressable, StyleSheet, Text, Vibration, View, ViewStyle } from "react-native";
+import { Animated, AppState, Dimensions, Modal, PanResponder, Platform, Pressable, StyleSheet, Text, Vibration, View, ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import InCallManager from "react-native-incall-manager";
 import { MediaStream, RTCView } from "react-native-webrtc";
@@ -167,12 +167,19 @@ export function CallProvider({ children }: { children: ReactNode }) {
   // ongoing notification anchored to a service.
   useEffect(() => {
     if (!inCall) return;
-    const peer = callName || "собеседником";
-    startCallForegroundService(peer);
     return () => {
       stopCallForegroundService();
     };
-  }, [inCall, callName]);
+  }, [inCall]);
+  // Уведомление сервиса переобъявляем и при включении/выключении камеры:
+  // с Android 14 тип сервиса определяет, ЧТО ему позволено в фоне, и без
+  // типа camera система отбирает камеру при сворачивании — у собеседника
+  // застывал кадр. Отдельно от эффекта выше, чтобы тумблер камеры не
+  // дёргал stop/start самого сервиса.
+  useEffect(() => {
+    if (!inCall) return;
+    void startCallForegroundService(callName || "собеседником", !videoOff);
+  }, [inCall, callName, videoOff]);
   // Keep the screen on + hold a wake lock for the duration of an active call.
   // Without this Android can suspend the JS thread when the user backgrounds
   // the app, which freezes the WebRTC render loop and effectively pauses the
@@ -464,6 +471,35 @@ export function CallProvider({ children }: { children: ReactNode }) {
     wsService.send({ type: "call_end", chat_id: incoming.chatId, declined: true });
     setIncoming(null);
   };
+
+  // Возврат из фона с включённой камерой: если Андроид успел её отобрать
+  // (старые сборки без типа сервиса camera — и мало ли что ещё), дорожка
+  // остаётся в потоке, но кадров не даёт, и собеседник видит застывшую
+  // картинку ДАЖЕ после возврата — люди лечили это ручным «выкл/вкл».
+  // Делаем то же самое сами. Проверяем с задержкой: сразу после resume
+  // дорожка может числиться muted мгновение, дёргать её зря незачем.
+  useEffect(() => {
+    if (!inCall || videoOff || Platform.OS === "web") return;
+    let cancelled = false;
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active") return;
+      setTimeout(async () => {
+        if (cancelled || !webrtcService.isCameraDead()) return;
+        const ok = await webrtcService.restartCamera();
+        if (cancelled) return;
+        if (!ok) {
+          // Камеру забрали насовсем (занял кто-то другой) — честно
+          // показываем «камера выключена», а не вечный стоп-кадр.
+          setVideoOff(true);
+          sendVideoStatus(true);
+        }
+      }, 600);
+    });
+    return () => {
+      cancelled = true;
+      sub.remove();
+    };
+  }, [inCall, videoOff]);
 
   // Аудиосессия звонка (андроидный AudioManager через InCallManager).
   //

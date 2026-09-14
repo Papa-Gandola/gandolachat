@@ -11,9 +11,18 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { WhatsNewModal } from "./src/components/WhatsNewModal";
 import { RootNavigator } from "./src/navigation/RootNavigator";
 import { AuthProvider } from "./src/services/AuthContext";
+import { registerCallForegroundRunner } from "./src/services/callForegroundService";
 import { CallProvider } from "./src/services/CallContext";
 import { initWebPwa } from "./src/services/webPwa";
 import { ThemeProvider } from "./src/theme/ThemeProvider";
+
+// На уровне модуля, ДО первого рендера: notifee требует, чтобы обработчик
+// фонового сервиса был зарегистрирован при запуске приложения, а не в момент
+// показа уведомления. Если система подняла процесс заново (её прибили в
+// фоне), сервис стартует раньше любого компонента — без обработчика он не
+// успевает «предъявиться» за отведённые 5 секунд, и Андроид рисует «Гандола
+// не отвечает». Вызов идемпотентен.
+registerCallForegroundRunner();
 
 export default function App() {
   const [interLoaded] = useInter({ Inter_400Regular, Inter_500Medium });

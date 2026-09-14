@@ -8,7 +8,7 @@
  * apps. @notifee/react-native does the heavy lifting; we just register a
  * runner and show/hide the notification.
  */
-import notifee, { AndroidImportance } from "@notifee/react-native";
+import notifee, { AndroidForegroundServiceType, AndroidImportance } from "@notifee/react-native";
 
 const CHANNEL_ID = "call-foreground";
 const NOTIFICATION_ID = "gandola-active-call";
@@ -49,10 +49,22 @@ async function ensureChannel(): Promise<void> {
  * Show the ongoing call notification and start the Foreground Service.
  * Called from CallContext when `inCall` flips true.
  */
-export async function startCallForegroundService(peerName: string): Promise<void> {
+export async function startCallForegroundService(
+  peerName: string,
+  withCamera = false,
+): Promise<void> {
   try {
     registerCallForegroundRunner();
     await ensureChannel();
+    // ТИПЫ СЕРВИСА ОБЯЗАТЕЛЬНЫ с Android 14 (targetSdk 34): система должна
+    // понимать, ради чего сервис живёт, иначе он не считается «в работе».
+    // Для камеры это ещё и вопрос доступа: без типа camera Андроид ОТБИРАЕТ
+    // камеру, как только приложение уходит в фон — у собеседника картинка
+    // замирает намертво (капчурер не перезапускается сам). Камеру
+    // указываем ТОЛЬКО когда она реально включена: тип требует выданного
+    // разрешения, а в голосовом звонке его может не быть вовсе.
+    const types = [AndroidForegroundServiceType.FOREGROUND_SERVICE_TYPE_MICROPHONE];
+    if (withCamera) types.push(AndroidForegroundServiceType.FOREGROUND_SERVICE_TYPE_CAMERA);
     await notifee.displayNotification({
       id: NOTIFICATION_ID,
       title: "Активный звонок",
@@ -60,6 +72,7 @@ export async function startCallForegroundService(peerName: string): Promise<void
       android: {
         channelId: CHANNEL_ID,
         asForegroundService: true,
+        foregroundServiceTypes: types,
         ongoing: true,
         // Tap brings the app to the front; the call modal is already up.
         pressAction: { id: "default", launchActivity: "default" },
