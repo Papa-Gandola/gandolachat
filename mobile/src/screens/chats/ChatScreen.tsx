@@ -117,6 +117,8 @@ export function ChatScreen({ navigation, route }: Props) {
   const [attachOpen, setAttachOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [reactionFor, setReactionFor] = useState<number | null>(null);
+  // Двойной тап по сообщению = ❤️ (повторный двойной тап снимает)
+  const lastTapRef = useRef<{ id: number; ts: number }>({ id: 0, ts: 0 });
   const [polls, setPolls] = useState<Record<number, PollOut>>({});
   const [pins, setPins] = useState<PinOut[]>([]);
   const [showPollModal, setShowPollModal] = useState(false);
@@ -937,6 +939,18 @@ export function ChatScreen({ navigation, route }: Props) {
             <SwipeableMessage key={m.id} onReply={() => beginReply(m)}>
             <Pressable
               onLayout={(e) => messageOffsets.current.set(m.id, e.nativeEvent.layout.y)}
+              onPress={() => {
+                // Двойной тап — сердечко; одиночный ничего не делает,
+                // так что задержек и конфликтов с лонг-прессом нет
+                const now = Date.now();
+                if (lastTapRef.current.id === m.id && now - lastTapRef.current.ts < 300) {
+                  lastTapRef.current = { id: 0, ts: 0 };
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+                  toggleReaction(m.id, "❤️");
+                } else {
+                  lastTapRef.current = { id: m.id, ts: now };
+                }
+              }}
               onLongPress={() => {
                 Haptics.selectionAsync().catch(() => {});
                 setReactionFor(m.id);
@@ -971,30 +985,71 @@ export function ChatScreen({ navigation, route }: Props) {
                   theme={theme}
                 />
               </Bubble>
-              {reactionFor === m.id ? (
-                <ReactionPicker
-                  mine={mine}
-                  theme={theme}
-                  canCopy={!!m.content}
-                  canEdit={mine && !!m.content}
-                  onCopy={() => copyMessage(m.content ?? "")}
-                  onReply={() => beginReply(m)}
-                  onForward={() => beginForward(m)}
-                  onPin={isNotes ? undefined : () => { togglePin(m.id); setReactionFor(null); }}
-                  pinned={pins.some((pn) => pn.message_id === m.id)}
-                  onEdit={() => beginEdit(m)}
-                  onDelete={() => deleteMessage(m.id)}
-                  onPick={(emoji) => {
-                    toggleReaction(m.id, emoji);
-                    setReactionFor(null);
-                  }}
-                />
-              ) : null}
             </Pressable>
             </SwipeableMessage>
           );
         })}
       </ScrollView>
+
+      {/* Меню сообщения — нижним шитом поверх экрана: инлайн-вариант у
+          нижних сообщений уезжал за край и его приходилось доскролливать */}
+      {(() => {
+        const rxMsg = reactionFor != null ? messages.find((mm) => mm.id === reactionFor) : undefined;
+        const rxMine = rxMsg?.sender_id === user?.id;
+        return (
+          <Modal
+            visible={!!rxMsg}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setReactionFor(null)}
+          >
+            <Pressable
+              onPress={() => setReactionFor(null)}
+              style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" }}
+            >
+              {rxMsg ? (
+                <Pressable
+                  onPress={() => {}}
+                  style={{
+                    backgroundColor: theme.colors.bgElev,
+                    borderTopLeftRadius: 14,
+                    borderTopRightRadius: 14,
+                    borderWidth: 1,
+                    borderColor: theme.colors.border,
+                    paddingHorizontal: 14,
+                    paddingTop: 12,
+                    paddingBottom: 28,
+                  }}
+                >
+                  <Text
+                    numberOfLines={1}
+                    style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkMuted, marginBottom: 8 }}
+                  >
+                    {rxMsg.sender_username}: {rxMsg.content ?? (rxMsg.file_name ? `📎 ${rxMsg.file_name}` : "…")}
+                  </Text>
+                  <ReactionPicker
+                    mine={rxMine}
+                    theme={theme}
+                    canCopy={!!rxMsg.content}
+                    canEdit={rxMine && !!rxMsg.content}
+                    onCopy={() => copyMessage(rxMsg.content ?? "")}
+                    onReply={() => beginReply(rxMsg)}
+                    onForward={() => beginForward(rxMsg)}
+                    onPin={isNotes ? undefined : () => { togglePin(rxMsg.id); setReactionFor(null); }}
+                    pinned={pins.some((pn) => pn.message_id === rxMsg.id)}
+                    onEdit={() => beginEdit(rxMsg)}
+                    onDelete={() => deleteMessage(rxMsg.id)}
+                    onPick={(emoji) => {
+                      toggleReaction(rxMsg.id, emoji);
+                      setReactionFor(null);
+                    }}
+                  />
+                </Pressable>
+              ) : null}
+            </Pressable>
+          </Modal>
+        );
+      })()}
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
         {isChannelLocked ? (
