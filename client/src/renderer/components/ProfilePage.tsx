@@ -412,7 +412,7 @@ function DotaSection({ user, isOwn, isNeo, onUser }: {
           )}
           {isOwn && (
             <label
-              title="Значок 🎮 у твоего ника, когда запущена Dota 2. Выключи, если хочешь катать в невидимке."
+              title="Значок 🎮 у твоего ника, когда запущена Dota 2. Определяется через Steam И по запущенной Доте на этом компе — сработает даже при стим-невидимке. Выключи, если хочешь катать незаметно."
               style={{ ...mono, display: "flex", alignItems: "center", gap: 7, color: "var(--text-muted)", fontSize: 11.5, cursor: "pointer", userSelect: "none" }}
             >
               <input

@@ -27,7 +27,7 @@ function colorFor(id: number): string {
 // Служебные маркеры → человеческое превью (иначе в списке чатов светился бы
 // сырой "/quest_card {json}" от поллера Гандолиума). Зеркало десктопного
 // client/src/renderer/services/markers.ts.
-function markerPreview(content: string): string | null {
+export function markerPreview(content: string): string | null {
   if (content.startsWith("/quest_card ")) {
     try {
       const p = JSON.parse(content.slice(12));
@@ -44,6 +44,7 @@ function markerPreview(content: string): string | null {
     }
   }
   if (content === "/dota_call") return "⚔️ Газуем в дотан";
+  if (/^\/poll \d+$/.test(content)) return "📊 Опрос";
   if (content.startsWith("/reminder ")) return "⏰ Напоминание";
   if (/^\/poker_table \d+$/.test(content)) return "🃏 Покерный стол";
   if (/^\/call_record (completed|missed|declined|cancelled)\|/.test(content)) return "📞 Звонок";

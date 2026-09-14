@@ -31,6 +31,11 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://gandola:gandola@db:5432/gandolachat
       SECRET_KEY: "${SECRET_KEY:-change-me-in-production-please}"
+      # Офсайт-бэкапы: задать в .env рядом с compose (см. app/backups.py).
+      # Пусто = выключено, ничего не ломается.
+      BACKUP_WEBDAV_URL: "${BACKUP_WEBDAV_URL:-}"
+      BACKUP_WEBDAV_USER: "${BACKUP_WEBDAV_USER:-}"
+      BACKUP_WEBDAV_PASSWORD: "${BACKUP_WEBDAV_PASSWORD:-}"
     volumes:
       - uploads:/app/uploads
       # Ночные дампы БД (app/backups.py). ОТДЕЛЬНЫЙ том, НЕ uploads:

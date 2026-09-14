@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, shell, desktopCapturer, Tray, Menu, native
 import { autoUpdater } from "electron-updater";
 import path from "path";
 import fs from "fs";
+import { exec } from "child_process";
 const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
 
 // Windows-only: let Chromium hibernate rendering when the window is fully covered.
@@ -11,6 +12,23 @@ if (process.platform === "win32") {
 
 let tray: Tray | null = null;
 let isQuitting = false;
+
+// «🎮 в Доте сейчас» без Steam: раз в 30с смотрим, запущен ли dota2.exe на
+// этом компе (Windows), и толкаем изменения в рендерер — тот сообщает
+// серверу. Работает даже при стим-невидимке: Steam тут не участвует.
+let dotaRunning = false;
+function pollDotaProcess() {
+  if (process.platform !== "win32") return;
+  exec('tasklist /FI "IMAGENAME eq dota2.exe" /FO CSV /NH', { windowsHide: true }, (err, stdout) => {
+    const running = !err && /dota2\.exe/i.test(stdout || "");
+    if (running !== dotaRunning) {
+      dotaRunning = running;
+      mainWindow?.webContents.send("dota:running", running);
+    }
+  });
+}
+setInterval(pollDotaProcess, 30_000);
+ipcMain.handle("dota:running-get", () => dotaRunning);
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {

@@ -12,6 +12,11 @@ contextBridge.exposeInMainWorld("electron", {
     ipcRenderer.on("update:status", (_e, status, info) => callback(status, info));
   },
   getScreenSources: () => ipcRenderer.invoke("screen:getSources"),
+  // «в Доте сейчас» с этого компа (детект процесса, работает при стим-невидимке)
+  getDotaRunning: () => ipcRenderer.invoke("dota:running-get"),
+  onDotaRunning: (callback: (running: boolean) => void) => {
+    ipcRenderer.on("dota:running", (_e, running) => callback(!!running));
+  },
   setBadgeCount: (count: number, pngDataUrl?: string) => ipcRenderer.send("badge:set", count, pngDataUrl),
   getTrayBaseIcon: () => ipcRenderer.invoke("tray:getBaseIcon"),
   setTrayImage: (dataUrl: string) => ipcRenderer.send("tray:setImage", dataUrl),

@@ -534,8 +534,9 @@ function PokerTable({
 }
 
 function CardView({ code, theme, small }: { code: string | null; theme: ThemeT; small?: boolean }) {
-  const w = small ? 26 : 34;
-  const h = small ? 36 : 48;
+  // Подросли на ~15% по просьбе Гандолы («увеличить карты немного»)
+  const w = small ? 30 : 40;
+  const h = small ? 42 : 56;
   if (!code) {
     return (
       <View
@@ -552,7 +553,9 @@ function CardView({ code, theme, small }: { code: string | null; theme: ThemeT; 
       />
     );
   }
-  const rank = code.slice(0, code.length - 1);
+  // Движок хранит десятку как "T" — людям привычнее «10»
+  const rawRank = code.slice(0, code.length - 1);
+  const rank = rawRank === "T" ? "10" : rawRank;
   const suit = code.slice(-1);
   const isRed = suit === "h" || suit === "d";
   const suitChar = ({ s: "♠", h: "♥", d: "♦", c: "♣" } as Record<string, string>)[suit] ?? "?";
@@ -573,7 +576,7 @@ function CardView({ code, theme, small }: { code: string | null; theme: ThemeT; 
         style={{
           fontFamily: theme.fonts.mono,
           fontWeight: "700",
-          fontSize: small ? 11 : 14,
+          fontSize: small ? 12 : 16,
           color: theme.id === "neo" ? (isRed ? "#ff7777" : theme.colors.accent) : isRed ? "#d33" : "#222",
         }}
       >

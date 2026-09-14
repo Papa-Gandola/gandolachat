@@ -282,6 +282,59 @@ export const compendiumApi = {
     ),
 };
 
+// === Опросы и закрепы ===
+export interface PollOptionOut {
+  id: number;
+  text: string;
+  votes: number;
+  // Кто голосовал за вариант — mine каждое устройство считает само
+  voter_ids?: number[];
+  mine: boolean;
+  author: string | null; // у дописанных вариантов — кто добавил
+}
+
+export interface PollOut {
+  id: number;
+  chat_id: number;
+  message_id: number | null;
+  question: string;
+  allow_multi: boolean;
+  allow_add: boolean;
+  closed: boolean;
+  created_by: number;
+  creator: string;
+  total_voters: number;
+  options: PollOptionOut[];
+}
+
+export interface PinOut {
+  message_id: number;
+  content: string | null;
+  file_name: string | null;
+  sender_username: string;
+  pinned_by: number;
+  pinned_at: string;
+}
+
+export const pollsApi = {
+  create: (chatId: number, data: { question: string; options: string[]; allow_multi: boolean; allow_add: boolean }) =>
+    api.post<PollOut>(`/api/chats/${chatId}/polls`, data),
+  get: (pollId: number) => api.get<PollOut>(`/api/polls/${pollId}`),
+  vote: (pollId: number, optionId: number) =>
+    api.post<PollOut>(`/api/polls/${pollId}/vote`, { option_id: optionId }),
+  addOption: (pollId: number, text: string) =>
+    api.post<PollOut>(`/api/polls/${pollId}/options`, { text }),
+  close: (pollId: number) => api.post<PollOut>(`/api/polls/${pollId}/close`),
+};
+
+export const pinsApi = {
+  list: (chatId: number) => api.get<PinOut[]>(`/api/chats/${chatId}/pins`),
+  pin: (chatId: number, messageId: number) =>
+    api.post<PinOut[]>(`/api/chats/${chatId}/pin`, { message_id: messageId }),
+  unpin: (chatId: number, messageId: number) =>
+    api.delete<PinOut[]>(`/api/chats/${chatId}/pin/${messageId}`),
+};
+
 export const chatApi = {
   list: () => api.get<ChatOut[]>("/api/chats"),
   createDm: (userId: number) =>

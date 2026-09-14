@@ -74,6 +74,70 @@ def _run_backup_sync() -> None:
             pass
     print(f"[backup] ok: {final.name} ({size // 1024} KiB), хранится {min(len(dumps), KEEP)} шт.")
 
+    # Офсайт-копия: локальные дампы умирают вместе с VPS (блокировка/
+    # изъятие) — выгружаем на WebDAV, если настроен. Хозяин не хочет
+    # российские сервисы: рекомендованный приёмник — Koofr (ЕС, 10 ГБ
+    # бесплатно, https://app.koofr.net/dav/Koofr + app-пароль); подойдёт
+    # любой WebDAV (pCloud, Nextcloud...). Ошибка выгрузки не
+    # роняет бэкап: локальный дамп уже на месте.
+    try:
+        _offsite_sync(final)
+    except Exception as e:
+        print(f"[backup] offsite failed: {type(e).__name__}: {e}")
+
+
+def _webdav_client() -> "httpx.Client":
+    import httpx
+    return httpx.Client(
+        auth=(settings.BACKUP_WEBDAV_USER or "", settings.BACKUP_WEBDAV_PASSWORD or ""),
+        timeout=httpx.Timeout(connect=10.0, read=120.0, write=300.0, pool=10.0),
+        # Грабля №3: IPv6 на VPS сломан — прибиваемся к IPv4
+        transport=httpx.HTTPTransport(local_address="0.0.0.0", retries=2),
+    )
+
+
+def _offsite_sync(dump: Path) -> None:
+    """PUT свежего дампа на WebDAV + удалённая ротация (KEEP новейших).
+
+    Приёмник — любой WebDAV. Рекомендуется НЕроссийский (решение
+    хозяина): Koofr (app.koofr.net/dav/Koofr + app-пароль, 10 ГБ
+    бесплатно), pCloud, Nextcloud; Яндекс.Диск тоже работал бы.
+    Имена дампов содержат таймстамп — сортировка по имени = по времени."""
+    url = (settings.BACKUP_WEBDAV_URL or "").rstrip("/")
+    if not url:
+        return
+    import httpx  # noqa: F401 — импорт тут: без настройки офсайта не нужен
+    with _webdav_client() as client:
+        # Каталог мог не существовать — MKCOL идемпотентен (405 = уже есть)
+        try:
+            client.request("MKCOL", url)
+        except Exception:
+            pass
+        r = client.put(f"{url}/{dump.name}", content=dump.read_bytes())
+        if r.status_code not in (200, 201, 204):
+            raise RuntimeError(f"PUT {r.status_code}: {r.text[:200]}")
+        print(f"[backup] offsite ok: {dump.name}")
+
+        # Удалённая ротация: PROPFIND списка → сносим всё старше KEEP штук
+        try:
+            r = client.request("PROPFIND", url, headers={"Depth": "1"})
+            if r.status_code not in (207, 200):
+                return
+            import xml.etree.ElementTree as ET
+            from urllib.parse import unquote as _unq
+            names = []
+            for el in ET.fromstring(r.content).iter():
+                if el.tag.endswith("}href") or el.tag == "href":
+                    name = _unq((el.text or "").rstrip("/").rsplit("/", 1)[-1])
+                    if name.startswith("gandola-") and name.endswith(".dump"):
+                        names.append(name)
+            for old in sorted(set(names))[:-KEEP]:
+                client.request("DELETE", f"{url}/{old}")
+                print(f"[backup] offsite прибрал: {old}")
+        except Exception as e:
+            # Ротация — best-effort: главное, что свежий дамп уехал
+            print(f"[backup] offsite rotate failed: {type(e).__name__}: {e}")
+
 
 async def run_backup() -> None:
     """Джоба: pg_dump в тредпуле (не блокируем event loop), ошибки — в лог."""

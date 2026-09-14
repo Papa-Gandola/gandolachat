@@ -32,8 +32,10 @@ const COMBOS: { cat: number; cards: string[]; note: string }[] = [
 ];
 
 function MiniCard({ code, isNeo }: { code: string; isNeo: boolean }) {
+  // Десятка — «10», как на больших картах стола
   const suit = code[code.length - 1];
-  const rank = code.slice(0, -1);
+  const rawRank = code.slice(0, -1);
+  const rank = rawRank === "T" ? "10" : rawRank;
   const isRed = suit === "h" || suit === "d";
   const suitChar = ({ s: "♠", h: "♥", d: "♦", c: "♣" } as Record<string, string>)[suit] || "?";
   return (
