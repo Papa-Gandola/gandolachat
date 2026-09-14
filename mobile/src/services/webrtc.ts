@@ -15,6 +15,15 @@ async function ensurePermissions(video: boolean) {
   if (Platform.OS !== "android") return;
   const perms = [PermissionsAndroid.PERMISSIONS.RECORD_AUDIO];
   if (video) perms.push(PermissionsAndroid.PERMISSIONS.CAMERA);
+  // BLUETOOTH_CONNECT (Android 12+) — БЕЗ него InCallManager вообще не
+  // видит гарнитуру: его BT-менеджер на старте проверяет разрешение и молча
+  // выходит, BT не попадает в список устройств, и звук звонка уходит мимо
+  // наушников. Спрашиваем здесь, вместе с микрофоном на первом звонке:
+  // в середине разговора диалог «разрешить доступ к устройствам рядом»
+  // выглядит дико. Отказ звонок не ломает — просто не будет BT-маршрута.
+  if (typeof Platform.Version === "number" && Platform.Version >= 31) {
+    perms.push(PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT);
+  }
   try {
     await PermissionsAndroid.requestMultiple(perms);
   } catch {
