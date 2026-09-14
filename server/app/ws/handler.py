@@ -262,12 +262,17 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                         )
                     )
                     await db.commit()
+                    # БЕЗ exclude_user: событие нужно и ДРУГИМ устройствам
+                    # читателя — по нему они гасят свой бейдж непрочитанного
+                    # (Sidebar на десктопе, useChats на мобилке). exclude_user
+                    # вырезает ВСЕ сокеты юзера, а не только приславший, и
+                    # кросс-девайс прочитанность из-за этого не работала.
                     await manager.broadcast_to_chat(chat_id, {
                         "type": "message_read",
                         "chat_id": chat_id,
                         "user_id": user_id,
                         "last_read_message_id": msg_id,
-                    }, exclude_user=user_id)
+                    })
 
             elif event == "video_status":
                 chat_id = data.get("chat_id")

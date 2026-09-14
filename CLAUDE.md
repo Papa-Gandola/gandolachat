@@ -73,9 +73,11 @@ print-логи видны в `docker compose logs` с опозданием (не
   stats, админ-чистка сообщений до даты. Caption с `/quest_card` режется.
 - Пуш-данные message/call несут chat_name; для ЛС (chat.name=NULL) —
   имя отправителя/звонящего, иначе тап по пушу открывал чат «Чат».
-  `message_read` бродкастится ВСЕМ сокетам чата, включая другие
-  устройства читателя — клиенты гасят по нему свой unread (кросс-девайс
-  прочитанность: Sidebar на десктопе, useChats на мобилке).
+  `message_read` бродкастится ВСЕМ сокетам чата (БЕЗ exclude_user!),
+  включая другие устройства читателя — клиенты гасят по нему свой unread
+  (кросс-девайс прочитанность: Sidebar на десктопе, useChats на мобилке).
+  `exclude_user` в broadcast_to_chat вырезает ВСЕ сокеты юзера, а не
+  только приславший — с ним кросс-рид молча не работал (2.3.8→2.3.9).
 - `app/ws/manager.py` — ConnectionManager: мультисокеты на юзера,
   chat_users, active_calls + call_meta (для /call_record), broadcast_to_chat
   (_eid дедуп), send_to_user, дроп мёртвых сокетов.
