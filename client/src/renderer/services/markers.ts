@@ -17,6 +17,7 @@ export function markerPreview(content: string): string | null {
     }
   }
   if (content === "/dota_call") return "⚔️ Газуем в дотан";
+  if (/^\/poll \d+$/.test(content)) return "📊 Опрос";
   if (content.startsWith("/reminder ")) return "⏰ Напоминание";
   if (/^\/poker_table \d+$/.test(content)) return "🃏 Покерный стол";
   if (/^\/call_record (completed|missed|declined|cancelled)\|/.test(content)) return "📞 Звонок";

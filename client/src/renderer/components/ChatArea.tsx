@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ChatOut, MessageOut, UserOut, chatApi, dotaApi, notesApi } from "../services/api";
+import { ChatOut, MessageOut, UserOut, chatApi, dotaApi, notesApi , pollsApi, pinsApi, PollOut, PinOut } from "../services/api";
 import { wsService } from "../services/ws";
 import { playMessageSound } from "../services/sounds";
 import EmojiPicker from "./EmojiPicker";
@@ -50,6 +50,10 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
   const dragCounterRef = useRef(0);
   const [showEmoji, setShowEmoji] = useState(false);
   const [showReminderModal, setShowReminderModal] = useState(false);
+  const [showPollModal, setShowPollModal] = useState(false);
+  const [polls, setPolls] = useState<Record<number, PollOut>>({});
+  const [pins, setPins] = useState<PinOut[]>([]);
+  const [showPinsList, setShowPinsList] = useState(false);
   const [hoverEmoji, setHoverEmoji] = useState("😊");
   const RANDOM_EMOJI = ["😊", "😂", "🤣", "😍", "🥰", "😎", "🤔", "😭", "🥺", "🤡", "💀", "🗿", "🔥", "💯", "👻", "🤓", "🫠", "🤯", "😈", "🥴"];
   const [previewImage, setPreviewImage] = useState<string | null>(null);
@@ -267,6 +271,28 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
 
     wsService.on("dota_ready_update", dotaReadyHandler);
     wsService.on("message", handler);
+    // Опросы: живые обновления. mine в бродкасте всегда false — мержим со
+    // своим прежним состоянием (свои действия приходят HTTP-ответом).
+    const onPollUpdated = (m: any) => {
+      const p: PollOut | undefined = m?.poll;
+      if (!p || p.chat_id !== chat.id) return;
+      setPolls((prev) => {
+        const old = prev[p.id];
+        const merged = {
+          ...p,
+          options: p.options.map((o) => ({
+            ...o,
+            mine: old?.options.find((x) => x.id === o.id)?.mine ?? false,
+          })),
+        };
+        return { ...prev, [p.id]: merged };
+      });
+    };
+    const onChatPins = (m: any) => {
+      if (m?.chat_id === chat.id && Array.isArray(m?.pins)) setPins(m.pins);
+    };
+    wsService.on("poll_updated", onPollUpdated);
+    wsService.on("chat_pins", onChatPins);
     wsService.on("typing", typingHandler);
     wsService.on("message_edited", editHandler);
     wsService.on("message_deleted", deleteHandler);
@@ -277,6 +303,8 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
     return () => {
       wsService.off("dota_ready_update", dotaReadyHandler);
       wsService.off("message", handler);
+      wsService.off("poll_updated", onPollUpdated);
+      wsService.off("chat_pins", onChatPins);
       wsService.off("typing", typingHandler);
       wsService.off("message_edited", editHandler);
       wsService.off("message_deleted", deleteHandler);
@@ -638,6 +666,36 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
     if (document.queryCommandState("italic")) document.execCommand("italic");
     if (document.queryCommandState("underline")) document.execCommand("underline");
     if (document.queryCommandState("strikeThrough")) document.execCommand("strikeThrough");
+  }
+
+  const canPin = !chat.is_group
+    || chat.created_by === currentUser.id
+    || (chat.admin_ids || []).includes(currentUser.id);
+
+  useEffect(() => {
+    // Закрепы и кэш опросов — на каждый чат свои
+    setPolls({});
+    setShowPinsList(false);
+    let alive = true;
+    pinsApi.list(chat.id)
+      .then((res) => { if (alive) setPins(res.data); })
+      .catch(() => { if (alive) setPins([]); });
+    return () => { alive = false; };
+  }, [chat.id]);
+
+  async function loadPoll(pollId: number) {
+    try {
+      const res = await pollsApi.get(pollId);
+      setPolls((prev) => ({ ...prev, [pollId]: res.data }));
+    } catch { /* спуф-маркер или гонка удаления — карточка покажет текст */ }
+  }
+
+  async function togglePin(msgId: number) {
+    try {
+      const inPins = pins.some((pn) => pn.message_id === msgId);
+      const res = inPins ? await pinsApi.unpin(chat.id, msgId) : await pinsApi.pin(chat.id, msgId);
+      setPins(res.data);
+    } catch { /* права проверит сервер */ }
   }
 
   async function scrollToMessage(msgId: number) {
@@ -1032,6 +1090,59 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
       )}
 
       {/* Search bar */}
+      {pins.length > 0 && (
+        <div style={{ position: "relative" }}>
+          <div
+            onClick={() => scrollToMessage(pins[0].message_id)}
+            style={{
+              display: "flex", alignItems: "center", gap: 8,
+              padding: "6px 14px", cursor: "pointer",
+              background: "var(--bg-secondary)", borderBottom: "1px solid var(--border)",
+              fontSize: 12.5,
+            }}
+          >
+            <span style={{ fontSize: 13 }}>📌</span>
+            <span style={{ color: "var(--text-muted)", flexShrink: 0 }}>{pins[0].sender_username}:</span>
+            <span style={{ color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+              {markerPreview(pins[0].content || "") || pins[0].content || (pins[0].file_name ? `📎 ${pins[0].file_name}` : "")}
+            </span>
+            {pins.length > 1 && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setShowPinsList((v) => !v); }}
+                style={{ background: "var(--bg-tertiary)", color: "var(--text-secondary)", border: "1px solid var(--border)", borderRadius: isNeo ? 0 : 10, fontSize: 11, padding: "1px 8px", cursor: "pointer" }}
+              >
+                ещё {pins.length - 1}
+              </button>
+            )}
+            {canPin && (
+              <button
+                onClick={(e) => { e.stopPropagation(); togglePin(pins[0].message_id); }}
+                title="Открепить"
+                style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 13 }}
+              >✕</button>
+            )}
+          </div>
+          {showPinsList && (
+            <div style={{ position: "absolute", top: "100%", left: 8, right: 8, zIndex: 60, background: "var(--bg-primary)", border: "1px solid var(--border)", borderRadius: isNeo ? 0 : 8, boxShadow: "0 8px 24px rgba(0,0,0,0.4)", maxHeight: 260, overflowY: "auto" }}>
+              {pins.map((pn) => (
+                <div key={pn.message_id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: "1px solid var(--border)", cursor: "pointer", fontSize: 12.5 }}
+                     onClick={() => { setShowPinsList(false); scrollToMessage(pn.message_id); }}>
+                  <span>📌</span>
+                  <span style={{ color: "var(--text-muted)", flexShrink: 0 }}>{pn.sender_username}:</span>
+                  <span style={{ color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                    {markerPreview(pn.content || "") || pn.content || (pn.file_name ? `📎 ${pn.file_name}` : "")}
+                  </span>
+                  {canPin && (
+                    <button onClick={(e) => { e.stopPropagation(); togglePin(pn.message_id); }} title="Открепить"
+                            style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer" }}>✕</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {showSearch && (
         <div style={s.searchBar}>
           <input
@@ -1221,6 +1332,23 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
                     ) : (
                       <>
                         {msg.content && (() => {
+                          const pollMatch = msg.content.match(/^\/poll (\d+)$/);
+                          if (pollMatch) {
+                            const pollId = Number(pollMatch[1]);
+                            return (
+                              <PollCardMsg
+                                poll={polls[pollId]}
+                                pollId={pollId}
+                                chatId={chat.id}
+                                isNeo={isNeo}
+                                isMine={isMine}
+                                canModerate={canPin}
+                                currentUserId={currentUser.id}
+                                onNeedLoad={loadPoll}
+                                onChanged={(pl) => setPolls((prev) => ({ ...prev, [pl.id]: pl }))}
+                              />
+                            );
+                          }
                           const pokerMatch = msg.content.match(/^\/poker_table (\d+)$/);
                           if (pokerMatch) {
                             return <PokerInviteCard tableId={Number(pokerMatch[1])} chatId={chat.id} isNeo={isNeo} isMine={isMine} senderName={msg.sender_username} />;
@@ -1412,6 +1540,11 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
         <div style={{ ...s.ctxMenu, left: contextMenu.x, top: contextMenu.y, transform: `translate(${contextMenu.flipX ? "-100%" : "0"}, ${contextMenu.flipY ? "-100%" : "0"})` }}>
           <button style={s.ctxItem} onClick={() => { setReplyTo(contextMenu.msg); setContextMenu(null); }}>↩ Ответить</button>
           <button style={s.ctxItem} onClick={() => { setForwardMsg(contextMenu.msg); setContextMenu(null); }}>➡ Переслать</button>
+          {canPin && (
+            <button style={s.ctxItem} onClick={() => { togglePin(contextMenu.msg.id); setContextMenu(null); }}>
+              {pins.some((pn) => pn.message_id === contextMenu.msg.id) ? "📌 Открепить" : "📌 Закрепить"}
+            </button>
+          )}
           <div style={s.ctxReactions}>
             {["🤡", "💀", "🗿", "😭", "💩", "🤮", "👺", "🫠", "🤯", "😈", "👻", "🤓", "❤️", "👍", "👎", "🔥", "💯", "😂", "🤣", "😍", "🥺", "😤", "🤬", "🥴", "🫡", "🤝", "🙏", "💅"].map((e) => (
               <button key={e} style={s.ctxReactionBtn} onClick={() => {
@@ -1706,6 +1839,9 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
       })()}
       <form onSubmit={sendMessage} style={{ ...s.inputBar, ...(chat.is_group && chat.allow_all_write === false && chat.created_by !== currentUser.id ? { display: "none" } : {}) }}>
         <button type="button" style={s.attachBtn} onClick={() => fileRef.current?.click()} title="Прикрепить файл">+</button>
+        {!chat.is_notes && (
+          <button type="button" style={s.attachBtn} onClick={() => setShowPollModal(true)} title="Опрос">📊</button>
+        )}
         {chat.is_notes && (
           <button type="button" style={s.attachBtn} onClick={() => setShowReminderModal(true)} title="Напоминание">⏰</button>
         )}
@@ -1777,6 +1913,18 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
           disabled={pendingAttachments.length > 0 || !text.trim()}
         >{isNeo ? "SEND" : "➤"}</button>
       </form>
+
+      {showPollModal && (
+        <PollComposeModal
+          isNeo={isNeo}
+          onClose={() => setShowPollModal(false)}
+          onCreate={async (data) => {
+            const res = await pollsApi.create(chat.id, data);
+            setPolls((prev) => ({ ...prev, [res.data.id]: res.data }));
+            setShowPollModal(false);
+          }}
+        />
+      )}
 
       {showReminderModal && (
         <ReminderModal isNeo={isNeo} onClose={() => setShowReminderModal(false)} />
@@ -2494,6 +2642,209 @@ function AvatarSmall({ name, url }: { name: string; url: string | null }) {
   ) : (
     <div style={{ width: 40, height: 40, borderRadius: "50%", background: bg, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 16 }}>
       {name.charAt(0).toUpperCase()}
+    </div>
+  );
+}
+
+function PollCardMsg({ poll, pollId, chatId, isNeo, isMine, canModerate, currentUserId, onNeedLoad, onChanged }: {
+  poll?: PollOut;
+  pollId: number;
+  chatId: number;
+  isNeo: boolean;
+  isMine: boolean;
+  canModerate: boolean;
+  currentUserId: number;
+  onNeedLoad: (id: number) => void;
+  onChanged: (p: PollOut) => void;
+}) {
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
+  const [addOpen, setAddOpen] = useState(false);
+  const [addText, setAddText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!poll) onNeedLoad(pollId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pollId, !!poll]);
+
+  // Карточка внутри пузыря — та же палитра на 4 комбинации, что у QuestCardMsg
+  const darkOnLime = isNeo && isMine;
+  const cardBg = isNeo ? (isMine ? "rgba(0,0,0,0.18)" : "transparent") : (isMine ? "rgba(255,255,255,0.16)" : "rgba(88,101,242,0.08)");
+  const edge = darkOnLime ? "rgba(0,0,0,0.55)" : "var(--accent)";
+  const titleColor = isNeo ? (isMine ? "#0a0a0a" : "var(--text-header)") : (isMine ? "#fff" : "var(--text-header)");
+  const subColor = isNeo ? (isMine ? "rgba(0,0,0,0.65)" : "var(--text-muted)") : (isMine ? "rgba(255,255,255,0.75)" : "var(--text-muted)");
+  const barBg = darkOnLime ? "rgba(0,0,0,0.15)" : (isMine && !isNeo ? "rgba(255,255,255,0.22)" : "var(--bg-tertiary)");
+  const barFill = darkOnLime ? "rgba(0,0,0,0.55)" : (isMine && !isNeo ? "rgba(255,255,255,0.85)" : "var(--accent)");
+
+  if (!poll || poll.chat_id !== chatId) {
+    // Спуф `/poll N` руками или гонка — показываем как текст
+    return <span>{`/poll ${pollId}`}</span>;
+  }
+
+  const total = Math.max(1, ...poll.options.map((o) => o.votes));
+  const act = async (fn: () => Promise<{ data: PollOut }>) => {
+    if (busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const res = await fn();
+      onChanged(res.data);
+    } catch (e: any) {
+      setErr(e.response?.data?.detail || "Не получилось");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{
+      padding: "10px 12px", background: cardBg,
+      border: `1px solid ${edge}`, borderLeft: `3px solid ${edge}`,
+      borderRadius: isNeo ? 0 : 8, margin: "4px 0", minWidth: 260, maxWidth: 400,
+    }}>
+      <div style={{ ...mono, fontWeight: 800, fontSize: 12, letterSpacing: "0.06em", color: darkOnLime ? "#0a0a0a" : "var(--accent)" }}>
+        📊 ОПРОС{poll.closed ? " · ЗАВЕРШЁН" : poll.allow_multi ? " · НЕСКОЛЬКО ОТВЕТОВ" : ""}
+      </div>
+      <div style={{ ...mono, fontWeight: 700, fontSize: 14, color: titleColor, marginTop: 4 }}>{poll.question}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 8 }}>
+        {poll.options.map((o) => {
+          const pct = poll.total_voters ? Math.round((o.votes / Math.max(1, poll.total_voters)) * 100) : 0;
+          return (
+            <div
+              key={o.id}
+              onClick={() => !poll.closed && act(() => pollsApi.vote(poll.id, o.id))}
+              style={{ cursor: poll.closed ? "default" : "pointer", opacity: busy ? 0.7 : 1 }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12.5 }}>
+                <span style={{ ...mono, color: titleColor, fontWeight: o.mine ? 800 : 500 }}>
+                  {o.mine ? "☑ " : poll.closed ? "" : "☐ "}{o.text}
+                  {o.author && <span style={{ color: subColor, fontSize: 10.5 }}> · от {o.author}</span>}
+                </span>
+                <span style={{ ...mono, color: subColor, whiteSpace: "nowrap" }}>{o.votes}</span>
+              </div>
+              <div style={{ height: 5, background: barBg, borderRadius: isNeo ? 0 : 3, marginTop: 2, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${(o.votes / total) * 100 || 0}%`, background: barFill, transition: "width 0.25s" }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {!poll.closed && poll.allow_add && (
+        addOpen ? (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const t = addText.trim();
+              if (!t) return;
+              act(() => pollsApi.addOption(poll.id, t)).then(() => { setAddText(""); setAddOpen(false); });
+            }}
+            style={{ display: "flex", gap: 6, marginTop: 8 }}
+          >
+            <input
+              autoFocus value={addText} onChange={(e) => setAddText(e.target.value)}
+              placeholder="Свой вариант…" maxLength={100}
+              style={{ ...mono, flex: 1, padding: "5px 8px", fontSize: 12.5, background: "var(--bg-input)", color: "var(--text-primary)", border: "1px solid var(--border)", borderRadius: isNeo ? 0 : 5 }}
+            />
+            <button type="submit" disabled={busy} style={{ ...mono, background: "var(--accent)", color: "var(--accent-text)", border: "none", borderRadius: isNeo ? 0 : 5, padding: "5px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>OK</button>
+          </form>
+        ) : (
+          <button
+            onClick={() => setAddOpen(true)}
+            style={{ ...mono, marginTop: 8, background: "transparent", color: darkOnLime ? "#0a0a0a" : "var(--accent)", border: `1px dashed ${edge}`, borderRadius: isNeo ? 0 : 5, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}
+          >➕ Свой вариант</button>
+        )
+      )}
+      <div style={{ ...mono, display: "flex", justifyContent: "space-between", gap: 10, fontSize: 11, color: subColor, marginTop: 8 }}>
+        <span>Проголосовало: {poll.total_voters}</span>
+        {!poll.closed && (poll.created_by === currentUserId || canModerate) && (
+          <button onClick={() => act(() => pollsApi.close(poll.id))} style={{ ...mono, background: "none", border: "none", color: subColor, cursor: "pointer", fontSize: 11, textDecoration: "underline" }}>
+            завершить
+          </button>
+        )}
+      </div>
+      {err && <div style={{ ...mono, color: "#ff6a5e", fontSize: 11, marginTop: 4 }}>{err}</div>}
+    </div>
+  );
+}
+
+function PollComposeModal({ isNeo, onClose, onCreate }: {
+  isNeo: boolean;
+  onClose: () => void;
+  onCreate: (data: { question: string; options: string[]; allow_multi: boolean; allow_add: boolean }) => Promise<void>;
+}) {
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
+  const [question, setQuestion] = useState("");
+  const [options, setOptions] = useState<string[]>(["", ""]);
+  const [allowMulti, setAllowMulti] = useState(false);
+  const [allowAdd, setAllowAdd] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const inputStyle: React.CSSProperties = {
+    ...mono, width: "100%", padding: "8px 10px", fontSize: 13,
+    background: "var(--bg-input)", color: "var(--text-primary)",
+    border: "1px solid var(--border)", borderRadius: isNeo ? 0 : 6, boxSizing: "border-box",
+  };
+
+  const submit = async () => {
+    if (busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await onCreate({
+        question: question.trim(),
+        options: options.map((o) => o.trim()).filter(Boolean),
+        allow_multi: allowMulti,
+        allow_add: allowAdd,
+      });
+    } catch (e: any) {
+      setErr(e.response?.data?.detail || "Не получилось создать опрос");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={s.imageOverlay} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--bg-primary)", border: "1px solid var(--border)", borderRadius: isNeo ? 0 : 10, padding: 18, width: 380, maxWidth: "92vw", display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ ...mono, fontWeight: 800, fontSize: 14, color: "var(--text-header)" }}>📊 Новый опрос</div>
+        <input autoFocus placeholder="Вопрос" value={question} maxLength={300}
+               onChange={(e) => setQuestion(e.target.value)} style={inputStyle} />
+        {options.map((o, i) => (
+          <div key={i} style={{ display: "flex", gap: 6 }}>
+            <input
+              placeholder={`Вариант ${i + 1}`} value={o} maxLength={100}
+              onChange={(e) => setOptions((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))}
+              style={{ ...inputStyle, flex: 1 }}
+            />
+            {options.length > 2 && (
+              <button onClick={() => setOptions((prev) => prev.filter((_, j) => j !== i))}
+                      style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 14 }}>✕</button>
+            )}
+          </div>
+        ))}
+        {options.length < 12 && (
+          <button onClick={() => setOptions((prev) => [...prev, ""])}
+                  style={{ ...mono, alignSelf: "flex-start", background: "transparent", color: "var(--accent)", border: "1px dashed var(--accent)", borderRadius: isNeo ? 0 : 5, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}>
+            + вариант
+          </button>
+        )}
+        <label style={{ ...mono, display: "flex", alignItems: "center", gap: 7, fontSize: 12.5, color: "var(--text-secondary)", cursor: "pointer" }}>
+          <input type="checkbox" checked={allowMulti} onChange={(e) => setAllowMulti(e.target.checked)} style={{ accentColor: "var(--accent)" }} />
+          Можно выбрать несколько
+        </label>
+        <label style={{ ...mono, display: "flex", alignItems: "center", gap: 7, fontSize: 12.5, color: "var(--text-secondary)", cursor: "pointer" }}>
+          <input type="checkbox" checked={allowAdd} onChange={(e) => setAllowAdd(e.target.checked)} style={{ accentColor: "var(--accent)" }} />
+          Участники могут дописывать свои варианты
+        </label>
+        {err && <div style={{ ...mono, color: "#ff6a5e", fontSize: 12 }}>{err}</div>}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button onClick={onClose} style={{ ...mono, background: "var(--bg-tertiary)", color: "var(--text-primary)", border: "1px solid var(--border)", borderRadius: isNeo ? 0 : 6, padding: "8px 14px", fontSize: 12.5, cursor: "pointer" }}>Отмена</button>
+          <button onClick={submit} disabled={busy} style={{ ...mono, background: "var(--accent)", color: "var(--accent-text)", border: "none", borderRadius: isNeo ? 0 : 6, padding: "8px 16px", fontSize: 12.5, fontWeight: 800, cursor: "pointer", opacity: busy ? 0.6 : 1 }}>
+            Создать
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

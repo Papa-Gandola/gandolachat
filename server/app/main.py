@@ -163,6 +163,8 @@ app.include_router(compendium.router)
 app.include_router(apk_mirror.router)
 from app import notes as _notes
 app.include_router(_notes.router)
+from app.api import polls as _polls
+app.include_router(_polls.router)
 
 
 @app.websocket("/ws")

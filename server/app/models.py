@@ -222,6 +222,64 @@ class Bet(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class Poll(Base):
+    """Опрос в чате. Носитель — обычное сообщение с маркером `/poll {id}`
+    (создаётся ТОЛЬКО сервером в одной транзакции с опросом; клиент
+    рендерит карточку по данным опроса и сверяет poll.chat_id с чатом —
+    спуф руками покажет просто текст). Требование хозяина: участники
+    могут ДОПИСЫВАТЬ свои варианты (allow_add)."""
+    __tablename__ = "polls"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chat_id: Mapped[int] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), index=True)
+    message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    question: Mapped[str] = mapped_column(String(300))
+    allow_multi: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    allow_add: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PollOption(Base):
+    __tablename__ = "poll_options"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    poll_id: Mapped[int] = mapped_column(ForeignKey("polls.id", ondelete="CASCADE"), index=True)
+    text: Mapped[str] = mapped_column(String(100))
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    # Кто дописал вариант (для «свой вариант от Васи»); у стартовых — автор опроса
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+
+
+class PollVote(Base):
+    """Голос. Один юзер — один голос за вариант (unique); при одиночном
+    выборе прошлые голоса юзера в опросе снимаются на сервере."""
+    __tablename__ = "poll_votes"
+    __table_args__ = (UniqueConstraint("option_id", "user_id", name="uq_poll_vote"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    poll_id: Mapped[int] = mapped_column(ForeignKey("polls.id", ondelete="CASCADE"), index=True)
+    option_id: Mapped[int] = mapped_column(ForeignKey("poll_options.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    voted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class PinnedMessage(Base):
+    """Закреп в чате. Несколько на чат; плашка показывает последний.
+    Права в группах — создатель чата и админы (admin_ids), в ЛС — оба."""
+    __tablename__ = "pinned_messages"
+    __table_args__ = (UniqueConstraint("chat_id", "message_id", name="uq_pin"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chat_id: Mapped[int] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), index=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey("messages.id", ondelete="CASCADE"))
+    pinned_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    pinned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 class PushToken(Base):
     """Expo push token registered by a mobile client. Multiple tokens per
     user are allowed (multi-device). Same token can only belong to one user

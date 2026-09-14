@@ -26,7 +26,7 @@ import { ScreenContainer } from "../../components/ScreenContainer";
 import { SwipeableMessage } from "../../components/SwipeableMessage";
 import { VoiceMessage, unloadAllVoicePlayers } from "../../components/VoiceMessage";
 import { ChatsStackParamList } from "../../navigation/types";
-import { apiErrorMessage, chatApi, ChatOut, MessageOut, notesApi, userApi } from "../../services/api";
+import { apiErrorMessage, chatApi, ChatOut, MessageOut, notesApi, userApi , pollsApi, pinsApi, PollOut, PinOut } from "../../services/api";
 import { cancelLocalReminder, scheduleLocalReminder } from "../../services/reminders";
 import { API_URL } from "../../services/config";
 import { useAuth } from "../../services/AuthContext";
@@ -116,6 +116,9 @@ export function ChatScreen({ navigation, route }: Props) {
   const [attachOpen, setAttachOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [reactionFor, setReactionFor] = useState<number | null>(null);
+  const [polls, setPolls] = useState<Record<number, PollOut>>({});
+  const [pins, setPins] = useState<PinOut[]>([]);
+  const [showPollModal, setShowPollModal] = useState(false);
   const [replyTo, setReplyTo] = useState<MessageOut | null>(null);
   const [editing, setEditing] = useState<MessageOut | null>(null);
   const [forwardMsg, setForwardMsg] = useState<MessageOut | null>(null);
@@ -287,6 +290,67 @@ export function ChatScreen({ navigation, route }: Props) {
     wsService.on("message_read", onRead);
     return () => wsService.off("message_read", onRead);
   }, [chatId, user?.id]);
+
+  // Закрепы + живые обновления опросов этого чата
+  useEffect(() => {
+    const cid = Number(chatId);
+    setPolls({});
+    let alive = true;
+    if (!isNotes) {
+      pinsApi.list(cid)
+        .then((res) => { if (alive) setPins(res.data); })
+        .catch(() => { if (alive) setPins([]); });
+    }
+    const onPollUpdated = (m: { poll?: PollOut }) => {
+      const p = m?.poll;
+      if (!p || p.chat_id !== cid) return;
+      // mine в бродкасте пустой — мержим со своим прежним состоянием
+      setPolls((prev) => {
+        const old = prev[p.id];
+        return {
+          ...prev,
+          [p.id]: {
+            ...p,
+            options: p.options.map((o) => ({
+              ...o,
+              mine: old?.options.find((x) => x.id === o.id)?.mine ?? false,
+            })),
+          },
+        };
+      });
+    };
+    const onChatPins = (m: { chat_id?: number; pins?: PinOut[] }) => {
+      if (m?.chat_id === cid && Array.isArray(m?.pins)) setPins(m.pins);
+    };
+    wsService.on("poll_updated", onPollUpdated);
+    wsService.on("chat_pins", onChatPins);
+    return () => {
+      alive = false;
+      wsService.off("poll_updated", onPollUpdated);
+      wsService.off("chat_pins", onChatPins);
+    };
+  }, [chatId]);
+
+  // Права на закреп проверяет СЕРВЕР (в группе — создатель/админы, в ЛС —
+  // оба); кнопку показываем всем не-Заметкам, не-админ получит понятный алерт
+  const loadPoll = async (pollId: number) => {
+    try {
+      const res = await pollsApi.get(pollId);
+      setPolls((prev) => ({ ...prev, [pollId]: res.data }));
+    } catch { /* спуф или гонка — покажем текст */ }
+  };
+
+  const togglePin = async (msgId: number) => {
+    try {
+      const inPins = pins.some((pn) => pn.message_id === msgId);
+      const cid = Number(chatId);
+      const res = inPins ? await pinsApi.unpin(cid, msgId) : await pinsApi.pin(cid, msgId);
+      setPins(res.data);
+    } catch (e) {
+      if (Platform.OS === "web") window.alert(apiErrorMessage(e));
+      else Alert.alert("Закреп", apiErrorMessage(e));
+    }
+  };
 
   // Peer presence (DM only): seed from REST, then track live via WS.
   useEffect(() => {
@@ -730,6 +794,34 @@ export function ChatScreen({ navigation, route }: Props) {
         </Pressable>
       )}
 
+      {pins.length > 0 ? (
+        <Pressable
+          onPress={() => {
+            const t = pins[0];
+            if (Platform.OS === "web") window.alert(`📌 ${t.sender_username}: ${t.content ?? t.file_name ?? ""}`);
+            else Alert.alert(`📌 Закреплено (${pins.length})`,
+              pins.map((pn) => `• ${pn.sender_username}: ${(pn.content ?? pn.file_name ?? "").slice(0, 80)}`).join("\n"),
+              pins.length === 1
+                ? [{ text: "Открепить", onPress: () => togglePin(pins[0].message_id), style: "destructive" }, { text: "Ок" }]
+                : [{ text: "Ок" }]);
+          }}
+          style={{
+            flexDirection: "row", alignItems: "center", gap: 7,
+            paddingHorizontal: 12, paddingVertical: 6,
+            backgroundColor: theme.colors.bgElev,
+            borderBottomWidth: 1, borderBottomColor: theme.colors.border,
+          }}
+        >
+          <Text style={{ fontSize: 12 }}>📌</Text>
+          <Text numberOfLines={1} style={{ flex: 1, fontFamily: theme.fonts.mono, fontSize: 11.5, color: theme.colors.inkDim }}>
+            <Text style={{ color: theme.colors.inkMuted }}>{pins[0].sender_username}: </Text>
+            {pins[0].content ?? (pins[0].file_name ? `📎 ${pins[0].file_name}` : "")}
+          </Text>
+          {pins.length > 1 ? (
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted }}>+{pins.length - 1}</Text>
+          ) : null}
+        </Pressable>
+      ) : null}
       <ScrollView
         ref={scrollRef}
         style={{ flex: 1 }}
@@ -824,6 +916,23 @@ export function ChatScreen({ navigation, route }: Props) {
               />
             );
           }
+          const pollMatch = m.content?.match(/^\/poll (\d+)$/);
+          if (pollMatch) {
+            const pid = Number(pollMatch[1]);
+            return (
+              <PollCardMobile
+                key={m.id}
+                theme={theme}
+                mine={mine}
+                poll={polls[pid]}
+                pollId={pid}
+                chatId={Number(chatId)}
+                meId={user?.id ?? -1}
+                onNeedLoad={loadPoll}
+                onChanged={(pl) => setPolls((prev) => ({ ...prev, [pl.id]: pl }))}
+              />
+            );
+          }
           if (m.content?.startsWith("/quest_card ")) {
             let qp: any = null;
             try { qp = JSON.parse(m.content.slice(12)); } catch { /* покажем как текст */ }
@@ -882,6 +991,8 @@ export function ChatScreen({ navigation, route }: Props) {
                   onCopy={() => copyMessage(m.content ?? "")}
                   onReply={() => beginReply(m)}
                   onForward={() => beginForward(m)}
+                  onPin={isNotes ? undefined : () => { togglePin(m.id); setReactionFor(null); }}
+                  pinned={pins.some((pn) => pn.message_id === m.id)}
                   onEdit={() => beginEdit(m)}
                   onDelete={() => deleteMessage(m.id)}
                   onPick={(emoji) => {
@@ -966,6 +1077,9 @@ export function ChatScreen({ navigation, route }: Props) {
             <AttachOption label="Фото" onPress={pickPhoto} theme={theme} />
             <AttachOption label="Камера" onPress={takePhoto} theme={theme} />
             <AttachOption label="Файл" onPress={pickFile} theme={theme} />
+            {!isNotes ? (
+              <AttachOption label="Опрос" onPress={() => { setAttachOpen(false); setShowPollModal(true); }} theme={theme} />
+            ) : null}
           </View>
         ) : null}
         {(replyTo || editing) && !recording ? (
@@ -1235,6 +1349,16 @@ export function ChatScreen({ navigation, route }: Props) {
           theme={theme}
         />
       )}
+      <PollComposeMobile
+        visible={showPollModal}
+        theme={theme}
+        onClose={() => setShowPollModal(false)}
+        onCreate={async (data) => {
+          const res = await pollsApi.create(Number(chatId), data);
+          setPolls((prev) => ({ ...prev, [res.data.id]: res.data }));
+          setShowPollModal(false);
+        }}
+      />
     </ScreenContainer>
   );
 }
@@ -1320,6 +1444,8 @@ function ReactionPicker({
   onCopy,
   onReply,
   onForward,
+  onPin,
+  pinned,
   onEdit,
   onDelete,
 }: {
@@ -1331,6 +1457,8 @@ function ReactionPicker({
   onCopy?: () => void;
   onReply?: () => void;
   onForward?: () => void;
+  onPin?: () => void;
+  pinned?: boolean;
   onEdit?: () => void;
   onDelete?: () => void;
 }) {
@@ -1398,6 +1526,7 @@ function ReactionPicker({
       >
         {chip(theme.decorate ? "ответить" : "Ответить", onReply)}
         {chip(theme.decorate ? "переслать" : "Переслать", onForward)}
+        {chip(pinned ? (theme.decorate ? "открепить" : "Открепить") : (theme.decorate ? "закрепить" : "Закрепить"), onPin)}
         {canCopy ? chip(theme.decorate ? "копир." : "Копир.", onCopy) : null}
         {canEdit ? chip(theme.decorate ? "изменить" : "Изменить", onEdit) : null}
         {mine ? chip(theme.decorate ? "удалить" : "Удалить", onDelete, true) : null}
@@ -1947,6 +2076,207 @@ function ReminderSheet({ visible, onClose, theme }: {
           {err ? (
             <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.danger }}>{err}</Text>
           ) : null}
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+
+// ===== Опросы =====
+function PollCardMobile({ theme, mine, poll, pollId, chatId, meId, onNeedLoad, onChanged }: {
+  theme: ThemeT;
+  mine: boolean;
+  poll?: PollOut;
+  pollId: number;
+  chatId: number;
+  meId: number;
+  onNeedLoad: (id: number) => void;
+  onChanged: (p: PollOut) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addText, setAddText] = useState("");
+
+  useEffect(() => {
+    if (!poll) onNeedLoad(pollId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pollId, !!poll]);
+
+  if (!poll || poll.chat_id !== chatId) {
+    return (
+      <View style={{ paddingHorizontal: 14, paddingVertical: 4 }}>
+        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.inkMuted }}>{`/poll ${pollId}`}</Text>
+      </View>
+    );
+  }
+
+  const maxVotes = Math.max(1, ...poll.options.map((o) => o.votes));
+  const act = async (fn: () => Promise<{ data: PollOut }>) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await fn();
+      onChanged(res.data);
+    } catch (e) {
+      if (Platform.OS === "web") window.alert(apiErrorMessage(e));
+      else Alert.alert("Опрос", apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <View style={{ flexDirection: "row", justifyContent: mine ? "flex-end" : "flex-start", paddingHorizontal: 14, paddingVertical: 4 }}>
+      <View style={{ width: "88%", padding: 11, borderRadius: theme.radius.bubble, borderWidth: 1, borderLeftWidth: 3, borderColor: theme.colors.accent, backgroundColor: theme.colors.bgElev }}>
+        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, fontWeight: "800", color: theme.colors.accent, letterSpacing: 0.5 }}>
+          📊 ОПРОС{poll.closed ? " · ЗАВЕРШЁН" : poll.allow_multi ? " · НЕСКОЛЬКО ОТВЕТОВ" : ""}
+        </Text>
+        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 13.5, fontWeight: "700", color: theme.colors.ink, marginTop: 3 }}>
+          {poll.question}
+        </Text>
+        <View style={{ gap: 7, marginTop: 8 }}>
+          {poll.options.map((o) => (
+            <Pressable key={o.id} disabled={poll.closed || busy} onPress={() => act(() => pollsApi.vote(poll.id, o.id))}>
+              <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 8 }}>
+                <Text style={{ flex: 1, fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: o.mine ? "800" : "500", color: theme.colors.ink }}>
+                  {o.mine ? "☑ " : poll.closed ? "" : "☐ "}{o.text}
+                  {o.author ? <Text style={{ color: theme.colors.inkMuted, fontSize: 10 }}> · от {o.author}</Text> : null}
+                </Text>
+                <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11.5, color: theme.colors.inkMuted }}>{o.votes}</Text>
+              </View>
+              <View style={{ height: 4, backgroundColor: theme.colors.bg, borderRadius: 2, marginTop: 2, overflow: "hidden" }}>
+                <View style={{ height: "100%", width: `${(o.votes / maxVotes) * 100}%`, backgroundColor: theme.colors.accent }} />
+              </View>
+            </Pressable>
+          ))}
+        </View>
+        {!poll.closed && poll.allow_add ? (
+          addOpen ? (
+            <View style={{ flexDirection: "row", gap: 6, marginTop: 9 }}>
+              <TextInput
+                autoFocus value={addText} onChangeText={setAddText} placeholder="Свой вариант…"
+                placeholderTextColor={theme.colors.inkMuted} maxLength={100}
+                style={{ flex: 1, fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.ink, backgroundColor: theme.colors.bg, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.sm, paddingHorizontal: 8, paddingVertical: 6 }}
+              />
+              <Pressable
+                disabled={busy}
+                onPress={() => {
+                  const t = addText.trim();
+                  if (!t) return;
+                  act(() => pollsApi.addOption(poll.id, t)).then(() => { setAddText(""); setAddOpen(false); });
+                }}
+                style={{ backgroundColor: theme.colors.accent, borderRadius: theme.radius.sm, paddingHorizontal: 12, justifyContent: "center" }}
+              >
+                <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11.5, fontWeight: "800", color: theme.colors.accentText }}>OK</Text>
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable onPress={() => setAddOpen(true)} style={{ marginTop: 9, alignSelf: "flex-start", borderWidth: 1, borderStyle: "dashed", borderColor: theme.colors.accent, borderRadius: theme.radius.sm, paddingHorizontal: 10, paddingVertical: 5 }}>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11.5, color: theme.colors.accent }}>➕ Свой вариант</Text>
+            </Pressable>
+          )
+        ) : null}
+        <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: 8 }}>
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: theme.colors.inkMuted }}>
+            Проголосовало: {poll.total_voters}
+          </Text>
+          {!poll.closed && poll.created_by === meId ? (
+            <Pressable onPress={() => act(() => pollsApi.close(poll.id))}>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: theme.colors.inkMuted, textDecorationLine: "underline" }}>завершить</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function PollComposeMobile({ visible, theme, onClose, onCreate }: {
+  visible: boolean;
+  theme: ThemeT;
+  onClose: () => void;
+  onCreate: (data: { question: string; options: string[]; allow_multi: boolean; allow_add: boolean }) => Promise<void>;
+}) {
+  const [question, setQuestion] = useState("");
+  const [options, setOptions] = useState<string[]>(["", ""]);
+  const [allowMulti, setAllowMulti] = useState(false);
+  const [allowAdd, setAllowAdd] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await onCreate({
+        question: question.trim(),
+        options: options.map((o) => o.trim()).filter(Boolean),
+        allow_multi: allowMulti,
+        allow_add: allowAdd,
+      });
+      setQuestion("");
+      setOptions(["", ""]);
+      setAllowMulti(false);
+      setAllowAdd(true);
+    } catch (e) {
+      if (Platform.OS === "web") window.alert(apiErrorMessage(e));
+      else Alert.alert("Опрос", apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const inputStyle = {
+    fontFamily: theme.fonts.mono, fontSize: 13, color: theme.colors.ink,
+    backgroundColor: theme.colors.bg, borderWidth: 1, borderColor: theme.colors.border,
+    borderRadius: theme.radius.sm, paddingHorizontal: 10, paddingVertical: 8,
+  } as const;
+
+  const checkRow = (label: string, val: boolean, set: (v: boolean) => void) => (
+    <Pressable onPress={() => set(!val)} style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+      <Text style={{ fontFamily: theme.fonts.mono, fontSize: 14, color: theme.colors.accent }}>{val ? "☑" : "☐"}</Text>
+      <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.inkDim }}>{label}</Text>
+    </Pressable>
+  );
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable onPress={onClose} style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", padding: 20 }}>
+        <Pressable onPress={() => {}} style={{ backgroundColor: theme.colors.bgElev, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.md, padding: 16, gap: 10 }}>
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 14, fontWeight: "800", color: theme.colors.ink }}>📊 Новый опрос</Text>
+          <TextInput value={question} onChangeText={setQuestion} placeholder="Вопрос" placeholderTextColor={theme.colors.inkMuted} maxLength={300} style={inputStyle} />
+          {options.map((o, i) => (
+            <View key={i} style={{ flexDirection: "row", gap: 6, alignItems: "center" }}>
+              <TextInput
+                value={o}
+                onChangeText={(t) => setOptions((prev) => prev.map((x, j) => (j === i ? t : x)))}
+                placeholder={`Вариант ${i + 1}`}
+                placeholderTextColor={theme.colors.inkMuted}
+                maxLength={100}
+                style={{ ...inputStyle, flex: 1 }}
+              />
+              {options.length > 2 ? (
+                <Pressable onPress={() => setOptions((prev) => prev.filter((_, j) => j !== i))} hitSlop={8}>
+                  <Text style={{ color: theme.colors.inkMuted, fontSize: 15 }}>✕</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ))}
+          {options.length < 12 ? (
+            <Pressable onPress={() => setOptions((prev) => [...prev, ""])} style={{ alignSelf: "flex-start" }}>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.accent }}>+ вариант</Text>
+            </Pressable>
+          ) : null}
+          {checkRow("Можно выбрать несколько", allowMulti, setAllowMulti)}
+          {checkRow("Участники могут дописывать свои варианты", allowAdd, setAllowAdd)}
+          <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 10, marginTop: 4 }}>
+            <Pressable onPress={onClose} style={{ paddingHorizontal: 14, paddingVertical: 9 }}>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12.5, color: theme.colors.inkMuted }}>Отмена</Text>
+            </Pressable>
+            <Pressable onPress={submit} disabled={busy} style={{ backgroundColor: theme.colors.accent, borderRadius: theme.radius.sm, paddingHorizontal: 16, paddingVertical: 9, opacity: busy ? 0.6 : 1 }}>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12.5, fontWeight: "800", color: theme.colors.accentText }}>Создать</Text>
+            </Pressable>
+          </View>
         </Pressable>
       </Pressable>
     </Modal>
