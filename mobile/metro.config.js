@@ -14,6 +14,9 @@ const config = getDefaultConfig(__dirname);
 const WEB_ALIASES = {
   "react-native-webrtc": path.resolve(__dirname, "web-stubs/react-native-webrtc.js"),
   "@notifee/react-native": path.resolve(__dirname, "web-stubs/notifee.js"),
+  // Маршрут звука звонка (динамик/разговорный) — андроидный AudioManager,
+  // в браузере такого рычага нет: стаб-пустышка, кнопка в вебе скрыта.
+  "react-native-incall-manager": path.resolve(__dirname, "web-stubs/react-native-incall-manager.js"),
 };
 
 config.resolver.resolveRequest = (context, moduleName, platform) => {

@@ -1,8 +1,9 @@
 import { Audio } from "expo-av";
 import * as KeepAwake from "expo-keep-awake";
 import { createContext, ReactNode, useContext, useEffect, useRef, useState } from "react";
-import { Animated, Dimensions, Modal, PanResponder, Platform, Pressable, StyleSheet, Text, Vibration, View, ViewStyle } from "react-native";
+import { Animated, AppState, Dimensions, Modal, PanResponder, Platform, Pressable, StyleSheet, Text, Vibration, View, ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import InCallManager from "react-native-incall-manager";
 import { MediaStream, RTCView } from "react-native-webrtc";
 
 import { Avatar } from "../components/Avatar";
@@ -10,6 +11,18 @@ import { HangupIcon, MicIcon, MicOffIcon, PhoneIcon, VideoIcon, VideoOffIcon } f
 import { useTheme } from "../theme";
 import { UserOut, userApi } from "./api";
 import { useAuth } from "./AuthContext";
+import {
+  applyVolume,
+  DEFAULT_GAIN,
+  getAllVolumes,
+  loadCallAudio,
+  getVolume,
+  isSpeakerOn,
+  setSpeakerPref,
+  setVolume as persistVolume,
+  stepVolume,
+  volumeLabel,
+} from "./callAudio";
 import { startCallForegroundService, stopCallForegroundService } from "./callForegroundService";
 import { webrtcService } from "./webrtc";
 import { wsService } from "./ws";
@@ -59,6 +72,28 @@ const colorFor = (id: number) => PALETTE[Math.abs(id) % PALETTE.length];
 const PIP_W = 104;
 const PIP_H = 150;
 
+/**
+ * Маршрут звука звонка. ВАЖНО: «динамик выключен» — это НЕ `false`.
+ *
+ * В react-native-incall-manager `setForceSpeakerphoneOn(false)` уходит в
+ * натив как flag=-1, а это «принудительно EARPIECE»: выбранное таким
+ * образом устройство в updateAudioDeviceState выигрывает у Bluetooth и
+ * проводной гарнитуры. Человек в наушниках слышал бы звонок из трубки
+ * телефона, и переключить это было бы нечем — кнопка знает только
+ * «разговорный ↔ громкая связь». Не-boolean даёт flag=0 — «маршрут по
+ * умолчанию», где гарнитура приоритетнее динамиков. Типы библиотеки
+ * объявляют boolean, отсюда каст.
+ */
+function forceSpeaker(on: boolean): void {
+  try {
+    (InCallManager.setForceSpeakerphoneOn as unknown as (flag?: boolean | null) => void)(
+      on ? true : null,
+    );
+  } catch {
+    // Веб-стаб или нет натива — маршрутом распоряжается система
+  }
+}
+
 export function CallProvider({ children }: { children: ReactNode }) {
   const theme = useTheme();
   const { user } = useAuth();
@@ -76,6 +111,18 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const [activeCalls, setActiveCalls] = useState<Map<number, number[]>>(new Map());
   const [peerInfo, setPeerInfo] = useState<Map<number, PeerInfo>>(new Map());
   const [peerVideoOff, setPeerVideoOff] = useState<Set<number>>(new Set());
+  // Громкая связь и персональная громкость участников (см. callAudio.ts).
+  const [speakerOn, setSpeakerOn] = useState(isSpeakerOn());
+  const [volumes, setVolumes] = useState<Map<number, number>>(() => getAllVolumes());
+  const volumesRef = useRef<Map<number, number>>(volumes);
+  // Чей регулятор раскрыт. Живёт в провайдере, а не в плитке: Modal
+  // активного звонка при сворачивании размонтируется, и локальный стейт
+  // плитки терялся бы на каждом «свернул — ответил в чате — развернул».
+  const [volOpenFor, setVolOpenFor] = useState<number | null>(null);
+  // Трогал ли пользователь динамик В ЭТОМ звонке: если нет — включение
+  // своей камеры само переводит звук на громкую связь (с видео телефон
+  // держат перед собой, а не у уха). Ручной выбор не переигрываем.
+  const speakerTouchedRef = useRef(false);
   const activeRef = useRef(false);
   const ringRef = useRef<Audio.Sound | null>(null);
   // Ref-зеркала для WS-хендлеров (их замыкание живёт от первого рендера).
@@ -88,6 +135,16 @@ export function CallProvider({ children }: { children: ReactNode }) {
     userIdRef.current = user?.id ?? null;
   }, [user?.id]);
   const insets = useSafeAreaInsets();
+
+  // Сохранённые настройки звука (маршрут + персональные громкости) лежат в
+  // сторе: стартовое состояние взято из пустого кэша, поэтому после
+  // прогрева синхронизируем его один раз на запуск приложения.
+  useEffect(() => {
+    void loadCallAudio().then(() => {
+      setSpeakerOn(isSpeakerOn());
+      setVolumes(getAllVolumes());
+    });
+  }, []);
 
   // Секундомер звонка — для шапки и мини-бара свёрнутого режима.
   useEffect(() => {
@@ -110,12 +167,19 @@ export function CallProvider({ children }: { children: ReactNode }) {
   // ongoing notification anchored to a service.
   useEffect(() => {
     if (!inCall) return;
-    const peer = callName || "собеседником";
-    startCallForegroundService(peer);
     return () => {
       stopCallForegroundService();
     };
-  }, [inCall, callName]);
+  }, [inCall]);
+  // Уведомление сервиса переобъявляем и при включении/выключении камеры:
+  // с Android 14 тип сервиса определяет, ЧТО ему позволено в фоне, и без
+  // типа camera система отбирает камеру при сворачивании — у собеседника
+  // застывал кадр. Отдельно от эффекта выше, чтобы тумблер камеры не
+  // дёргал stop/start самого сервиса.
+  useEffect(() => {
+    if (!inCall) return;
+    void startCallForegroundService(callName || "собеседником", !videoOff);
+  }, [inCall, callName, videoOff]);
   // Keep the screen on + hold a wake lock for the duration of an active call.
   // Without this Android can suspend the JS thread when the user backgrounds
   // the app, which freezes the WebRTC render loop and effectively pauses the
@@ -408,6 +472,107 @@ export function CallProvider({ children }: { children: ReactNode }) {
     setIncoming(null);
   };
 
+  // Возврат из фона с включённой камерой: если Андроид успел её отобрать
+  // (старые сборки без типа сервиса camera — и мало ли что ещё), дорожка
+  // остаётся в потоке, но кадров не даёт, и собеседник видит застывшую
+  // картинку ДАЖЕ после возврата — люди лечили это ручным «выкл/вкл».
+  // Делаем то же самое сами. Проверяем с задержкой: сразу после resume
+  // дорожка может числиться muted мгновение, дёргать её зря незачем.
+  useEffect(() => {
+    if (!inCall || videoOff || Platform.OS === "web") return;
+    let cancelled = false;
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active") return;
+      setTimeout(async () => {
+        if (cancelled || !webrtcService.isCameraDead()) return;
+        const ok = await webrtcService.restartCamera();
+        if (cancelled) return;
+        if (!ok) {
+          // Камеру забрали насовсем (занял кто-то другой) — честно
+          // показываем «камера выключена», а не вечный стоп-кадр.
+          setVideoOff(true);
+          sendVideoStatus(true);
+        }
+      }, 600);
+    });
+    return () => {
+      cancelled = true;
+      sub.remove();
+    };
+  }, [inCall, videoOff]);
+
+  // Аудиосессия звонка (андроидный AudioManager через InCallManager).
+  //
+  // Забираем её ТОЛЬКО когда кто-то реально подключился, а не по факту
+  // inCall: и наш рингтон входящего, и гудок исходящего играют через
+  // expo-av, а режим IN_COMMUNICATION забирает аудиофокус и увёл бы их в
+  // разговорный динамик («звонилка молчит»). Сессию держим до конца
+  // звонка: временный уход remotes в ноль (реконнект пира) её не роняет.
+  const audioSessionRef = useRef(false);
+  useEffect(() => {
+    if (!inCall || remotes.length === 0 || audioSessionRef.current) return;
+    audioSessionRef.current = true;
+    try {
+      InCallManager.start({ media: "audio" });
+    } catch {
+      // Нет модуля (веб-стаб) — звук останется на системном маршруте
+    }
+    forceSpeaker(speakerOn);
+  }, [inCall, remotes.length, speakerOn]);
+
+  // Конец звонка: отдаём сессию и сбрасываем ВСЁ, что решали на лету.
+  // speakerOn обязателен к откату: авто-переезд на громкую связь при
+  // включении камеры в стор не пишется, но жил бы в стейте и молча
+  // становился бы дефолтом следующих звонков.
+  useEffect(() => {
+    if (!inCall) return;
+    return () => {
+      if (audioSessionRef.current) {
+        try {
+          InCallManager.stop();
+        } catch {
+          // s'ok
+        }
+        audioSessionRef.current = false;
+      }
+      speakerTouchedRef.current = false;
+      setSpeakerOn(isSpeakerOn());
+      setVolOpenFor(null);
+    };
+  }, [inCall]);
+
+  // Персональная громкость: применяем при КАЖДОЙ смене состава и приходе
+  // дорожек. Аудиодорожка участника может появиться позже самого участника
+  // (аудио-старт, ренегосиация), поэтому одного раза на входе мало.
+  useEffect(() => {
+    volumesRef.current = volumes;
+    if (!inCall) return;
+    for (const r of remotes) applyVolume(r.stream, volumes.get(r.userId) ?? getVolume(r.userId));
+  }, [inCall, remotes, volumes]);
+
+  const toggleSpeaker = () => {
+    const on = !speakerOn;
+    speakerTouchedRef.current = true;
+    setSpeakerOn(on);
+    void setSpeakerPref(on);
+    forceSpeaker(on);
+  };
+
+  /** −/+ громкости конкретного участника (шкала в callAudio).
+   *  Читаем из ref-зеркала: два быстрых тапа в одном кадре видели бы одно
+   *  и то же состояние и давали один шаг вместо двух. */
+  const changeVolume = (userId: number, dir: 1 | -1) => {
+    const cur = volumesRef.current.get(userId) ?? getVolume(userId);
+    const next = stepVolume(cur, dir);
+    if (next === cur) return;
+    const updated = new Map(volumesRef.current).set(userId, next);
+    volumesRef.current = updated;
+    setVolumes(updated);
+    void persistVolume(userId, next);
+    const r = remotes.find((x) => x.userId === userId);
+    if (r) applyVolume(r.stream, next); // не ждём ре-рендера — слышно сразу
+  };
+
   const end = () => webrtcService.endCall();
   const toggleMute = () => {
     const m = !muted;
@@ -422,6 +587,20 @@ export function CallProvider({ children }: { children: ReactNode }) {
       if (!ok) return; // камеру не дали — остаёмся с аватаркой
       setVideoOff(false);
       sendVideoStatus(false);
+      // Включил камеру — телефон держат перед собой: сами уводим звук на
+      // громкую связь, если человек не выбирал маршрут руками в этом звонке.
+      if (!speakerTouchedRef.current && !speakerOn) {
+        setSpeakerOn(true);
+        forceSpeaker(true);
+      }
+      // Датчик приближения гасит экран, когда маршрут — разговорный
+      // динамик. В видеозвонке телефон держат перед собой, и экран гас бы
+      // от собственной руки, если человек сам выбрал разговорный.
+      try {
+        InCallManager.stopProximitySensor();
+      } catch {
+        // веб-стаб
+      }
     } else {
       webrtcService.disableCamera();
       setVideoOff(true);
@@ -524,7 +703,14 @@ export function CallProvider({ children }: { children: ReactNode }) {
               </Text>
             </View>
           ) : (
-            <RemoteGrid tiles={remoteTiles} fallbackName={callName} />
+            <RemoteGrid
+              tiles={remoteTiles}
+              fallbackName={callName}
+              volumes={volumes}
+              onVolume={changeVolume}
+              openFor={volOpenFor}
+              onToggleOpen={(uid) => setVolOpenFor((cur) => (cur === uid ? null : uid))}
+            />
           )}
 
           {/* Local PiP (draggable) */}
@@ -567,10 +753,19 @@ export function CallProvider({ children }: { children: ReactNode }) {
           </Pressable>
 
           {/* Controls */}
-          <View style={{ position: "absolute", left: 0, right: 0, bottom: 44, flexDirection: "row", justifyContent: "center", gap: 20 }}>
+          {/* gap поджат и разрешён перенос: с кнопкой динамика их до пяти,
+              на узком экране в один ряд по 20px уже не помещались */}
+          <View style={{ position: "absolute", left: 0, right: 0, bottom: 44, flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 12 }}>
             <CircleBtn bg={muted ? theme.colors.danger : "rgba(255,255,255,0.16)"} onPress={toggleMute}>
               {muted ? <MicOffIcon color="#fff" size={24} /> : <MicIcon color="#fff" size={24} />}
             </CircleBtn>
+            {/* Динамик ↔ разговорный. В вебе маршрутом звука рулит система —
+                кнопке там нечего делать. */}
+            {Platform.OS !== "web" && (
+              <CircleBtn bg={speakerOn ? theme.colors.online : "rgba(255,255,255,0.16)"} onPress={toggleSpeaker}>
+                <Text style={{ fontSize: 22 }}>{speakerOn ? "🔊" : "🔈"}</Text>
+              </CircleBtn>
+            )}
             <CircleBtn bg={videoOff ? theme.colors.danger : "rgba(255,255,255,0.16)"} onPress={toggleVideo}>
               {videoOff ? <VideoOffIcon color="#fff" size={24} /> : <VideoIcon color="#fff" size={24} />}
             </CircleBtn>
@@ -631,12 +826,33 @@ interface RemoteTileData {
 // Adaptive grid of remote video tiles for group calls. Layout depends on
 // the number of participants; single-remote falls through to a full-screen
 // tile so 1:1 calls look the same as before.
-function RemoteGrid({ tiles, fallbackName }: { tiles: RemoteTileData[]; fallbackName: string }) {
+function RemoteGrid({
+  tiles,
+  fallbackName,
+  volumes,
+  onVolume,
+  openFor,
+  onToggleOpen,
+}: {
+  tiles: RemoteTileData[];
+  fallbackName: string;
+  volumes: Map<number, number>;
+  onVolume: (userId: number, dir: 1 | -1) => void;
+  openFor: number | null;
+  onToggleOpen: (userId: number) => void;
+}) {
   return (
     <View style={{ ...StyleSheet.absoluteFillObject, flexDirection: "row", flexWrap: "wrap" }}>
       {tiles.map((t, i) => (
         <View key={t.userId} style={[{ padding: tiles.length > 1 ? 1 : 0 }, tileSize(tiles.length, i)]}>
-          <RemoteTile tile={t} fallbackName={fallbackName} />
+          <RemoteTile
+            tile={t}
+            fallbackName={fallbackName}
+            gain={volumes.get(t.userId) ?? DEFAULT_GAIN}
+            onVolume={onVolume}
+            open={openFor === t.userId}
+            onToggleOpen={onToggleOpen}
+          />
         </View>
       ))}
     </View>
@@ -656,13 +872,37 @@ function tileSize(count: number, idx: number): { width: ViewStyle["width"]; heig
   return { width: "33.3333%", height: "50%" };
 }
 
-function RemoteTile({ tile, fallbackName }: { tile: RemoteTileData; fallbackName: string }) {
+function RemoteTile({
+  tile,
+  fallbackName,
+  gain,
+  onVolume,
+  open,
+  onToggleOpen,
+}: {
+  tile: RemoteTileData;
+  fallbackName: string;
+  gain: number;
+  onVolume: (userId: number, dir: 1 | -1) => void;
+  open: boolean;
+  onToggleOpen: (userId: number) => void;
+}) {
   const theme = useTheme();
   const { stream, info, videoOff, userId } = tile;
   const name = info?.username ?? fallbackName;
   const showVideo = !videoOff && stream.getVideoTracks().length > 0;
+  // Регулятор — только там, где он реально работает. В вебе у дорожки нет
+  // _setVolume, и «🔇 Вася» врал бы: Васю прекрасно слышно.
+  const volumeSupported = Platform.OS !== "web";
+  const showVol = open && volumeSupported;
+  // Тап по участнику разворачивает его регулятор громкости прямо в подписи.
+  // Отдельную панель сюда не поставить: сверху шапка звонка и «свернуть»,
+  // снизу по центру — кнопки управления, а подпись живёт в свободном углу.
   return (
-    <View style={{ flex: 1, backgroundColor: "#111", overflow: "hidden" }}>
+    <Pressable
+      onPress={volumeSupported ? () => onToggleOpen(userId) : undefined}
+      style={{ flex: 1, backgroundColor: "#111", overflow: "hidden" }}
+    >
       {/* RTCView рендерим ВСЕГДА: в вебе (PWA) это <video>, через который
           играет и ЗВУК. Если рендерить его только при включённой камере,
           собеседник без камеры в PWA был бы НЕМЫМ (главная причина «плохих
@@ -670,13 +910,18 @@ function RemoteTile({ tile, fallbackName }: { tile: RemoteTileData; fallbackName
           key по видеодорожке ОБЯЗАТЕЛЕН: нативный RTCView привязывает
           дорожку один раз при установке streamURL; камера теперь всегда
           приезжает ПОЗЖЕ (аудио-старт), и без ремаунта был бы вечный
-          чёрный экран вместо видео. */}
-      <RTCView
-        key={stream.getVideoTracks()[0]?.id ?? "audio-only"}
-        streamURL={stream.toURL()}
-        objectFit="cover"
-        style={StyleSheet.absoluteFill}
-      />
+          чёрный экран вместо видео.
+          pointerEvents="none" на обёртке — как в LocalPip: нативный
+          RTCView (SurfaceView) съедает касание, и тап по плитке с
+          ВКЛЮЧЁННЫМ видео не открывал бы регулятор громкости. */}
+      <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+        <RTCView
+          key={stream.getVideoTracks()[0]?.id ?? "audio-only"}
+          streamURL={stream.toURL()}
+          objectFit="cover"
+          style={StyleSheet.absoluteFill}
+        />
+      </View>
       {!showVideo && (
         <View
           style={{
@@ -694,25 +939,72 @@ function RemoteTile({ tile, fallbackName }: { tile: RemoteTileData; fallbackName
           />
         </View>
       )}
-      {/* Tile label — only shows in group calls (2+ remotes) since a single
-          full-screen tile already has the call header above. */}
+      {/* Подпись участника, она же регулятор его громкости по тапу.
+          Не-стопроцентная громкость видна и в свёрнутом виде — иначе
+          «почему он такой тихий» выяснялось бы методом тыка. */}
       <View
-        pointerEvents="none"
         style={{
           position: "absolute",
           left: 6,
           bottom: 6,
+          // Раскрытый регулятор ограничиваем шириной плитки: без right он
+          // считается по контенту (~96px сверх имени) и уезжал за край в
+          // сетке на 4-6 человек — кнопка «+» была недостижима. Закрытая
+          // подпись остаётся компактной «по содержимому».
+          ...(showVol ? { right: 6 } : null),
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 8,
           paddingHorizontal: 6,
-          paddingVertical: 2,
+          paddingVertical: 3,
           backgroundColor: "rgba(0,0,0,0.55)",
           borderRadius: 4,
         }}
       >
-        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: "#fff" }} numberOfLines={1}>
-          {name}
+        <Text
+          style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: "#fff", flexShrink: 1 }}
+          numberOfLines={1}
+        >
+          {!volumeSupported || gain === DEFAULT_GAIN
+            ? name
+            : gain === 0
+              ? `🔇 ${name}`
+              : `${name} · ${volumeLabel(gain)}`}
         </Text>
+        {showVol && (
+          <>
+            <VolBtn label="−" onPress={() => onVolume(userId, -1)} />
+            <Text
+              style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: "#fff", minWidth: 34, textAlign: "center" }}
+            >
+              {volumeLabel(gain)}
+            </Text>
+            <VolBtn label="+" onPress={() => onVolume(userId, 1)} />
+          </>
+        )}
       </View>
-    </View>
+    </Pressable>
+  );
+}
+
+/** Кнопка −/+ в подписи участника. Мелкая по площади, но с hitSlop:
+ *  пальцем по плитке 1/6 экрана иначе не попасть. */
+function VolBtn({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={10}
+      style={{
+        width: 22,
+        height: 22,
+        borderRadius: 11,
+        backgroundColor: "rgba(255,255,255,0.2)",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <Text style={{ color: "#fff", fontSize: 14, lineHeight: 16, fontWeight: "700" }}>{label}</Text>
+    </Pressable>
   );
 }
 

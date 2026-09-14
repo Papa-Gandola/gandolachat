@@ -15,6 +15,15 @@ async function ensurePermissions(video: boolean) {
   if (Platform.OS !== "android") return;
   const perms = [PermissionsAndroid.PERMISSIONS.RECORD_AUDIO];
   if (video) perms.push(PermissionsAndroid.PERMISSIONS.CAMERA);
+  // BLUETOOTH_CONNECT (Android 12+) — БЕЗ него InCallManager вообще не
+  // видит гарнитуру: его BT-менеджер на старте проверяет разрешение и молча
+  // выходит, BT не попадает в список устройств, и звук звонка уходит мимо
+  // наушников. Спрашиваем здесь, вместе с микрофоном на первом звонке:
+  // в середине разговора диалог «разрешить доступ к устройствам рядом»
+  // выглядит дико. Отказ звонок не ломает — просто не будет BT-маршрута.
+  if (typeof Platform.Version === "number" && Platform.Version >= 31) {
+    perms.push(PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT);
+  }
   try {
     await PermissionsAndroid.requestMultiple(perms);
   } catch {
@@ -412,9 +421,25 @@ class WebRTCService {
     const ls = this.localStream;
     if (!ls) return false;
     const existing = ls.getVideoTracks()[0];
-    if (existing) {
+    // Живую дорожку просто включаем обратно (слот уже согласован).
+    // МЁРТВУЮ (Андроид отобрал камеру в фоне, другое приложение перехватило)
+    // выбрасываем: без этого «включить камеру» ставило enabled=true на
+    // трупе, и собеседник продолжал видеть застывший кадр.
+    if (existing && existing.readyState !== "ended") {
       existing.enabled = true;
       return true;
+    }
+    if (existing) {
+      try {
+        existing.stop();
+      } catch {
+        // уже мертва
+      }
+      try {
+        ls.removeTrack(existing);
+      } catch {
+        // s'ok
+      }
     }
     try {
       await ensurePermissions(true);
@@ -443,6 +468,37 @@ class WebRTCService {
       console.warn("[webrtc] enableCamera failed", err);
       return false;
     }
+  }
+
+  /** Жива ли наша видеодорожка. `muted` у локальной дорожки значит «источник
+   *  перестал давать кадры» — ровно то, что происходит, когда Андроид
+   *  отбирает камеру у свёрнутого приложения: дорожка на месте, картинка у
+   *  собеседника застыла, и сама она не оживает. */
+  isCameraDead(): boolean {
+    const t = this.localStream?.getVideoTracks()[0];
+    if (!t) return false; // камеры нет вовсе — это не «сломалась»
+    return t.readyState === "ended" || t.muted === true;
+  }
+
+  /** Пересобрать видеодорожку с нуля — то же, что ручное «выкл/вкл»,
+   *  которым люди и лечили застывшую картинку. */
+  async restartCamera(): Promise<boolean> {
+    const ls = this.localStream;
+    if (!ls) return false;
+    const old = ls.getVideoTracks()[0];
+    if (old) {
+      try {
+        old.stop();
+      } catch {
+        // уже мертва
+      }
+      try {
+        ls.removeTrack(old);
+      } catch {
+        // s'ok
+      }
+    }
+    return this.enableCamera();
   }
 
   /** Выключить камеру ПОЛНОСТЬЮ (гаснет LED, не греет телефон) — не просто
