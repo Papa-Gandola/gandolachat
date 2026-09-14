@@ -139,6 +139,31 @@ def _offsite_sync(dump: Path) -> None:
             print(f"[backup] offsite rotate failed: {type(e).__name__}: {e}")
 
 
+def log_health() -> None:
+    """Строка о состоянии бэкапов в лог при старте сервера.
+
+    Джоба ходит раз в сутки в 4 утра, и её падение (сломанный pg_dump
+    после смены дистрибутива в базовом образе — уже ловили) видно только
+    в логах той ночи. Печатаем возраст свежего дампа сразу при старте:
+    хозяин смотрит `docker compose logs` как раз после деплоя.
+    """
+    try:
+        dumps = sorted(BACKUP_DIR.glob("gandola-*.dump"))
+        if not dumps:
+            print("[backup] ВНИМАНИЕ: дампов нет ни одного — бэкап ни разу не отработал")
+            return
+        newest = dumps[-1]
+        age_h = (datetime.now(timezone.utc).timestamp() - newest.stat().st_mtime) / 3600
+        mark = "" if age_h < 48 else "  ← СТАРЫЙ, бэкап не отрабатывает!"
+        print(
+            f"[backup] свежий дамп: {newest.name} "
+            f"({newest.stat().st_size // 1024} KiB, {age_h:.0f} ч назад), "
+            f"всего {len(dumps)} шт.{mark}"
+        )
+    except Exception as e:
+        print(f"[backup] health check failed: {type(e).__name__}: {e}")
+
+
 async def run_backup() -> None:
     """Джоба: pg_dump в тредпуле (не блокируем event loop), ошибки — в лог."""
     try:
