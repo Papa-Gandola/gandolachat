@@ -137,12 +137,18 @@ print-логи видны в `docker compose logs` с опозданием (не
   PASSWORD (compose из .env или server/.env) свежий дамп улетает PUT-ом
   на любой WebDAV + удалённая ротация KEEP через PROPFIND; httpx IPv4,
   ошибка выгрузки не роняет локальный бэкап. Приёмник — НЕроссийский
-  (решение хозяина): Koofr app.koofr.net/dav/Koofr + app-пароль. pg_dump-16 в Dockerfile КОПИРУЕТСЯ из образа
-  postgres:16 (multi-stage + ldd-сбор библиотек БЕЗ libc, обёртки с
-  LD_LIBRARY_PATH в /usr/local/bin) — PGDG из РФ шаток, а главное
-  плавающий python:3.12-slim уехал на trixie и bookworm-PGDG стал
-  неразрешим (exit 100). База сервера прибита к python:3.12-slim-bookworm
-  — не отпинывать: плавающий тег уже ломал сборку сменой дистрибутива.
+  (решение хозяина): Koofr app.koofr.net/dav/Koofr + app-пароль (логин —
+  почта, папку создаёт MKCOL). pg_dump-16 в Dockerfile КОПИРУЕТСЯ из
+  образа **postgres:16-bookworm** (multi-stage + ldd-сбор библиотек БЕЗ
+  libc, обёртки с LD_LIBRARY_PATH в /usr/local/bin) — PGDG из РФ шаток, а
+  главное плавающий python:3.12-slim уехал на trixie и bookworm-PGDG стал
+  неразрешим (exit 100). ОБЕ стадии прибиты к bookworm и меняются только
+  ПАРОЙ: плавающий `postgres:16` тоже уехал на trixie, и его pg_dump
+  (glibc 2.41) молча падал на bookworm-базе (2.36) с «GLIBC_2.38 not
+  found» — бэкапы не делались сутками, никто не знал. Страховки: `RUN
+  pg_dump --version` в сборке (образ не соберётся с битым бинарником) и
+  `backups.log_health()` в lifespan — печатает возраст свежего дампа в
+  лог при старте («дампов нет» / «← СТАРЫЙ»).
   Достать: `docker compose cp
   server:/app/backups/<файл> ./`; восстановить: pg_restore --clean
   --if-exists -h db -U gandola -d gandolachat (затирает базу!).
@@ -468,6 +474,14 @@ useChats/getChatName, иначе показывался бы сам юзер.
     ассетов виснет на ~100% («загрузка не завершена»). Большие файлы для
     людей раздаём со СВОЕГО VPS (`/apk`, app/apk_mirror.py), GitHub — только
     как источник для зеркала и фолбэк.
+13. **Плавающие теги базовых образов** (`python:3.12-slim`, `postgres:16`)
+    переезжают на новый Debian и ломают сборку ДВАЖДЫ по-разному: сперва
+    неразрешимый apt (exit 100), потом — тихо: бинарник с trixie (glibc
+    2.41) собрался, скопировался и падал в рантайме на bookworm (2.36).
+    Все стадии multi-stage — на ОДНОМ прибитом дистрибутиве, менять
+    парой. И любой скопированный бинарник проверять в самой сборке
+    (`RUN pg_dump --version`) — иначе о поломке узнаёшь, когда бэкап
+    понадобился.
 
 ## Бэклог (одобрено хозяином, порядок согласован)
 
