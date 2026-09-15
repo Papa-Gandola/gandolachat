@@ -8,8 +8,12 @@ import React, { useEffect, useRef, useState } from "react";
 //
 // Голосовые с телефона — m4a (AAC). Официальные сборки Electron идут с
 // проприетарными кодеками (H.264/AAC), так что <audio> их играет сам.
-// Chromium у стримящегося m4a может отдать duration=Infinity до полной
-// загрузки — до первого честного значения показываем «–:––».
+// Записи из PWA — webm под тем же именем voice_*.m4a, а у webm от
+// MediaRecorder длительности в контейнере нет: duration=Infinity на весь
+// первый прослух. Классический обход — прыгнуть в currentTime=1e101, тогда
+// Chromium досчитывает длительность и отдаёт честную; до этого «–:––».
+// Перемотка и подгрузка метаданных требуют HTTP Range от сервера — его
+// отдаёт наша ручка /uploads (uploads_static.py), не StaticFiles.
 
 const SPEEDS = [1, 1.5, 2] as const;
 
@@ -44,8 +48,32 @@ export function VoicePlayer({ src, name, voice, isNeo }: {
     a.preload = "metadata";
     a.src = src;
     audioRef.current = a;
-    const onTime = () => setTime(a.currentTime);
-    const onDur = () => setDuration(a.duration);
+    // Infinity (webm из PWA) → форсим пересчёт прыжком в «бесконечность»,
+    // следующий timeupdate вернёт нас на ноль уже с конечной длительностью.
+    let fixingInfinite = false;
+    const onTime = () => {
+      if (fixingInfinite) {
+        if (Number.isFinite(a.duration)) {
+          fixingInfinite = false;
+          setDuration(a.duration);
+          a.currentTime = 0;
+        }
+        return;
+      }
+      setTime(a.currentTime);
+    };
+    const onDur = () => {
+      if (a.duration === Infinity && !fixingInfinite) {
+        fixingInfinite = true;
+        try {
+          a.currentTime = 1e101;
+        } catch {
+          fixingInfinite = false;
+        }
+        return;
+      }
+      setDuration(a.duration);
+    };
     const onEnd = () => {
       setPlaying(false);
       setTime(0);
@@ -86,7 +114,14 @@ export function VoicePlayer({ src, name, voice, isNeo }: {
     if (current && current !== a) current.pause();
     current = a;
     a.playbackRate = SPEEDS[speedIdx];
-    void a.play().catch(() => setError(true));
+    // AbortError — штатный ответ на pause() до того, как play() успел
+    // начать (быстро переключился на другое голосовое): это не ошибка
+    // файла, ссылку «не удалось воспроизвести» показываем только по
+    // событию error самого элемента.
+    void a.play().catch((e: unknown) => {
+      const name = (e as { name?: string } | null)?.name;
+      if (name !== "AbortError") setError(true);
+    });
   };
 
   const cycleSpeed = () => {
@@ -118,6 +153,9 @@ export function VoicePlayer({ src, name, voice, isNeo }: {
 
   return (
     <div
+      // Двойной клик по строке сообщения открывает «Ответить» — быстрые
+      // play/pause или два тычка по скорости не должны его вызывать.
+      onDoubleClick={(e) => e.stopPropagation()}
       style={{
         display: "inline-flex",
         alignItems: "center",

@@ -39,9 +39,16 @@ print-логи видны в `docker compose logs` с опозданием (не
 В lifespan: alembic upgrade → синк
 `assets/compendium/intro.mp4` в uploads → APScheduler-джобы.
 
-- `app/main.py` — app, CORS, статика `/uploads` и `/app` (PWA), WS-роут
+- `app/main.py` — app, CORS, статика `/app` (PWA), WS-роут
   `/ws?token=`, джобы: cleanup_expired_messages (удаляет ТОЛЬКО сообщения с
   выставленным expires_at — обычные ВЕЧНЫЕ), поллер компендиума.
+  `/uploads` — НЕ StaticFiles, а `app/uploads_static.py`: starlette 0.37
+  (прибит fastapi 0.111) на Range отвечает 200 целиком, Chromium тогда не
+  даёт перематывать <audio> и качает m4a целиком ради moov в хвосте.
+  Своя ручка: 206 + Content-Range на одиночный диапазон (в т.ч. суффикс
+  `bytes=-N`), 416, HEAD, Accept-Ranges всегда, защита от `..`. nginx на
+  VPS Range сам не подкладывает (proxy_force_ranges выключен) — поэтому
+  у себя, а не в конфиге, которого нет в репо.
 - `app/config.py` — Settings (env/.env): DATABASE_URL, SECRET_KEY,
   UPLOAD_DIR, MAX_FILE_SIZE_MB=50, MESSAGE_TTL_DAYS (наследие, к сообщениям
   не применяется), OPENDOTA_API_KEY/STEAM_API_KEY (опц.), DOTA_POLL_MINUTES=20.

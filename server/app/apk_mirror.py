@@ -159,14 +159,17 @@ async def apk_info():
     404 = сборка ещё не доехала до зеркала (первый релиз в пути)."""
     if not _apk_path().is_file():
         raise HTTPException(404, "apk not mirrored yet")
+    # Файл есть, а меты нет (ручная заливка в uploads/apk/ или сбой между
+    # rename и записью meta.json) — QR работает, честно отдаём «версия
+    # неизвестна», а не «сборка готовится».
     try:
         meta = json.loads(_meta_path().read_text())
     except Exception:
-        raise HTTPException(404, "apk meta missing")
+        meta = {}
     return {
         "release_name": meta.get("release_name"),
         "updated_at": meta.get("updated_at"),
-        "size": meta.get("size"),
+        "size": meta.get("size") or _apk_path().stat().st_size,
     }
 
 

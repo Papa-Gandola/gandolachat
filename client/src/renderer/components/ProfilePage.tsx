@@ -283,7 +283,7 @@ function MobileAppSection({ isNeo }: { isNeo: boolean }) {
         const date = when ? new Date(when).toLocaleDateString("ru-RU") : "";
         const mb = info?.size ? `${Math.round(info.size / 1048576)} МБ` : "";
         const line = [info?.release_name, date && `от ${date}`, mb].filter(Boolean).join(" · ");
-        if (line) setApkInfo(line);
+        setApkInfo(info?.release_name ? line : `версия сборки неизвестна${mb ? ` · ${mb}` : ""}`);
       })
       .catch((code) => {
         if (!alive) return;

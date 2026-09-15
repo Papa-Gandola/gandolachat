@@ -152,7 +152,10 @@ app.add_middleware(
 
 # Static file serving for uploads
 Path(settings.UPLOAD_DIR).mkdir(exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
+# /uploads — своей ручкой с HTTP Range (см. uploads_static.py): StaticFiles
+# из starlette 0.37 Range не умеет, и голосовые на десктопе не перематывались.
+from app import uploads_static  # noqa: E402
+app.include_router(uploads_static.router)
 
 # PWA bundle for the web client (built from mobile/ via `npm run build:web`,
 # output copied to server/web/). Mounted at /app so the iPhone "Add to Home

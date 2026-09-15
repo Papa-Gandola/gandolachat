@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, or_, and_, func
 from sqlalchemy.orm import selectinload
 from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
@@ -318,19 +318,30 @@ async def close_stale_tables() -> None:
     — своя транзакция: один сбой не оставляет остальных висеть дальше."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=STALE_TABLE_HOURS)
     async with AsyncSessionLocal() as db:
+        # Лобби — по created_at; играющий стол — от СТАРТА игры: лобби
+        # могли собрать в обед, а сесть играть вечером — резать такой стол
+        # посреди раздачи нельзя.
         res = await db.execute(
             select(PokerTable.id, PokerTable.chat_id).where(
                 PokerTable.status != "finished",
-                PokerTable.created_at < cutoff,
+                or_(
+                    and_(PokerTable.status == "lobby", PokerTable.created_at < cutoff),
+                    and_(
+                        PokerTable.status == "playing",
+                        func.coalesce(PokerTable.started_at, PokerTable.created_at) < cutoff,
+                    ),
+                ),
             )
         )
         stale = [(int(tid), int(cid)) for tid, cid in res.all()]
     for table_id, chat_id in stale:
         try:
             async with AsyncSessionLocal() as db:
-                game_store.remove(table_id)
                 await db.execute(delete(PokerTable).where(PokerTable.id == table_id))
                 await db.commit()
+            # Игру из памяти — ПОСЛЕ коммита: упади коммит раньше, стол
+            # остался бы в базе «playing» без игры до следующего прогона.
+            game_store.remove(table_id)
             await manager.broadcast_to_chat(chat_id, {
                 "type": "poker_table_removed",
                 "table_id": table_id,

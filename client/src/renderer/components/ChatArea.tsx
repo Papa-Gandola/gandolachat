@@ -159,7 +159,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
         if (!isMuted) {
           playMessageSound();
           // Служебные маркеры (карточки компендиума и т.п.) — человеческим текстом
-          const body = data.content ? (markerPreview(data.content) ?? data.content) : "Sent a file";
+          const body = data.content ? (markerPreview(data.content) ?? data.content) : filePreview(data.file_name);
           showNotification(data.sender_username, body);
         }
         // Only auto-mark-read if the new message is going to be visible (we're at the bottom
