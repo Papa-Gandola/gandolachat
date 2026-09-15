@@ -270,19 +270,24 @@ function MobileAppSection({ isNeo }: { isNeo: boolean }) {
   const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
   const [apkInfo, setApkInfo] = useState<string | null>(null);
 
+  // Подпись берём со СВОЕГО сервера (/apk/info из meta.json зеркала), а не
+  // с api.github.com: GitHub у местных провайдеров душат (грабля №12), и
+  // строчка с версией у части людей молча не появлялась.
   useEffect(() => {
     let alive = true;
-    fetch("https://api.github.com/repos/Papa-Gandola/gandolachat/releases/tags/mobile-latest")
+    fetch(`${BASE_URL}/apk/info`)
       .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
-      .then((rel) => {
+      .then((info) => {
         if (!alive) return;
-        const when = rel?.assets?.[0]?.updated_at;
+        const when = info?.updated_at;
         const date = when ? new Date(when).toLocaleDateString("ru-RU") : "";
-        const line = [rel?.name, date && `от ${date}`].filter(Boolean).join(" · ");
+        const mb = info?.size ? `${Math.round(info.size / 1048576)} МБ` : "";
+        const line = [info?.release_name, date && `от ${date}`, mb].filter(Boolean).join(" · ");
         if (line) setApkInfo(line);
       })
       .catch((code) => {
-        if (alive && code === 404) setApkInfo("сборка ещё готовится — QR заработает чуть позже");
+        if (!alive) return;
+        setApkInfo(code === 404 ? "сборка ещё готовится — QR заработает чуть позже" : "версия сборки недоступна (сервер не отвечает)");
       });
     return () => { alive = false; };
   }, []);

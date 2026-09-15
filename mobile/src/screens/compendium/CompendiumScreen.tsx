@@ -363,23 +363,28 @@ export function CompendiumScreen() {
                           alignItems: "center",
                           gap: 9,
                           padding: 10,
-                          backgroundColor: theme.colors.bgElev,
+                          // Тайные — золотые целиком (фон, рамка, текст), не только
+                          // полоска слева: должны бросаться в глаза среди обычных.
+                          backgroundColor: t.cat === "secret" ? "rgba(255,210,74,0.12)" : theme.colors.bgElev,
                           borderRadius: theme.radius.sm,
+                          borderWidth: t.cat === "secret" ? 1 : 0,
+                          borderColor: GOLD,
                           borderLeftWidth: 3,
                           borderLeftColor: t.cat === "anti" ? BLOOD : t.cat === "secret" ? GOLD : theme.colors.accent,
                         }}
                       >
                         <Text style={{ fontSize: 15 }}>{t.cat === "anti" ? "💀" : t.cat === "secret" ? "🔓" : t.cat === "team" ? "🤝" : "⛽"}</Text>
                         <View style={{ flex: 1, minWidth: 0 }}>
-                          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12.5, fontWeight: "700", color: t.cat === "anti" ? BLOOD : theme.colors.ink }}>
+                          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12.5, fontWeight: "700", color: t.cat === "anti" ? BLOOD : t.cat === "secret" ? GOLD : theme.colors.ink }}>
                             {t.name}
+                            {t.cat === "secret" ? <Text style={{ color: GOLD, fontSize: 9, letterSpacing: 1, opacity: 0.85 }}>  ТАЙНОЕ</Text> : null}
                             {t.title ? <Text style={{ color: GOLD, fontSize: 10.5 }}>  титул «{t.title}»</Text> : null}
                           </Text>
                           <Text style={{ fontFamily: theme.fonts.mono, fontSize: 9.5, color: theme.colors.inkMuted }}>
                             {new Date(t.completed_at).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                           </Text>
                         </View>
-                        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "800", color: t.cat === "anti" ? BLOOD : theme.colors.accent }}>
+                        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "800", color: t.cat === "anti" ? BLOOD : t.cat === "secret" ? GOLD : theme.colors.accent }}>
                           +{t.gas} ⛽
                         </Text>
                       </View>
@@ -473,20 +478,22 @@ function QuestGroup({ theme, title, meta, quests, pool, blood, accent }: {
 
 function TrophyChip({ theme, t }: { theme: ThemeT; t: CompendiumTrophy }) {
   const bad = t.cat === "anti";
-  const c = bad ? BLOOD : theme.colors.accent;
+  const secret = t.cat === "secret";
+  const c = bad ? BLOOD : secret ? GOLD : theme.colors.accent;
+  const icon = bad ? "💀 " : secret ? "🔓 " : "";
   return (
     <Pressable
       // Тап по ачивке — короткое описание (у тайных сервер шлёт «???»).
       // В вебе RN-овский Alert — пустышка, поэтому window.alert.
       onPress={() => {
-        const title = `${bad ? "💀 " : ""}${t.name}`;
+        const title = `${icon}${t.name}`;
         if (Platform.OS === "web") window.alert(`${title}\n\n${t.desc || ""}`);
         else Alert.alert(title, t.desc || "");
       }}
-      style={{ paddingHorizontal: 7, paddingVertical: 3, borderWidth: 1, borderColor: c, borderRadius: theme.radius.sm, backgroundColor: `${c}14` }}
+      style={{ paddingHorizontal: 7, paddingVertical: 3, borderWidth: 1, borderColor: c, borderRadius: theme.radius.sm, backgroundColor: secret ? `${c}26` : `${c}14` }}
     >
       <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, fontWeight: "700", color: c }}>
-        {bad ? "💀 " : ""}{t.name}
+        {icon}{t.name}
       </Text>
     </Pressable>
   );

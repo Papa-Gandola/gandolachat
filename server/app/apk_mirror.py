@@ -20,7 +20,7 @@ import os
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse
 
 from app.config import settings
@@ -146,6 +146,28 @@ async def sync_apk() -> None:
             await asyncio.to_thread(_sync_impl)
         except Exception as e:
             print(f"[apk-mirror] sync failed: {type(e).__name__}: {e}")
+
+
+@router.get("/apk/info")
+async def apk_info():
+    """Что лежит в зеркале: имя релиза, дата файла, размер.
+
+    Подпись под QR в профиле десктопа раньше ходила за этим напрямую в
+    api.github.com с компа каждого человека — а GitHub у местных
+    провайдеров душат (грабля №12), и строчка у части людей просто не
+    появлялась. Данные и так уже есть в meta.json рядом с APK.
+    404 = сборка ещё не доехала до зеркала (первый релиз в пути)."""
+    if not _apk_path().is_file():
+        raise HTTPException(404, "apk not mirrored yet")
+    try:
+        meta = json.loads(_meta_path().read_text())
+    except Exception:
+        raise HTTPException(404, "apk meta missing")
+    return {
+        "release_name": meta.get("release_name"),
+        "updated_at": meta.get("updated_at"),
+        "size": meta.get("size"),
+    }
 
 
 # FastAPI не добавляет HEAD к GET-ручкам сам — а HEAD шлют curl -I и

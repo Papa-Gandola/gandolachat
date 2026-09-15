@@ -475,25 +475,41 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                   </p>
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    {data.trophies.map((t, i) => (
-                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: "var(--bg-tertiary)", borderRadius: isNeo ? 0 : 6, borderLeft: `3px solid ${t.cat === "anti" ? BLOOD : t.cat === "secret" ? GOLD : "var(--accent)"}` }}>
+                    {data.trophies.map((t, i) => {
+                      // Тайные — золотые целиком (фон, рамка, текст), а не
+                      // только полоска слева: хозяин хотел, чтобы они
+                      // бросались в глаза среди обычных.
+                      const secret = t.cat === "secret";
+                      const bad = t.cat === "anti";
+                      const hue = bad ? BLOOD : secret ? GOLD : "var(--accent)";
+                      return (
+                      <div key={i} style={{
+                        display: "flex", alignItems: "center", gap: 10, padding: "8px 10px",
+                        background: secret ? "rgba(255,210,74,0.10)" : "var(--bg-tertiary)",
+                        borderRadius: isNeo ? 0 : 6,
+                        border: secret ? `1px solid ${GOLD}` : "1px solid transparent",
+                        borderLeft: `3px solid ${hue}`,
+                        boxShadow: secret ? "0 0 12px rgba(255,210,74,0.18)" : undefined,
+                      }}>
                         <span style={{ fontSize: 16 }}>
-                          {t.cat === "anti" ? "💀" : t.cat === "secret" ? "🔓" : t.cat === "team" ? "🤝" : "⛽"}
+                          {bad ? "💀" : secret ? "🔓" : t.cat === "team" ? "🤝" : "⛽"}
                         </span>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ ...mono, fontWeight: 700, fontSize: 13, color: t.cat === "anti" ? BLOOD : "var(--text-primary)" }}>
+                          <div style={{ ...mono, fontWeight: 700, fontSize: 13, color: bad ? BLOOD : secret ? GOLD : "var(--text-primary)" }}>
                             {t.name}
+                            {secret && <span style={{ color: GOLD, marginLeft: 8, fontSize: 10, letterSpacing: "0.1em", opacity: 0.85 }}>ТАЙНОЕ</span>}
                             {t.title && <span style={{ color: GOLD, marginLeft: 8, fontSize: 11.5 }}>титул «{t.title}»</span>}
                           </div>
                           <div style={{ ...mono, fontSize: 11, color: "var(--text-muted)" }}>
                             {new Date(t.completed_at).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                           </div>
                         </div>
-                        <span style={{ ...mono, fontWeight: 800, fontSize: 13, color: t.cat === "anti" ? BLOOD : "var(--accent)" }}>
+                        <span style={{ ...mono, fontWeight: 800, fontSize: 13, color: bad ? BLOOD : secret ? GOLD : "var(--accent)" }}>
                           +{t.gas} ⛽
                         </span>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -890,6 +906,8 @@ function Stat({ mono, label, value }: { mono: React.CSSProperties; label: string
 
 function TrophyChip({ t, isNeo }: { t: CompendiumTrophy; isNeo: boolean }) {
   const bad = t.cat === "anti";
+  const secret = t.cat === "secret";
+  const hue = bad ? BLOOD : secret ? GOLD : "var(--accent)";
   // Клик раскрывает описание «как получить» прямо в чипе (как тап на
   // телефоне) — ховер-тултип легко не заметить. У тайных чужих — «???».
   const [open, setOpen] = useState(false);
@@ -897,12 +915,13 @@ function TrophyChip({ t, isNeo }: { t: CompendiumTrophy; isNeo: boolean }) {
     <span onClick={() => setOpen((o) => !o)} title={t.desc || undefined} style={{
       cursor: "pointer",
       fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 700, padding: "3px 8px",
-      color: bad ? BLOOD : "var(--accent)",
-      border: `1px solid ${bad ? BLOOD : "var(--accent)"}`,
-      background: bad ? "rgba(255,106,94,0.08)" : "rgba(198,255,61,0.08)",
+      color: hue,
+      border: `1px solid ${hue}`,
+      background: bad ? "rgba(255,106,94,0.08)" : secret ? "rgba(255,210,74,0.14)" : "rgba(198,255,61,0.08)",
+      boxShadow: secret ? "0 0 8px rgba(255,210,74,0.25)" : undefined,
       borderRadius: isNeo ? 0 : 999, whiteSpace: "nowrap",
     }}>
-      {bad ? "💀 " : ""}{t.name}
+      {bad ? "💀 " : secret ? "🔓 " : ""}{t.name}
       {open && t.desc && (
         <span style={{ display: "block", fontWeight: 500, fontSize: 10.5, opacity: 0.85, marginTop: 2, maxWidth: 240, whiteSpace: "normal" }}>
           {t.desc}

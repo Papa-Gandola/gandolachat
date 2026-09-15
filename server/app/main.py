@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.database import get_db, AsyncSessionLocal
@@ -104,6 +104,12 @@ async def lifespan(app: FastAPI):
         apk_mirror.sync_apk, "interval",
         minutes=30, max_instances=1, coalesce=True,
         next_run_time=datetime.now(timezone.utc),
+    )
+    # Покер: забытые столы старше 6ч закрываются сами (висели в чатах днями).
+    scheduler.add_job(
+        poker.close_stale_tables, "interval",
+        minutes=30, max_instances=1, coalesce=True,
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=90),
     )
     # Гандолиум: катки → задания → газ → карточки. Интервалы бережём под
     # бесплатный лимит OpenDota (2000 запросов/день).

@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.orm import selectinload
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
-from app.database import get_db
+from app.database import get_db, AsyncSessionLocal
 from app.models import User, Chat, PokerTable, PokerSeat, Message
 from app.auth import get_current_user
 from app.ws.manager import manager
@@ -304,6 +304,40 @@ async def close_table(
         "table_id": table_id,
     })
     return {"ok": True}
+
+
+STALE_TABLE_HOURS = 6
+
+
+async def close_stale_tables() -> None:
+    """Джоба: столы старше STALE_TABLE_HOURS закрываем сами.
+
+    Забытое лобби или брошенная игра висели в чате днями, пока создатель
+    не вспомнит про кнопку «закрыть». Настоящий sit-and-go столько не
+    живёт, так что режем всё по created_at без разбора статуса. Каждый стол
+    — своя транзакция: один сбой не оставляет остальных висеть дальше."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=STALE_TABLE_HOURS)
+    async with AsyncSessionLocal() as db:
+        res = await db.execute(
+            select(PokerTable.id, PokerTable.chat_id).where(
+                PokerTable.status != "finished",
+                PokerTable.created_at < cutoff,
+            )
+        )
+        stale = [(int(tid), int(cid)) for tid, cid in res.all()]
+    for table_id, chat_id in stale:
+        try:
+            async with AsyncSessionLocal() as db:
+                game_store.remove(table_id)
+                await db.execute(delete(PokerTable).where(PokerTable.id == table_id))
+                await db.commit()
+            await manager.broadcast_to_chat(chat_id, {
+                "type": "poker_table_removed",
+                "table_id": table_id,
+            })
+            print(f"[poker] auto-closed stale table {table_id} (chat {chat_id})")
+        except Exception as e:
+            print(f"[poker] auto-close of table {table_id} failed: {type(e).__name__}: {e}")
 
 
 @router.post("/{table_id}/leave", response_model=PokerTableOut | None)

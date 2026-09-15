@@ -1,5 +1,17 @@
 // Служебные маркеры сообщений → человеческое превью (сайдбар, уведомления).
 // Без этого в превью и нотификациях светился бы сырой "/quest_card {json}".
+/** Превью файлового сообщения по имени файла: голосовые с телефона
+ *  приходят как voice_<ts>.m4a — в сайдбаре/закрепах вместо этого
+ *  показываем человеческое «🎤 Голосовое». */
+export function filePreview(name: string | null | undefined): string {
+  if (!name) return "📎 Файл";
+  if (/^voice_\d+\.(m4a|mp3|ogg|opus|webm|aac)$/i.test(name)) return "🎤 Голосовое";
+  if (/\.(jpg|jpeg|png|gif|webp)$/i.test(name)) return "🖼 Фото";
+  if (/\.(mp4|mov|mkv|webm)$/i.test(name)) return "🎬 Видео";
+  if (/\.(m4a|mp3|ogg|opus|wav|aac|flac)$/i.test(name)) return `🎵 ${name}`;
+  return `📎 ${name}`;
+}
+
 export function markerPreview(content: string): string | null {
   if (content.startsWith("/quest_card ")) {
     try {
