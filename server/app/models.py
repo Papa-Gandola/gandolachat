@@ -140,6 +140,14 @@ class PokerTable(Base):
     starting_big_blind: Mapped[int] = mapped_column(default=200)
     blind_increase_minutes: Mapped[int] = mapped_column(default=7)
     max_seats: Mapped[int] = mapped_column(default=6)
+    # Режим стола: chips — обычный на фишки; gas — «за газ ⛽»: все платят
+    # энтри при посадке, вылетевшие докупаются (ре-энтри), победитель
+    # забирает весь котёл. Окно докупки — пока blind_level < reentry_until_level.
+    mode: Mapped[str] = mapped_column(String(8), default="chips")
+    entry_gas: Mapped[int] = mapped_column(default=0)
+    max_reentries: Mapped[int] = mapped_column(default=2)
+    reentry_until_level: Mapped[int] = mapped_column(default=3)
+    gas_pot: Mapped[int] = mapped_column(default=0)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -321,6 +329,10 @@ class PokerSeat(Base):
     seat_index: Mapped[int] = mapped_column()  # 0..max_seats-1
     stack: Mapped[int] = mapped_column(default=0)
     is_active: Mapped[bool] = mapped_column(default=True)  # false = busted out of tournament
+    # Режим «за газ»: сколько раз докупался и сколько всего газа занёс
+    # (энтри + докупки) — по gas_paid возвращаем, если стол закрыли до конца.
+    reentries: Mapped[int] = mapped_column(default=0)
+    gas_paid: Mapped[int] = mapped_column(default=0)
     joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     table: Mapped["PokerTable"] = relationship(back_populates="seats")

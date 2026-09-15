@@ -58,6 +58,20 @@ class GameState:
     finished: bool = False
     winner_user_id: Optional[int] = None
     last_summary: Optional[dict] = None  # last showdown summary for UI
+    # --- настройки стола, нужные движку (зеркало models.PokerTable) ---
+    starting_stack: int = 0
+    mode: str = "chips"            # chips | gas («за газ ⛽»)
+    entry_gas: int = 0
+    max_reentries: int = 2
+    reentry_until_level: int = 3   # докупка открыта, пока blind_level < этого
+    gas_pot: int = 0               # котёл: энтри + докупки, уходит победителю
+    reentries: dict[int, int] = field(default_factory=dict)  # user_id → сколько раз докупался
+    # Пауза «докупись или всё»: фишки остались у одного, но вылетевшие ещё
+    # вправе докупиться — до дедлайна турнир не закрываем (WS-слой ждёт).
+    reentry_open_until: Optional[float] = None
+    # История раздач — в памяти, пока стол жив (хозяин: «потом пофиг»)
+    hand_log: Optional[dict] = None
+    history: list[dict] = field(default_factory=list)
 
     # ---- helpers -------------------------------------------------------
     def alive_players(self) -> list[PlayerState]:
@@ -95,7 +109,10 @@ class GameState:
 
 
 def new_game(table_id: int, chat_id: int, players_in: list[tuple[int, int, int]],
-             small_blind: int, big_blind: int, blind_increase_seconds: int) -> GameState:
+             small_blind: int, big_blind: int, blind_increase_seconds: int,
+             *, starting_stack: int = 0, mode: str = "chips", entry_gas: int = 0,
+             max_reentries: int = 2, reentry_until_level: int = 3, gas_pot: int = 0,
+             reentries: Optional[dict[int, int]] = None) -> GameState:
     """players_in: list of (user_id, seat_index, starting_stack)."""
     players = {uid: PlayerState(user_id=uid, seat_index=si, stack=stack) for uid, si, stack in players_in}
     seat_order = [uid for uid, _, _ in sorted(players_in, key=lambda x: x[1])]
@@ -110,6 +127,13 @@ def new_game(table_id: int, chat_id: int, players_in: list[tuple[int, int, int]]
         blind_increase_seconds=blind_increase_seconds,
         started_at=now,
         next_blind_increase_at=now + blind_increase_seconds,
+        starting_stack=starting_stack or (max((s for _, _, s in players_in), default=0)),
+        mode=mode,
+        entry_gas=entry_gas,
+        max_reentries=max_reentries,
+        reentry_until_level=reentry_until_level,
+        gas_pot=gas_pot,
+        reentries=dict(reentries or {}),
     )
 
 
@@ -157,6 +181,7 @@ def deal_next_street_or_finish(g: GameState) -> dict | None:
     elif hand.street == "river":
         hand.street = "showdown"
         return _showdown(g)
+    _log_street(g, hand.street)
     return None
 
 
@@ -255,6 +280,19 @@ def start_hand(g: GameState, button_seat: Optional[int] = None) -> HandState:
         hand.to_act_seat = alive_seats[(idx + 1) % len(alive_seats)]
 
     g.hand = hand
+    # Новая запись истории: стеки на входе (блайнды уже сняты — вернём их в
+    # цифру), улицы копятся по ходу раздачи, итог допишет _finalize_log.
+    g.hand_log = {
+        "hand_no": hand.hand_no,
+        "started_at": time.time(),
+        "button_seat": button_seat,
+        "blinds": [g.small_blind, g.big_blind],
+        "players": [
+            {"user_id": p.user_id, "seat": p.seat_index, "stack": p.stack + p.bet}
+            for p in sorted(g.players.values(), key=lambda x: x.seat_index) if not p.has_folded
+        ],
+        "streets": [{"street": "preflop", "community": [], "actions": []}],
+    }
     return hand
 
 
@@ -340,6 +378,7 @@ def apply_action(g: GameState, user_id: int, action: str, amount: int = 0) -> di
         raise ActionError(f"Неизвестное действие: {action}")
 
     hand.last_action = {"user_id": user_id, "action": action, "amount": amount}
+    _log_action(g, player, action)
 
     # Auto-end hand if only one player left
     in_hand = g.players_in_hand()
@@ -429,6 +468,7 @@ def _next_street(g: GameState):
     elif hand.street == "river":
         hand.street = "showdown"
         return
+    _log_street(g, hand.street)
     # Post-flop: first to act is first player left of button who's still in hand
     can_act = g.players_can_act()
     if not can_act:
@@ -456,6 +496,7 @@ def _award_uncalled_pot(g: GameState, winner: PlayerState) -> dict:
     }
     g.last_summary = summary
     hand.street = "done"
+    _finalize_log(g, summary)
     return summary
 
 
@@ -551,6 +592,7 @@ def _showdown(g: GameState) -> dict:
     }
     g.last_summary = summary
     hand.street = "done"
+    _finalize_log(g, summary)
     return summary
 
 
@@ -566,6 +608,14 @@ def public_view(g: GameState, viewer_user_id: int) -> dict:
         "finished": g.finished,
         "winner_user_id": g.winner_user_id,
         "last_summary": g.last_summary,
+        "starting_stack": g.starting_stack,
+        "mode": g.mode,
+        "entry_gas": g.entry_gas,
+        "gas_pot": g.gas_pot,
+        "max_reentries": g.max_reentries,
+        "reentry_until_level": g.reentry_until_level,
+        "reentry_open_until": g.reentry_open_until,
+        "history_len": len(g.history),
         "hand": (
             None if hand is None else {
                 "hand_no": hand.hand_no,
@@ -587,6 +637,8 @@ def public_view(g: GameState, viewer_user_id: int) -> dict:
                 "bet": p.bet,
                 "has_folded": p.has_folded,
                 "is_all_in": p.is_all_in,
+                "reentries": g.reentries.get(p.user_id, 0),
+                "can_reenter": can_reenter(g, p.user_id)[0],
                 "is_my_turn": hand is not None and hand.to_act_seat == p.seat_index,
                 # Hole cards: own cards always visible. Reveal everyone else's only at
                 # showdown — when the hand ended via real card comparison (g.last_summary
@@ -608,6 +660,101 @@ def public_view(g: GameState, viewer_user_id: int) -> dict:
             for p in sorted(g.players.values(), key=lambda x: x.seat_index)
         ],
     }
+
+
+# ---- История раздач ---------------------------------------------------
+
+HISTORY_CAP = 200
+
+
+def _log_street(g: GameState, name: str) -> None:
+    log = g.hand_log
+    if not log or not g.hand:
+        return
+    log["streets"].append({
+        "street": name,
+        "community": [str(c) for c in g.hand.community],
+        "actions": [],
+    })
+
+
+def _log_action(g: GameState, player: PlayerState, action: str) -> None:
+    """Записать действие в текущую улицу. Сумма — сколько игрок ВСЕГО
+    поставил в этом круге (`bet`): для call/raise это понятнее, чем
+    «докинул N», и по ней восстанавливается ход торговли."""
+    log = g.hand_log
+    if not log or not log["streets"]:
+        return
+    log["streets"][-1]["actions"].append({
+        "user_id": player.user_id,
+        "action": action,
+        "to": player.bet if action in ("call", "raise") else 0,
+        "all_in": player.is_all_in,
+    })
+
+
+def _finalize_log(g: GameState, summary: dict) -> None:
+    """Дописать итог и переложить запись в историю. Карты — только те, что
+    реально вскрылись (showdown); сброшенные не показываем никогда."""
+    log = g.hand_log
+    if not log:
+        return
+    log["pot"] = summary.get("pot", 0)
+    log["reason"] = summary.get("reason")
+    log["winners"] = list(summary.get("winner_user_ids", []))
+    log["winning_hand"] = summary.get("winning_hand")
+    log["community"] = list(summary.get("community", []))
+    log["showdown"] = [
+        {"user_id": s["user_id"], "hole": list(s["hole"]), "hand": s.get("hand")}
+        for s in summary.get("showdown", [])
+    ]
+    log["ended_at"] = time.time()
+    g.history.append(log)
+    if len(g.history) > HISTORY_CAP:
+        del g.history[: len(g.history) - HISTORY_CAP]
+    g.hand_log = None
+
+
+def history_view(g: GameState) -> list[dict]:
+    """Свежие сверху."""
+    return list(reversed(g.history))
+
+
+# ---- Режим «за газ»: докупка --------------------------------------------
+
+def can_reenter(g: GameState, user_id: int) -> tuple[bool, str]:
+    """Можно ли этому игроку докупиться прямо сейчас (и почему нет)."""
+    if g.mode != "gas" or g.entry_gas <= 0:
+        return False, "На этом столе нет докупки"
+    if g.finished:
+        return False, "Турнир окончен"
+    p = g.players.get(user_id)
+    if p is None:
+        return False, "Ты не за этим столом"
+    if p.stack > 0:
+        return False, "У тебя ещё есть фишки"
+    # all-in без фишек в ЖИВОЙ раздаче — ещё не вылетел, ждём её конца
+    if g.hand and g.hand.street != "done" and not p.has_folded and p.is_all_in:
+        return False, "Раздача ещё идёт — дождись её конца"
+    if g.blind_level >= g.reentry_until_level:
+        return False, f"Докупка закрыта: блайнды уже выросли {g.blind_level} раз"
+    if g.reentries.get(user_id, 0) >= g.max_reentries:
+        return False, "Лимит докупок исчерпан"
+    return True, ""
+
+
+def reenter(g: GameState, user_id: int) -> None:
+    """Вернуть игрока в турнир со стартовым стеком. Газ списывает API-слой
+    (там же +к котлу); в текущую раздачу он не входит — сдадут со
+    следующей: start_hand сам решает по stack > 0."""
+    p = g.players[user_id]
+    p.stack = g.starting_stack
+    g.reentries[user_id] = g.reentries.get(user_id, 0) + 1
+    g.gas_pot += g.entry_gas
+
+
+def reentry_candidates(g: GameState) -> list[int]:
+    return [uid for uid in g.players if can_reenter(g, uid)[0]]
 
 
 # ---- Singleton store --------------------------------------------------

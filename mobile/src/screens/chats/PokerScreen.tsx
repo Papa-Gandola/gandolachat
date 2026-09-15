@@ -1,7 +1,7 @@
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Haptics from "expo-haptics";
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
 import { AppBar } from "../../components/AppBar";
 import { Avatar } from "../../components/Avatar";
@@ -12,9 +12,12 @@ import { ChatsStackParamList } from "../../navigation/types";
 import {
   apiErrorMessage,
   PokerGameView,
+  PokerHistory,
+  PokerHistoryHand,
   PokerPlayerView,
   pokerApi,
   PokerTableOut,
+  PokerTableSettings,
 } from "../../services/api";
 import { useAuth } from "../../services/AuthContext";
 import { wsService } from "../../services/ws";
@@ -37,6 +40,12 @@ export function PokerScreen({ navigation, route }: Props) {
   const [gameState, setGameState] = useState<PokerGameView | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Настройки стола (создание / правка в лобби), история раздач, пауза докупки
+  const [showCreate, setShowCreate] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [history, setHistory] = useState<PokerHistory | null>(null);
+  const [graceLeft, setGraceLeft] = useState<number | null>(null);
   const prevMyTurn = useRef(false);
 
   useEffect(() => {
@@ -105,11 +114,12 @@ export function PokerScreen({ navigation, route }: Props) {
     };
   }, [numericChatId]);
 
-  const createTable = async () => {
+  const createTable = async (settings: PokerTableSettings) => {
     setBusy(true);
     setError(null);
     try {
-      const res = await pokerApi.create(numericChatId, 6);
+      const res = await pokerApi.create(numericChatId, settings);
+      setShowCreate(false);
       setActiveTable(res.data);
     } catch (e) {
       setError(apiErrorMessage(e));
@@ -117,6 +127,84 @@ export function PokerScreen({ navigation, route }: Props) {
       setBusy(false);
     }
   };
+
+  const saveSettings = async (tableId: number, settings: PokerTableSettings) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await pokerApi.settings(tableId, settings);
+      setShowSettings(false);
+      setActiveTable(res.data);
+      setTables((prev) => prev.map((t) => (t.id === tableId ? res.data : t)));
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Докупка в режиме «за газ»: вылетел → энтри ещё раз → стартовый стек.
+  const reentry = async (tableId: number) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await pokerApi.reentry(tableId);
+      setActiveTable(res.data);
+    } catch (e) {
+      setError(apiErrorMessage(e));
+      setTimeout(() => setError(null), 5000);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // «Сыграть ещё»: новый стол с теми же настройками и людьми; старый
+  // сервер удаляет (poker_table_removed придёт раньше ответа и обнулит
+  // activeTable — поэтому ответ ставим поверх).
+  const restartTable = async (tableId: number) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await pokerApi.restart(tableId);
+      setGameState(null);
+      setHistory(null);
+      setShowHistory(false);
+      setActiveTable(res.data);
+      setTables((prev) => [res.data, ...prev.filter((t) => t.id !== tableId && t.id !== res.data.id)]);
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const loadHistory = async (tableId: number) => {
+    try {
+      const res = await pokerApi.history(tableId);
+      setHistory(res.data);
+    } catch {
+      setHistory({ table_id: tableId, names: {}, hands: [] });
+    }
+  };
+
+  // Открытая история подтягивает свежие раздачи по мере игры.
+  useEffect(() => {
+    if (!showHistory || !activeTable) return;
+    loadHistory(activeTable.id);
+  }, [showHistory, activeTable?.id, gameState?.history_len]);
+
+  // Секунды до конца паузы «докупись или всё» (режим за газ).
+  useEffect(() => {
+    const until = gameState?.reentry_open_until;
+    if (!until) {
+      setGraceLeft(null);
+      return;
+    }
+    const tick = () => setGraceLeft(Math.max(0, Math.round(until - Date.now() / 1000)));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [gameState?.reentry_open_until]);
 
   const joinTable = async (tableId: number) => {
     setError(null);
@@ -194,7 +282,7 @@ export function PokerScreen({ navigation, route }: Props) {
           }
           right={
             <Pressable
-              onPress={createTable}
+              onPress={() => setShowCreate(true)}
               disabled={busy}
               style={{
                 paddingHorizontal: 10,
@@ -261,10 +349,15 @@ export function PokerScreen({ navigation, route }: Props) {
                     {t.status === "lobby" ? "ЛОББИ" : t.status === "playing" ? "ИДЁТ" : "ФИНИШ"}
                   </Text>
                 </View>
-                <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkDim, marginBottom: 10 }}>
+                <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkDim, marginBottom: t.mode === "gas" ? 4 : 10 }}>
                   {t.seats.length}/{t.max_seats} · стек {t.starting_stack.toLocaleString()} · блайнды{" "}
-                  {t.starting_small_blind}/{t.starting_big_blind}
+                  {t.starting_small_blind}/{t.starting_big_blind} · +1,5× / {t.blind_increase_minutes} мин
                 </Text>
+                {t.mode === "gas" ? (
+                  <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, fontWeight: "700", color: theme.colors.accent, marginBottom: 10 }}>
+                    ⛽ За газ · энтри {t.entry_gas} · котёл {t.gas_pot} · докупок {t.max_reentries}
+                  </Text>
+                ) : null}
                 <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
                   {t.seats.map((s) => (
                     <View key={s.id} style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
@@ -297,6 +390,16 @@ export function PokerScreen({ navigation, route }: Props) {
             );
           })}
         </ScrollView>
+        {showCreate ? (
+          <SettingsSheet
+            theme={theme}
+            busy={busy}
+            title={theme.decorate ? "// НОВЫЙ СТОЛ" : "Новый стол"}
+            initial={{ max_seats: 6, starting_stack: 30000, starting_small_blind: 100, blind_increase_minutes: 7, mode: "chips", entry_gas: 50, max_reentries: 2, reentry_until_level: 3 }}
+            onSubmit={createTable}
+            onCancel={() => setShowCreate(false)}
+          />
+        ) : null}
       </ScreenContainer>
     );
   }
@@ -324,6 +427,24 @@ export function PokerScreen({ navigation, route }: Props) {
         {!mySeat && t.status === "lobby" && t.seats.length < t.max_seats ? (
           <TableBtn theme={theme} label={theme.decorate ? "[сесть]" : "Сесть"} primary onPress={() => joinTable(t.id)} />
         ) : null}
+        {t.status === "lobby" && t.created_by === user?.id ? (
+          <TableBtn theme={theme} label={theme.decorate ? "[настройки]" : "⚙ Настройки"} onPress={() => setShowSettings(true)} disabled={busy} />
+        ) : null}
+        {live ? (
+          <TableBtn theme={theme} label={theme.decorate ? `[история ${live.history_len}]` : `История (${live.history_len})`} onPress={() => setShowHistory(true)} />
+        ) : null}
+        {live && myPlayer?.can_reenter ? (
+          <TableBtn
+            theme={theme}
+            primary
+            label={`⛽ Докупиться за ${live.entry_gas} (${Math.max(0, live.max_reentries - myPlayer.reentries)}/${live.max_reentries})`}
+            onPress={() => reentry(t.id)}
+            disabled={busy}
+          />
+        ) : null}
+        {t.status === "finished" && t.created_by === user?.id ? (
+          <TableBtn theme={theme} primary label={theme.decorate ? "[сыграть ещё]" : "🔁 Сыграть ещё"} onPress={() => restartTable(t.id)} disabled={busy} />
+        ) : null}
         {t.status === "lobby" && t.created_by === user?.id && t.seats.length >= 2 ? (
           <TableBtn theme={theme} label={theme.decorate ? "[начать]" : "▶ Начать"} primary onPress={() => startGame(t.id)} disabled={busy} />
         ) : null}
@@ -344,26 +465,205 @@ export function PokerScreen({ navigation, route }: Props) {
         {live?.last_summary && live.hand?.street === "done" ? (
           <HandSummary theme={theme} summary={live.last_summary} players={live.players} />
         ) : null}
+        {live && !live.finished && live.reentry_open_until ? (
+          <View style={{ marginTop: 12, padding: 10, borderRadius: theme.radius.md, borderWidth: 1, borderColor: theme.colors.amber }}>
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.amber, textAlign: "center" }}>
+              ⏳ Фишки остались у одного — ждём докупку{graceLeft != null ? ` ещё ${graceLeft} с` : ""}.
+              {myPlayer?.can_reenter ? " Кнопка «Докупиться» сверху." : " Никто не докупится — турнир окончен."}
+            </Text>
+          </View>
+        ) : null}
         {live?.finished ? (
-          <Text
-            style={{
-              fontFamily: theme.fonts.mono,
-              fontSize: 14,
-              fontWeight: "700",
-              color: theme.colors.accent,
-              textAlign: "center",
-              marginTop: 16,
-            }}
-          >
-            🏆 Турнир завершён
-          </Text>
+          <View style={{ marginTop: 16, alignItems: "center", gap: 4 }}>
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 14, fontWeight: "700", color: theme.colors.accent, textAlign: "center" }}>
+              🏆 Турнир окончен — победил {t.seats.find((s) => s.user_id === live.winner_user_id)?.username ?? "?"}
+            </Text>
+            {t.mode === "gas" && live.gas_pot > 0 ? (
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.ink, textAlign: "center" }}>
+                забирает котёл {live.gas_pot} ⛽
+              </Text>
+            ) : null}
+          </View>
         ) : null}
       </ScrollView>
+      {showSettings ? (
+        <SettingsSheet
+          theme={theme}
+          busy={busy}
+          title={theme.decorate ? `// НАСТРОЙКИ #${t.id}` : `Настройки стола #${t.id}`}
+          initial={{
+            max_seats: t.max_seats, starting_stack: t.starting_stack, starting_small_blind: t.starting_small_blind,
+            blind_increase_minutes: t.blind_increase_minutes, mode: t.mode, entry_gas: t.entry_gas || 50,
+            max_reentries: t.max_reentries, reentry_until_level: t.reentry_until_level,
+          }}
+          lockMoney={t.seats.some((s) => s.gas_paid > 0)}
+          onSubmit={(st) => saveSettings(t.id, st)}
+          onCancel={() => setShowSettings(false)}
+        />
+      ) : null}
+      {showHistory ? (
+        <HistorySheet theme={theme} history={history} table={t} onClose={() => setShowHistory(false)} />
+      ) : null}
 
       {live && myTurn && myPlayer && !myPlayer.has_folded && !myPlayer.is_all_in ? (
         <ActionBar theme={theme} game={live} me={myPlayer} onAction={sendAction} />
       ) : null}
     </ScreenContainer>
+  );
+}
+
+// ---- Настройки стола (шторка) ---------------------------------------------
+
+const PRESETS: Array<{ key: string; label: string; s: PokerTableSettings }> = [
+  { key: "fast", label: "Быстрый", s: { starting_stack: 10000, starting_small_blind: 100, blind_increase_minutes: 4 } },
+  { key: "normal", label: "Обычный", s: { starting_stack: 30000, starting_small_blind: 100, blind_increase_minutes: 7 } },
+  { key: "marathon", label: "Марафон", s: { starting_stack: 50000, starting_small_blind: 50, blind_increase_minutes: 12 } },
+];
+
+function NumField({ theme, label, value, onChange, hint }: { theme: ThemeT; label: string; value: number; onChange: (v: number) => void; hint?: string }) {
+  return (
+    <View style={{ minWidth: 100, flexGrow: 1 }}>
+      <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted, marginBottom: 4 }}>{label}</Text>
+      <TextInput
+        keyboardType="number-pad"
+        value={String(value)}
+        onChangeText={(txt) => onChange(Number(txt.replace(/[^0-9]/g, "")) || 0)}
+        style={{ fontFamily: theme.fonts.mono, fontSize: 14, color: theme.colors.ink, backgroundColor: theme.colors.bg, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.sm, paddingHorizontal: 10, paddingVertical: 8 }}
+      />
+      {hint ? <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: theme.colors.inkMuted, marginTop: 3 }}>{hint}</Text> : null}
+    </View>
+  );
+}
+
+function Chip({ theme, label, active, onPress, disabled }: { theme: ThemeT; label: string; active: boolean; onPress: () => void; disabled?: boolean }) {
+  return (
+    <Pressable onPress={onPress} disabled={disabled} style={{ paddingHorizontal: 12, paddingVertical: 7, borderRadius: theme.radius.sm, borderWidth: 1, borderColor: active ? theme.colors.accent : theme.colors.border, backgroundColor: active ? theme.colors.accent : "transparent", opacity: disabled ? 0.5 : 1 }}>
+      <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "700", color: active ? theme.colors.accentText : theme.colors.ink }}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function SettingsSheet({ theme, busy, title, initial, lockMoney, onSubmit, onCancel }: {
+  theme: ThemeT;
+  busy: boolean;
+  title: string;
+  initial: Required<PokerTableSettings>;
+  lockMoney?: boolean;
+  onSubmit: (s: PokerTableSettings) => void;
+  onCancel: () => void;
+}) {
+  const [st, setSt] = useState<Required<PokerTableSettings>>(initial);
+  const set = (patch: Partial<PokerTableSettings>) => setSt((cur) => ({ ...cur, ...patch }));
+  const activePreset = PRESETS.find((p) => p.s.starting_stack === st.starting_stack && p.s.starting_small_blind === st.starting_small_blind && p.s.blind_increase_minutes === st.blind_increase_minutes)?.key;
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onCancel}>
+      <Pressable onPress={onCancel} style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" }}>
+        <Pressable onPress={() => {}} style={{ backgroundColor: theme.colors.bgElev, borderTopLeftRadius: 14, borderTopRightRadius: 14, borderWidth: 1, borderColor: theme.colors.border, padding: 16, paddingBottom: 28, gap: 12 }}>
+          <Text style={{ fontFamily: theme.fonts.mono, fontSize: 13, fontWeight: "800", color: theme.decorate ? theme.colors.accent : theme.colors.ink }}>{title}</Text>
+          <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+            {PRESETS.map((p) => <Chip key={p.key} theme={theme} label={p.label} active={activePreset === p.key} onPress={() => set(p.s)} />)}
+          </View>
+          <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
+            <NumField theme={theme} label="Стек" value={st.starting_stack} onChange={(v) => set({ starting_stack: v })} />
+            <NumField theme={theme} label="Малый блайнд" value={st.starting_small_blind} onChange={(v) => set({ starting_small_blind: v })} hint={`большой = ${st.starting_small_blind * 2}`} />
+            <NumField theme={theme} label="Рост блайндов, мин" value={st.blind_increase_minutes} onChange={(v) => set({ blind_increase_minutes: v })} hint="×1,5 каждый интервал" />
+          </View>
+          <View style={{ flexDirection: "row", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted }}>Мест</Text>
+            {[2, 3, 4, 5, 6].map((n) => <Chip key={n} theme={theme} label={String(n)} active={st.max_seats === n} onPress={() => set({ max_seats: n })} />)}
+          </View>
+          <View style={{ flexDirection: "row", gap: 8, alignItems: "center", flexWrap: "wrap", borderTopWidth: 1, borderTopColor: theme.colors.border, paddingTop: 10 }}>
+            <Chip theme={theme} label="Обычный" active={st.mode === "chips"} disabled={!!lockMoney} onPress={() => set({ mode: "chips" })} />
+            <Chip theme={theme} label="⛽ За газ" active={st.mode === "gas"} disabled={!!lockMoney} onPress={() => set({ mode: "gas" })} />
+            {lockMoney ? <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: theme.colors.inkMuted }}>кто-то уже заплатил — режим заморожен</Text> : null}
+          </View>
+          {st.mode === "gas" ? (
+            <View style={{ gap: 8 }}>
+              <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
+                <NumField theme={theme} label="Энтри, ⛽" value={st.entry_gas} onChange={(v) => set({ entry_gas: v })} />
+                <NumField theme={theme} label="Докупок на человека" value={st.max_reentries} onChange={(v) => set({ max_reentries: v })} />
+                <NumField theme={theme} label="Докупка до повышения №" value={st.reentry_until_level} onChange={(v) => set({ reentry_until_level: v })} />
+              </View>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted }}>
+                Все платят энтри при посадке, вылетевшие докупаются за ту же цену, победитель забирает весь котёл. Закрыл стол до финала — газ всем вернётся.
+              </Text>
+            </View>
+          ) : null}
+          <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 8 }}>
+            <TableBtn theme={theme} label={theme.decorate ? "[отмена]" : "Отмена"} onPress={onCancel} />
+            <TableBtn theme={theme} label={theme.decorate ? "[готово]" : "Готово"} primary onPress={() => onSubmit(st)} disabled={busy} />
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+// ---- История раздач (шторка) ------------------------------------------------
+
+const ACTION_RU: Record<string, string> = { fold: "фолд", check: "чек", call: "колл", raise: "рейз до" };
+const STREET_RU: Record<string, string> = { preflop: "Префлоп", flop: "Флоп", turn: "Тёрн", river: "Ривер" };
+
+function HistorySheet({ theme, history, table, onClose }: { theme: ThemeT; history: PokerHistory | null; table: PokerTableOut; onClose: () => void }) {
+  const [open, setOpen] = useState<number | null>(null);
+  const name = (uid: number) => history?.names?.[String(uid)] ?? table.seats.find((s) => s.user_id === uid)?.username ?? `#${uid}`;
+  const hands: PokerHistoryHand[] = history?.hands ?? [];
+  const cards = (codes: string[]) => (
+    <View style={{ flexDirection: "row", gap: 3 }}>
+      {codes.map((c, i) => <CardView key={i} code={c} theme={theme} small />)}
+    </View>
+  );
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <View style={{ flex: 1, backgroundColor: theme.colors.bg }}>
+        <AppBar
+          title={theme.decorate ? "// ИСТОРИЯ РАЗДАЧ" : "История раздач"}
+          sub={hands.length ? `${hands.length} шт., свежие сверху` : "пока пусто"}
+          left={<IconBtn onPress={onClose}><ChevronLeftIcon color={theme.colors.ink} /></IconBtn>}
+        />
+        <ScrollView contentContainerStyle={{ padding: 12, gap: 8 }}>
+          {hands.map((h) => {
+            const isOpen = open === h.hand_no;
+            return (
+              <Pressable key={h.hand_no} onPress={() => setOpen(isOpen ? null : h.hand_no)} style={{ backgroundColor: theme.colors.bgElev, borderRadius: theme.radius.md, borderWidth: 1, borderColor: theme.colors.border, padding: 10, gap: 6 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkMuted }}>#{h.hand_no} · {h.blinds[0]}/{h.blinds[1]}</Text>
+                  {cards(h.community)}
+                  <View style={{ flex: 1 }} />
+                  <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "800", color: theme.colors.accent }}>{h.pot.toLocaleString()}</Text>
+                </View>
+                <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.ink }}>
+                  🏆 {h.winners.map(name).join(", ")}{h.winning_hand ? ` · ${h.winning_hand}` : ""}{h.reason === "all_others_folded" ? " · все сложили" : ""}
+                </Text>
+                {isOpen ? (
+                  <View style={{ gap: 4, borderTopWidth: 1, borderTopColor: theme.colors.border, paddingTop: 6 }}>
+                    <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted }}>
+                      Стеки: {h.players.map((p) => `${name(p.user_id)} ${p.stack.toLocaleString()}`).join(" · ")}
+                    </Text>
+                    {h.streets.map((st, i) => (
+                      <View key={i} style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkMuted, minWidth: 58 }}>{STREET_RU[st.street] ?? st.street}</Text>
+                        {st.community.length ? cards(st.community) : null}
+                        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkDim, flexShrink: 1 }}>
+                          {st.actions.length === 0 ? "—" : st.actions.map((a) => `${name(a.user_id)}: ${ACTION_RU[a.action] ?? a.action}${a.action === "raise" || a.action === "call" ? ` ${a.to.toLocaleString()}` : ""}${a.all_in ? " (all-in)" : ""}`).join(" · ")}
+                        </Text>
+                      </View>
+                    ))}
+                    {h.showdown.map((sd) => (
+                      <View key={sd.user_id} style={{ flexDirection: "row", gap: 6, alignItems: "center" }}>
+                        <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.ink }}>{name(sd.user_id)}</Text>
+                        {cards(sd.hole)}
+                        {sd.hand ? <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkMuted }}>{sd.hand}</Text> : null}
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      </View>
+    </Modal>
   );
 }
 
@@ -692,6 +992,25 @@ function ActionBar({
           >
             <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkDim }}>банк</Text>
           </Pressable>
+        </View>
+      ) : null}
+      {canRaise ? (
+        // Доля банка: рейз ДО current_bet + pct × (банк после колла), шаг 10 фишек
+        <View style={{ flexDirection: "row", gap: 6 }}>
+          {[10, 15, 25, 50, 75].map((pct) => {
+            const potAfterCall = hand.pot + toCall;
+            const amt = clamp(hand.current_bet + Math.round((pct / 100) * potAfterCall / 10) * 10);
+            const active = raise === amt;
+            return (
+              <Pressable
+                key={pct}
+                onPress={() => setRaise(amt)}
+                style={{ flex: 1, paddingVertical: 6, borderRadius: theme.radius.sm, borderWidth: 1, borderColor: active ? theme.colors.accent : theme.colors.border, backgroundColor: active ? theme.colors.accent : "transparent", alignItems: "center" }}
+              >
+                <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, fontWeight: "700", color: active ? theme.colors.accentText : theme.colors.inkDim }}>{pct}%</Text>
+              </Pressable>
+            );
+          })}
         </View>
       ) : null}
       <View style={{ flexDirection: "row", gap: 8 }}>
