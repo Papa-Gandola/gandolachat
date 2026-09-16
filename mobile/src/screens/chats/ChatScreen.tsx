@@ -1669,16 +1669,20 @@ function QuestCardMobile({ theme, mine, payload }: {
   const kind: string = payload.kind || "quest";
   const special: string | undefined = payload.special;
   const isAnti = kind === "anti";
-  const edge = special === "rampage" ? BLOOD : special === "fullstack" ? GOLD : isAnti ? BLOOD : theme.colors.accent;
+  const items: Array<{ name: string; gas: number; cat?: string }> = payload.items || [];
+  // Тайные задания золотые везде, где встречаются — и в этой карточке.
+  const secretCount = items.filter((it) => it.cat === "secret").length;
+  const hasSecret = secretCount > 0;
+  const edge = special === "rampage" ? BLOOD : special === "fullstack" ? GOLD : isAnti ? BLOOD : hasSecret ? GOLD : theme.colors.accent;
   const header = special === "rampage" ? "🚨 РАМПАГА!!!"
     : special === "fullstack" ? "🏆 СТАК ПОБЕДИЛ"
     : isAnti ? "💀 ПРОЖАРКА"
     : kind === "team" ? "🤝 КОМАНДНОЕ"
+    : hasSecret && secretCount === items.length ? "🔓 ТАЙНОЕ ОТКРЫТО"
     : "⛽ ЗАДАНИЕ ЗАКРЫТО";
   const who = kind === "team"
     ? (payload.who || payload.names || []).join(" + ")
     : (payload.username || "");
-  const items: Array<{ name: string; gas: number }> = payload.items || [];
 
   // Итоги недели (воскресная карточка)
   if (kind === "week_recap") {
@@ -1795,6 +1799,12 @@ function QuestCardMobile({ theme, mine, payload }: {
               </Text>
             </View>
           ))}
+          {payload.prize?.title ? (
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "800", color: GOLD, marginTop: 6 }}>
+              🎁 Приз сезона: {payload.prize.title}
+              <Text style={{ fontWeight: "500", color: theme.colors.inkDim }}> — достаётся {payload.prize.winner}</Text>
+            </Text>
+          ) : null}
           <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted, marginTop: 6 }}>
             Подиум получил рамки · чемпион — титул «Чемпион {payload.season_name || ""}» · архив — в Гандолиуме
           </Text>
@@ -1824,16 +1834,19 @@ function QuestCardMobile({ theme, mine, payload }: {
             {who}
           </Text>
         )}
-        {items.map((it, i) => (
-          <View key={i} style={{ flexDirection: "row", justifyContent: "space-between", gap: 12, marginTop: i === 0 ? 6 : 3 }}>
-            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 13, fontWeight: "700", color: theme.colors.ink, flexShrink: 1 }}>
-              {it.name}
-            </Text>
-            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "800", color: isAnti ? BLOOD : theme.colors.accent }}>
-              +{it.gas} ⛽
-            </Text>
-          </View>
-        ))}
+        {items.map((it, i) => {
+          const secret = it.cat === "secret";
+          return (
+            <View key={i} style={{ flexDirection: "row", justifyContent: "space-between", gap: 12, marginTop: i === 0 ? 6 : 3 }}>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 13, fontWeight: "700", color: secret ? GOLD : theme.colors.ink, flexShrink: 1 }}>
+                {secret ? "🔓 " : ""}{it.name}
+              </Text>
+              <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "800", color: isAnti ? BLOOD : secret ? GOLD : theme.colors.accent }}>
+                +{it.gas} ⛽
+              </Text>
+            </View>
+          );
+        })}
         {(payload.new_level || payload.gas_total != null) && (
           <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted, marginTop: 6 }}>
             {payload.new_level ? `🆙 УРОВЕНЬ ${payload.new_level} · ` : ""}

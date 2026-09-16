@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ChatOut, UserOut, PokerTableOut, PokerSeatOut, PokerGameView, pokerApi } from "../services/api";
+import { ChatOut, UserOut, PokerTableOut, PokerSeatOut, PokerGameView, PokerTableSettings, PokerHistory, PokerHistoryHand, pokerApi } from "../services/api";
 import { wsService } from "../services/ws";
 import { useTheme } from "../services/theme";
 import { playCardSound, playChipSound, playTurnSound } from "../services/sounds";
@@ -21,11 +21,18 @@ export default function Poker({ chat, currentUser }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [gameState, setGameState] = useState<PokerGameView | null>(null);
+  // Настройки стола (создание / правка в лобби), история раздач, пауза докупки
+  const [showCreate, setShowCreate] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [history, setHistory] = useState<PokerHistory | null>(null);
+  const [graceLeft, setGraceLeft] = useState<number | null>(null);
   // Track previous game state to detect transitions worth a sound
   const prevHandNoRef = useRef<number | null>(null);
   const prevCommunityCountRef = useRef<number>(0);
   const prevLastActionRef = useRef<string | null>(null);
   const prevMyTurnRef = useRef<boolean>(false);
+  const joiningRef = useRef<Set<number>>(new Set());
 
   // Load tables for this chat
   useEffect(() => {
@@ -168,15 +175,83 @@ export default function Poker({ chat, currentUser }: Props) {
     };
   }, [chat.id, activeTable?.id]);
 
-  async function createTable() {
+  async function createTable(settings: PokerTableSettings) {
     setBusy(true); setError(null);
     try {
-      const res = await pokerApi.create(chat.id, 6);
+      const res = await pokerApi.create(chat.id, settings);
+      setShowCreate(false);
       setActiveTable(res.data);
     } catch (e: any) {
       setError(e.response?.data?.detail || "Ошибка создания стола");
     } finally { setBusy(false); }
   }
+
+  async function saveSettings(tableId: number, settings: PokerTableSettings) {
+    setBusy(true); setError(null);
+    try {
+      const res = await pokerApi.settings(tableId, settings);
+      setShowSettings(false);
+      setActiveTable(res.data);
+      setTables((prev) => prev.map((t) => (t.id === tableId ? res.data : t)));
+    } catch (e: any) {
+      setError(e.response?.data?.detail || "Не удалось сохранить настройки");
+    } finally { setBusy(false); }
+  }
+
+  // Докупка в режиме «за газ»: вылетел → энтри ещё раз → стартовый стек.
+  async function reentry(tableId: number) {
+    setBusy(true); setError(null);
+    try {
+      const res = await pokerApi.reentry(tableId);
+      setActiveTable(res.data);
+    } catch (e: any) {
+      setError(e.response?.data?.detail || "Не удалось докупиться");
+      setTimeout(() => setError(null), 5000);
+    } finally { setBusy(false); }
+  }
+
+  // «Сыграть ещё»: сервер создаёт новый стол с теми же настройками и людьми
+  // и удаляет старый. poker_table_removed по старому прилетит раньше ответа
+  // и обнулит activeTable — поэтому ответ ставим поверх, а не мержим.
+  async function restartTable(tableId: number) {
+    setBusy(true); setError(null);
+    try {
+      const res = await pokerApi.restart(tableId);
+      setGameState(null);
+      setHistory(null);
+      setShowHistory(false);
+      setActiveTable(res.data);
+      setTables((prev) => [res.data, ...prev.filter((t) => t.id !== tableId && t.id !== res.data.id)]);
+    } catch (e: any) {
+      setError(e.response?.data?.detail || "Не удалось открыть новую партию");
+    } finally { setBusy(false); }
+  }
+
+  async function loadHistory(tableId: number) {
+    try {
+      const res = await pokerApi.history(tableId);
+      setHistory(res.data);
+    } catch {
+      // история в памяти сервера — после рестарта её просто нет
+      setHistory({ table_id: tableId, names: {}, hands: [] });
+    }
+  }
+
+  // Открытая панель истории подтягивает свежие раздачи по мере игры.
+  useEffect(() => {
+    if (!showHistory || !activeTable) return;
+    loadHistory(activeTable.id);
+  }, [showHistory, activeTable?.id, gameState?.history_len]);
+
+  // Секунды до конца паузы «докупись или всё» (режим за газ).
+  useEffect(() => {
+    const until = gameState?.reentry_open_until;
+    if (!until) { setGraceLeft(null); return; }
+    const tick = () => setGraceLeft(Math.max(0, Math.round(until - Date.now() / 1000)));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [gameState?.reentry_open_until]);
 
   async function joinTable(tableId: number, openAfter = false) {
     setError(null);
@@ -193,8 +268,14 @@ export default function Poker({ chat, currentUser }: Props) {
         seat_index: freeIdx,
         stack: forTable.starting_stack,
         is_active: true,
+        reentries: 0,
+        gas_paid: 0,
       };
     }
+    // Дабл-клик по «Сесть» — второй запрос сервер и так отбил бы (одно место
+    // на юзера), но незачем показывать ему ошибку «Already seated»
+    if (joiningRef.current.has(tableId)) return;
+    joiningRef.current.add(tableId);
     // Update list optimistically
     setTables((prev) => prev.map((t) => {
       if (t.id !== tableId || t.seats.find((s) => s.user_id === currentUser.id)) return t;
@@ -229,6 +310,8 @@ export default function Poker({ chat, currentUser }: Props) {
         ? { ...cur, seats: cur.seats.filter((s) => s.id !== ghostId) }
         : cur);
       setError(e.response?.data?.detail || "Не удалось сесть");
+    } finally {
+      joiningRef.current.delete(tableId);
     }
   }
 
@@ -301,7 +384,7 @@ export default function Poker({ chat, currentUser }: Props) {
             {isNeo ? `// ПОКЕР · ${chat.is_group ? chat.name : "DM"}` : `Покер · ${chat.is_group ? chat.name : "DM"}`}
           </span>
           <button
-            onClick={createTable}
+            onClick={() => setShowCreate(true)}
             disabled={busy}
             style={{
               ...s.primaryBtn,
@@ -313,6 +396,16 @@ export default function Poker({ chat, currentUser }: Props) {
           </button>
         </div>
         {error && <div style={{ ...s.error, ...mono }}>{error}</div>}
+        {showCreate && (
+          <TableSettingsForm
+            isNeo={isNeo}
+            busy={busy}
+            title={isNeo ? "// НОВЫЙ СТОЛ" : "Новый стол"}
+            initial={{ max_seats: 6, starting_stack: 30000, starting_small_blind: 100, blind_increase_minutes: 7, mode: "chips", entry_gas: 50, max_reentries: 2, reentry_until_level: 3 }}
+            onSubmit={createTable}
+            onCancel={() => setShowCreate(false)}
+          />
+        )}
         <div style={s.body}>
           {tables.length === 0 ? (
             <div style={{ ...s.empty, ...mono }}>
@@ -332,6 +425,11 @@ export default function Poker({ chat, currentUser }: Props) {
                         <div style={{ ...s.tableMeta, ...mono }}>
                           {t.seats.length}/{t.max_seats} игроков · стек {t.starting_stack.toLocaleString()} · блайнды {t.starting_small_blind}/{t.starting_big_blind} · +1.5× каждые {t.blind_increase_minutes} мин
                         </div>
+                        {t.mode === "gas" && (
+                          <div style={{ ...s.tableMeta, ...mono, color: "var(--accent)", fontWeight: 700 }}>
+                            ⛽ За газ · энтри {t.entry_gas} · котёл {t.gas_pot} · докупок {t.max_reentries} до {t.reentry_until_level}-го повышения блайндов
+                          </div>
+                        )}
                       </div>
                       <div style={{
                         padding: "4px 10px",
@@ -414,8 +512,53 @@ export default function Poker({ chat, currentUser }: Props) {
               {liveGame.hand && ` · раздача #${liveGame.hand.hand_no}`}
             </span>
           )}
+          {t.mode === "gas" && (
+            <span style={{ ...mono, marginLeft: 12, fontSize: 12, color: "var(--accent)", fontWeight: 700 }}>
+              ⛽ котёл {(liveGame?.gas_pot ?? t.gas_pot).toLocaleString()}
+            </span>
+          )}
         </span>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          {t.status === "lobby" && t.created_by === currentUser.id && (
+            <button
+              onClick={() => setShowSettings(true)}
+              disabled={busy}
+              title="Стек, блайнды, интервал, режим — пока игра не началась"
+              style={{ ...s.secondaryBtn, ...mono, ...(isNeo ? { borderRadius: 0 } : {}) }}
+            >
+              {isNeo ? "[НАСТРОЙКИ]" : "⚙ Настройки"}
+            </button>
+          )}
+          {liveGame && (
+            <button
+              onClick={() => setShowHistory((v) => !v)}
+              title="История раздач этого стола"
+              style={{ ...s.secondaryBtn, ...mono, ...(isNeo ? { borderRadius: 0 } : {}), ...(showHistory ? { outline: "1px solid var(--accent)" } : {}) }}
+            >
+              {isNeo ? `[ИСТОРИЯ ${liveGame.history_len}]` : `История (${liveGame.history_len})`}
+            </button>
+          )}
+          {liveGame && myPlayer?.can_reenter && (
+            <button
+              onClick={() => reentry(t.id)}
+              disabled={busy}
+              title={`Ещё ${Math.max(0, liveGame.max_reentries - myPlayer.reentries)} из ${liveGame.max_reentries} докупок`}
+              style={{ ...s.primaryBtn, ...mono, ...(isNeo ? { borderRadius: 0 } : {}) }}
+            >
+              {isNeo ? `[ДОКУПИТЬСЯ ${liveGame.entry_gas}⛽]` : `⛽ Докупиться за ${liveGame.entry_gas}`}
+              {` (${Math.max(0, liveGame.max_reentries - myPlayer.reentries)}/${liveGame.max_reentries})`}
+            </button>
+          )}
+          {(t.status === "finished" || !!liveGame?.finished) && t.created_by === currentUser.id && (
+            <button
+              onClick={() => restartTable(t.id)}
+              disabled={busy}
+              title="Новый стол с теми же настройками и людьми"
+              style={{ ...s.primaryBtn, ...mono, ...(isNeo ? { borderRadius: 0 } : {}), background: "#3ba55d" }}
+            >
+              {isNeo ? "[СЫГРАТЬ ЕЩЁ]" : "🔁 Сыграть ещё"}
+            </button>
+          )}
           {!mySeat && t.status === "lobby" && t.seats.length < t.max_seats && (
             <button
               onClick={() => joinTable(t.id)}
@@ -446,7 +589,7 @@ export default function Poker({ chat, currentUser }: Props) {
               {isNeo ? "[ВСТАТЬ]" : "Встать"}
             </button>
           )}
-          {t.created_by === currentUser.id && t.status !== "finished" && (
+          {t.created_by === currentUser.id && t.status !== "finished" && !liveGame?.finished && (
             <button
               onClick={() => closeTable(t.id)}
               disabled={busy}
@@ -465,6 +608,38 @@ export default function Poker({ chat, currentUser }: Props) {
         </div>
       </div>
       {error && <div style={{ ...s.error, ...mono }}>{error}</div>}
+      {showSettings && (
+        <TableSettingsForm
+          isNeo={isNeo}
+          busy={busy}
+          title={isNeo ? `// НАСТРОЙКИ СТОЛА #${t.id}` : `Настройки стола #${t.id}`}
+          initial={{
+            max_seats: t.max_seats, starting_stack: t.starting_stack, starting_small_blind: t.starting_small_blind,
+            blind_increase_minutes: t.blind_increase_minutes, mode: t.mode, entry_gas: t.entry_gas || 50,
+            max_reentries: t.max_reentries, reentry_until_level: t.reentry_until_level,
+          }}
+          lockMoney={t.seats.length > 0}
+          onSubmit={(st) => saveSettings(t.id, st)}
+          onCancel={() => setShowSettings(false)}
+        />
+      )}
+      {liveGame && liveGame.finished && (
+        <div style={{ ...mono, padding: "10px 16px", background: isNeo ? "rgba(198,255,61,0.06)" : "var(--bg-secondary)", borderBottom: "1px solid var(--border)", fontSize: 13, textAlign: "center", color: "var(--text-primary)" }}>
+          🏆 Турнир окончен — победил{" "}
+          <b>{t.seats.find((sx) => sx.user_id === liveGame.winner_user_id)?.username ?? "?"}</b>
+          {t.mode === "gas" && liveGame.gas_pot > 0 && <span style={{ color: "var(--accent)", fontWeight: 700 }}> · забирает котёл {liveGame.gas_pot} ⛽</span>}
+          {t.created_by === currentUser.id && <span style={{ color: "var(--text-muted)" }}> · «Сыграть ещё» — новая партия с теми же людьми</span>}
+        </div>
+      )}
+      {liveGame && !liveGame.finished && liveGame.reentry_open_until && (
+        <div style={{ ...mono, padding: "10px 16px", background: isNeo ? "rgba(255,184,77,0.08)" : "rgba(250,166,26,0.12)", borderBottom: "1px solid var(--border)", fontSize: 13, textAlign: "center", color: "var(--warning)" }}>
+          ⏳ Фишки остались у одного — ждём докупку{graceLeft != null ? ` ещё ${graceLeft} с` : ""}.
+          {myPlayer?.can_reenter ? " Твой ход: кнопка «Докупиться» сверху." : " Если никто не докупится — турнир окончен."}
+        </div>
+      )}
+      {showHistory && liveGame && (
+        <HistoryPanel history={history} table={t} isNeo={isNeo} onClose={() => setShowHistory(false)} />
+      )}
       {liveGame && liveGame.hand && liveGame.hand.street !== "done" && (() => {
         // Banner above the felt — who is currently to act.
         const actingSeat = liveGame.hand.to_act_seat;
@@ -609,6 +784,33 @@ function ActionBar({ game, me, isNeo, onAction }: {
         </button>
       )}
       <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 220 }}>
+        {/* Размер ставки долей банка: рейз ДО current_bet + pct × (банк после колла),
+            округлённый до 10 фишек и зажатый в [мин. рейз, all-in]. */}
+        <div style={{ display: "flex", gap: 4 }}>
+          {[10, 15, 25, 50, 75].map((pct) => {
+            const potAfterCall = hand.pot + toCall;
+            const raw = hand.current_bet + Math.round((pct / 100) * potAfterCall / 10) * 10;
+            const amt = Math.min(maxRaise, Math.max(minRaise, raw));
+            const disabled = maxRaise <= toCall || maxRaise < minRaise;
+            return (
+              <button
+                key={pct}
+                onClick={() => setRaiseAmount(amt)}
+                disabled={disabled}
+                title={`Рейз до ${amt.toLocaleString()}`}
+                style={{
+                  ...btnBase, padding: "6px 8px", fontSize: 11.5,
+                  background: raiseAmount === amt ? "var(--accent)" : "transparent",
+                  color: raiseAmount === amt ? "var(--accent-text)" : "var(--text-muted)",
+                  border: `1px solid ${raiseAmount === amt ? "var(--accent)" : "var(--border)"}`,
+                  opacity: disabled ? 0.4 : 1,
+                }}
+              >
+                {pct}%
+              </button>
+            );
+          })}
+        </div>
         <input
           type="range"
           min={Math.min(minRaise, maxRaise)}
@@ -797,6 +999,189 @@ function CardView({ code, isNeo, small, large }: { code: string | null; isNeo: b
     }}>
       <span>{rank}</span>
       <span style={{ fontSize: suitSize }}>{suitChar}</span>
+    </div>
+  );
+}
+
+// ---- Настройки стола ------------------------------------------------------
+
+const PRESETS: Array<{ key: string; label: string; s: PokerTableSettings }> = [
+  { key: "fast", label: "Быстрый", s: { starting_stack: 10000, starting_small_blind: 100, blind_increase_minutes: 4 } },
+  { key: "normal", label: "Обычный", s: { starting_stack: 30000, starting_small_blind: 100, blind_increase_minutes: 7 } },
+  { key: "marathon", label: "Марафон", s: { starting_stack: 50000, starting_small_blind: 50, blind_increase_minutes: 12 } },
+];
+
+function TableSettingsForm({ isNeo, busy, title, initial, lockMoney, onSubmit, onCancel }: {
+  isNeo: boolean;
+  busy: boolean;
+  title: string;
+  initial: Required<PokerTableSettings>;
+  /** За столом уже сидят — режим и цену менять нельзя (сели по старым правилам) */
+  lockMoney?: boolean;
+  onSubmit: (s: PokerTableSettings) => void;
+  onCancel: () => void;
+}) {
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
+  const [st, setSt] = useState<Required<PokerTableSettings>>(initial);
+  const set = (patch: Partial<PokerTableSettings>) => setSt((cur) => ({ ...cur, ...patch }));
+  const field: React.CSSProperties = {
+    ...mono, background: "var(--bg-input)", color: "var(--text-primary)", border: "1px solid var(--border)",
+    borderRadius: isNeo ? 0 : 4, padding: "6px 8px", fontSize: 13, width: 110,
+  };
+  const label: React.CSSProperties = { ...mono, fontSize: 11.5, color: "var(--text-muted)", display: "block", marginBottom: 4 };
+  const row: React.CSSProperties = { display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 12 };
+  const activePreset = PRESETS.find((p) => p.s.starting_stack === st.starting_stack && p.s.starting_small_blind === st.starting_small_blind && p.s.blind_increase_minutes === st.blind_increase_minutes)?.key;
+  const gas = st.mode === "gas";
+  return (
+    <div onClick={onCancel} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--bg-modal)", border: "1px solid var(--border)", borderRadius: isNeo ? 0 : 10, padding: 20, width: 520, maxWidth: "94vw", boxShadow: "var(--shadow)" }}>
+        <div style={{ ...mono, fontWeight: 800, fontSize: 14, marginBottom: 14, color: isNeo ? "var(--accent)" : "var(--text-header)", letterSpacing: isNeo ? "0.08em" : undefined }}>{title}</div>
+
+        <div style={{ ...row, alignItems: "center" }}>
+          <span style={label}>Пресет</span>
+          {PRESETS.map((p) => (
+            <button key={p.key} onClick={() => set(p.s)} style={{
+              ...mono, padding: "5px 10px", fontSize: 12, cursor: "pointer", borderRadius: isNeo ? 0 : 999,
+              background: activePreset === p.key ? "var(--accent)" : "transparent",
+              color: activePreset === p.key ? "var(--accent-text)" : "var(--text-primary)",
+              border: `1px solid ${activePreset === p.key ? "var(--accent)" : "var(--border)"}`,
+            }}>{p.label}</button>
+          ))}
+        </div>
+
+        <div style={row}>
+          <div><span style={label}>Стек</span><input type="number" min={1000} max={1000000} step={1000} value={st.starting_stack} onChange={(e) => set({ starting_stack: Number(e.target.value) })} style={field} /></div>
+          <div><span style={label}>Малый блайнд</span><input type="number" min={10} max={10000} step={10} value={st.starting_small_blind} onChange={(e) => set({ starting_small_blind: Number(e.target.value) })} style={field} /><div style={{ ...label, marginTop: 3 }}>большой = {st.starting_small_blind * 2}</div></div>
+          <div><span style={label}>Рост блайндов, мин</span><input type="number" min={1} max={60} value={st.blind_increase_minutes} onChange={(e) => set({ blind_increase_minutes: Number(e.target.value) })} style={field} /><div style={{ ...label, marginTop: 3 }}>×1,5 каждый интервал</div></div>
+          <div><span style={label}>Мест</span>
+            <select value={st.max_seats} onChange={(e) => set({ max_seats: Number(e.target.value) })} style={{ ...field, width: 70 }}>
+              {[2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div style={{ ...row, alignItems: "center", paddingTop: 10, borderTop: "1px solid var(--border)" }}>
+          <span style={label}>Режим</span>
+          {(["chips", "gas"] as const).map((m) => (
+            <button key={m} disabled={!!lockMoney} onClick={() => set({ mode: m })} style={{
+              ...mono, padding: "5px 12px", fontSize: 12, cursor: lockMoney ? "not-allowed" : "pointer", borderRadius: isNeo ? 0 : 999,
+              background: st.mode === m ? "var(--accent)" : "transparent",
+              color: st.mode === m ? "var(--accent-text)" : "var(--text-primary)",
+              border: `1px solid ${st.mode === m ? "var(--accent)" : "var(--border)"}`,
+              opacity: lockMoney ? 0.6 : 1,
+            }}>{m === "chips" ? "Обычный" : "⛽ За газ"}</button>
+          ))}
+          {lockMoney && <span style={{ ...label, marginBottom: 0 }}>за столом уже сидят — режим и цена заморожены, пусть встанут</span>}
+        </div>
+        {gas && (
+          <div style={row}>
+            <div><span style={label}>Энтри, ⛽</span><input type="number" min={10} max={500} step={10} disabled={!!lockMoney} value={st.entry_gas} onChange={(e) => set({ entry_gas: Number(e.target.value) })} style={field} /></div>
+            <div><span style={label}>Докупок на человека</span><input type="number" min={0} max={5} value={st.max_reentries} onChange={(e) => set({ max_reentries: Number(e.target.value) })} style={field} /></div>
+            <div><span style={label}>Докупка открыта до повышения №</span><input type="number" min={0} max={10} value={st.reentry_until_level} onChange={(e) => set({ reentry_until_level: Number(e.target.value) })} style={field} /></div>
+            <div style={{ ...label, flexBasis: "100%", marginTop: -4 }}>
+              Все платят энтри при посадке, вылетевшие докупаются за ту же цену, победитель забирает весь котёл.
+              Не хватило газа — за стол не сесть. Закрыл стол до финала — газ всем вернётся.
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+          <button onClick={onCancel} style={{ ...mono, background: "transparent", color: "var(--text-muted)", border: "1px solid var(--border)", padding: "8px 14px", borderRadius: isNeo ? 0 : 4, cursor: "pointer", fontSize: 13 }}>
+            {isNeo ? "[ОТМЕНА]" : "Отмена"}
+          </button>
+          <button disabled={busy} onClick={() => onSubmit(st)} style={{ ...mono, background: "var(--accent)", color: "var(--accent-text)", border: "none", padding: "8px 16px", borderRadius: isNeo ? 0 : 4, cursor: "pointer", fontSize: 13, fontWeight: 700 }}>
+            {isNeo ? "[ГОТОВО]" : "Готово"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- История раздач --------------------------------------------------------
+
+const SUIT_GLYPH: Record<string, string> = { s: "♠", h: "♥", d: "♦", c: "♣" };
+function prettyCard(code: string): { text: string; red: boolean } {
+  const rank = code[0] === "T" ? "10" : code[0];
+  const suit = code[1] || "";
+  return { text: `${rank}${SUIT_GLYPH[suit] ?? suit}`, red: suit === "h" || suit === "d" };
+}
+function CardsInline({ cards }: { cards: string[] }) {
+  return (
+    <span style={{ display: "inline-flex", gap: 3 }}>
+      {cards.map((c, i) => {
+        const p = prettyCard(c);
+        return <span key={i} style={{ padding: "0 4px", borderRadius: 3, background: "#fff", color: p.red ? "#d0302f" : "#1a1a1a", fontWeight: 700, fontSize: 11.5, lineHeight: "17px" }}>{p.text}</span>;
+      })}
+    </span>
+  );
+}
+
+const ACTION_RU: Record<string, string> = { fold: "фолд", check: "чек", call: "колл", raise: "рейз до" };
+const STREET_RU: Record<string, string> = { preflop: "Префлоп", flop: "Флоп", turn: "Тёрн", river: "Ривер" };
+
+function HistoryPanel({ history, table, isNeo, onClose }: { history: PokerHistory | null; table: PokerTableOut; isNeo: boolean; onClose: () => void }) {
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
+  const [open, setOpen] = useState<number | null>(null);
+  const name = (uid: number) => history?.names?.[String(uid)] ?? table.seats.find((s) => s.user_id === uid)?.username ?? `#${uid}`;
+  const hands: PokerHistoryHand[] = history?.hands ?? [];
+  return (
+    <div style={{ ...mono, borderBottom: "1px solid var(--border)", background: isNeo ? "rgba(255,255,255,0.02)" : "var(--bg-secondary)", maxHeight: 260, overflowY: "auto", fontSize: 12.5 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 16px", position: "sticky", top: 0, background: isNeo ? "var(--bg-primary)" : "var(--bg-secondary)", borderBottom: "1px solid var(--border)" }}>
+        <span style={{ fontWeight: 800, color: isNeo ? "var(--accent)" : "var(--text-header)", letterSpacing: isNeo ? "0.06em" : undefined }}>
+          {isNeo ? "// ИСТОРИЯ РАЗДАЧ" : "История раздач"}
+          <span style={{ color: "var(--text-muted)", fontWeight: 400, marginLeft: 8 }}>{hands.length ? `${hands.length} шт., свежие сверху` : "пока пусто"}</span>
+        </span>
+        <button onClick={onClose} style={{ ...mono, background: "transparent", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 12 }}>{isNeo ? "[СКРЫТЬ]" : "скрыть ▴"}</button>
+      </div>
+      {hands.map((h) => {
+        const winners = h.winners.map(name).join(", ");
+        const isOpen = open === h.hand_no;
+        return (
+          <div key={h.hand_no} style={{ borderBottom: "1px solid var(--border)" }}>
+            <div onClick={() => setOpen(isOpen ? null : h.hand_no)} style={{ display: "flex", gap: 12, alignItems: "center", padding: "7px 16px", cursor: "pointer" }}>
+              <span style={{ color: "var(--text-muted)", width: 34 }}>#{h.hand_no}</span>
+              <span style={{ color: "var(--text-muted)" }}>{h.blinds[0]}/{h.blinds[1]}</span>
+              <CardsInline cards={h.community} />
+              <span style={{ flex: 1 }} />
+              <span>🏆 <b>{winners}</b>{h.winning_hand ? ` · ${h.winning_hand}` : ""}{h.reason === "all_others_folded" ? " · все сложили" : ""}</span>
+              <span style={{ color: "var(--accent)", fontWeight: 700, minWidth: 70, textAlign: "right" }}>{h.pot.toLocaleString()}</span>
+              <span style={{ color: "var(--text-muted)" }}>{isOpen ? "▴" : "▾"}</span>
+            </div>
+            {isOpen && (
+              <div style={{ padding: "4px 16px 10px 62px", color: "var(--text-secondary)", display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ color: "var(--text-muted)" }}>
+                  Стеки на входе: {h.players.map((p) => `${name(p.user_id)} ${p.stack.toLocaleString()}`).join(" · ")}
+                </div>
+                {h.streets.map((st, i) => (
+                  <div key={i} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <span style={{ color: "var(--text-muted)", minWidth: 64 }}>{STREET_RU[st.street] ?? st.street}</span>
+                    {st.community.length > 0 && <CardsInline cards={st.community} />}
+                    {st.actions.length === 0 ? (
+                      <span style={{ color: "var(--text-muted)" }}>—</span>
+                    ) : st.actions.map((a, j) => (
+                      <span key={j}>
+                        {name(a.user_id)}: {ACTION_RU[a.action] ?? a.action}{a.action === "raise" || a.action === "call" ? ` ${a.to.toLocaleString()}` : ""}{a.all_in ? " (all-in)" : ""}
+                        {j < st.actions.length - 1 ? " · " : ""}
+                      </span>
+                    ))}
+                  </div>
+                ))}
+                {h.showdown.length > 0 && (
+                  <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+                    <span style={{ color: "var(--text-muted)", minWidth: 64 }}>Вскрытие</span>
+                    {h.showdown.map((sd) => (
+                      <span key={sd.user_id} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                        {name(sd.user_id)} <CardsInline cards={sd.hole} /> {sd.hand && <span style={{ color: "var(--text-muted)" }}>{sd.hand}</span>}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

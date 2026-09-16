@@ -140,6 +140,14 @@ class PokerTable(Base):
     starting_big_blind: Mapped[int] = mapped_column(default=200)
     blind_increase_minutes: Mapped[int] = mapped_column(default=7)
     max_seats: Mapped[int] = mapped_column(default=6)
+    # Режим стола: chips — обычный на фишки; gas — «за газ ⛽»: все платят
+    # энтри при посадке, вылетевшие докупаются (ре-энтри), победитель
+    # забирает весь котёл. Окно докупки — пока blind_level < reentry_until_level.
+    mode: Mapped[str] = mapped_column(String(8), default="chips")
+    entry_gas: Mapped[int] = mapped_column(default=0)
+    max_reentries: Mapped[int] = mapped_column(default=2)
+    reentry_until_level: Mapped[int] = mapped_column(default=3)
+    gas_pot: Mapped[int] = mapped_column(default=0)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -161,6 +169,43 @@ class Reminder(Base):
         ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class SeasonPrize(Base):
+    """Пул призов чемпиону сезона (Аркана, Dota Plus, сет...). Правит админ
+    из клиента. Приложение только выбирает и объявляет — дарит хозяин руками."""
+    __tablename__ = "season_prizes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(120))
+    hint1: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    hint2: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    hint3: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    weight: Mapped[int] = mapped_column(Integer, default=1)   # вес выпадения
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class SeasonPrizeDraw(Base):
+    """Розыгрыш приза на сезон — один на сезон (уникально). Снапшот названия и
+    подсказок: пул потом могут править, а тизер и финал должны стоять.
+    До финала клиенты видят только открытые по неделям подсказки; revealed
+    ставит финал вместе с победителем."""
+    __tablename__ = "season_prize_draws"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    season: Mapped[str] = mapped_column(String(7), unique=True, index=True)
+    prize_id: Mapped[int | None] = mapped_column(ForeignKey("season_prizes.id", ondelete="SET NULL"), nullable=True)
+    title: Mapped[str] = mapped_column(String(120))
+    hint1: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    hint2: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    hint3: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    drawn_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    drawn_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    revealed: Mapped[bool] = mapped_column(Boolean, default=False)
+    winner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    winner_username: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
 
 class SeasonResult(Base):
@@ -314,6 +359,9 @@ class WebPushSubscription(Base):
 
 class PokerSeat(Base):
     __tablename__ = "poker_seats"
+    # Одно место на юзера за столом (миграция 0015): дабл-тап «Сесть» давал
+    # два места и двойное списание энтри; теперь второй INSERT — IntegrityError
+    __table_args__ = (UniqueConstraint("table_id", "user_id", name="uq_poker_seat_user"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     table_id: Mapped[int] = mapped_column(ForeignKey("poker_tables.id", ondelete="CASCADE"), index=True)
@@ -321,6 +369,10 @@ class PokerSeat(Base):
     seat_index: Mapped[int] = mapped_column()  # 0..max_seats-1
     stack: Mapped[int] = mapped_column(default=0)
     is_active: Mapped[bool] = mapped_column(default=True)  # false = busted out of tournament
+    # Режим «за газ»: сколько раз докупался и сколько всего газа занёс
+    # (энтри + докупки) — по gas_paid возвращаем, если стол закрыли до конца.
+    reentries: Mapped[int] = mapped_column(default=0)
+    gas_paid: Mapped[int] = mapped_column(default=0)
     joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     table: Mapped["PokerTable"] = relationship(back_populates="seats")

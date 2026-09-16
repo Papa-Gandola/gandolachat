@@ -5,8 +5,9 @@ import { playMessageSound } from "../services/sounds";
 import EmojiPicker from "./EmojiPicker";
 import FormattedText from "./FormattedText";
 import { CompBadge } from "./cosmetics";
-import { markerPreview } from "../services/markers";
+import { filePreview, markerPreview } from "../services/markers";
 import { useTheme } from "../services/theme";
+import { VoicePlayer } from "./VoicePlayer";
 
 interface Props {
   chat: ChatOut;
@@ -158,7 +159,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
         if (!isMuted) {
           playMessageSound();
           // Служебные маркеры (карточки компендиума и т.п.) — человеческим текстом
-          const body = data.content ? (markerPreview(data.content) ?? data.content) : "Sent a file";
+          const body = data.content ? (markerPreview(data.content) ?? data.content) : filePreview(data.file_name);
           showNotification(data.sender_username, body);
         }
         // Only auto-mark-read if the new message is going to be visible (we're at the bottom
@@ -888,6 +889,14 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
   function isImage(url: string) {
     return /\.(jpg|jpeg|png|gif|webp)$/i.test(url);
   }
+  // Аудио играем инлайн-плеером вместо ссылки «📎 voice_….m4a».
+  // webm нарочно не в списке: с телефона это чаще видео.
+  function isAudio(url: string) {
+    return /\.(m4a|mp3|ogg|opus|wav|aac|flac)$/i.test(url);
+  }
+  function isVoiceName(name: string | null | undefined) {
+    return !!name && /^voice_\d+\./i.test(name);
+  }
 
   function formatLastSeen(iso: string | null | undefined): string | null {
     if (!iso) return null;
@@ -1095,7 +1104,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
             <span style={{ fontSize: 13 }}>📌</span>
             <span style={{ color: "var(--text-muted)", flexShrink: 0 }}>{pins[0].sender_username}:</span>
             <span style={{ color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-              {markerPreview(pins[0].content || "") || pins[0].content || (pins[0].file_name ? `📎 ${pins[0].file_name}` : "")}
+              {markerPreview(pins[0].content || "") || pins[0].content || (pins[0].file_name ? filePreview(pins[0].file_name) : "")}
             </span>
             {pins.length > 1 && (
               <button
@@ -1121,7 +1130,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
                   <span>📌</span>
                   <span style={{ color: "var(--text-muted)", flexShrink: 0 }}>{pn.sender_username}:</span>
                   <span style={{ color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-                    {markerPreview(pn.content || "") || pn.content || (pn.file_name ? `📎 ${pn.file_name}` : "")}
+                    {markerPreview(pn.content || "") || pn.content || (pn.file_name ? filePreview(pn.file_name) : "")}
                   </span>
                   {canPin && (
                     <button onClick={(e) => { e.stopPropagation(); togglePin(pn.message_id); }} title="Открепить"
@@ -1396,6 +1405,13 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
                           alt={msg.file_name || "image"}
                           onDragStart={(e) => e.dataTransfer.setData("gandola/internal-image", "1")}
                           onClick={() => setPreviewImage(`${BASE_URL}${msg.file_url}`)}
+                        />
+                      ) : isAudio(msg.file_url) || isVoiceName(msg.file_name) ? (
+                        <VoicePlayer
+                          src={`${BASE_URL}${msg.file_url}`}
+                          name={msg.file_name}
+                          voice={isVoiceName(msg.file_name)}
+                          isNeo={isNeo}
                         />
                       ) : (
                         <a href={`${BASE_URL}${msg.file_url}`} target="_blank" rel="noreferrer" style={s.fileLink}>
@@ -2182,7 +2198,12 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
   //   чужое          → тёмный пузырь → акцентные цвета
   const darkOnLime = isNeo && isMine;
   const lightOnBlurple = !isNeo && isMine;
-  const edgeHue = special === "rampage" ? BLOOD : special === "fullstack" ? GOLD : isAnti ? BLOOD : null;
+  const items: Array<{ name: string; gas: number; title?: string; cat?: string }> = payload.items || [];
+  // Тайные задания — золотые везде, где встречаются (полка, чужие полки,
+  // эта карточка): хозяин хотел, чтобы они бросались в глаза.
+  const secretCount = items.filter((it) => it.cat === "secret").length;
+  const hasSecret = secretCount > 0;
+  const edgeHue = special === "rampage" ? BLOOD : special === "fullstack" ? GOLD : isAnti ? BLOOD : hasSecret ? GOLD : null;
   const edge = darkOnLime
     ? "rgba(0,0,0,0.55)"
     : (edgeHue ?? (lightOnBlurple ? "rgba(255,255,255,0.7)" : "var(--accent)"));
@@ -2205,13 +2226,12 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
     : special === "fullstack" ? "🏆 СТАК ПОБЕДИЛ"
     : isAnti ? "💀 ПРОЖАРКА"
     : isTeam ? "🤝 КОМАНДНОЕ"
+    : hasSecret && secretCount === items.length ? "🔓 ТАЙНОЕ ОТКРЫТО"
     : "⛽ ЗАДАНИЕ ЗАКРЫТО";
 
   const who = isTeam
     ? (payload.who || payload.names || []).join(" + ")
     : (payload.username || senderName);
-
-  const items: Array<{ name: string; gas: number; title?: string }> = payload.items || [];
 
   const openCompendium = () => {
     window.dispatchEvent(new CustomEvent("set-app-mode", { detail: { mode: "compendium" } }));
@@ -2366,6 +2386,12 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
             </div>
           ))}
         </div>
+        {payload.prize?.title && (
+          <div style={{ ...mono, fontSize: 12.5, marginTop: 8, color: darkOnLime ? "#0a0a0a" : GOLD, fontWeight: 800 }}>
+            🎁 Приз сезона: {payload.prize.title}
+            <span style={{ fontWeight: 500, color: subColor }}> — достаётся {payload.prize.winner}</span>
+          </div>
+        )}
         <div style={{ ...mono, fontSize: 11.5, color: subColor, marginTop: 8 }}>
           Подиум получил рамки, полная таблица — в архиве Гандолиума
         </div>
@@ -2393,17 +2419,20 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
       </div>
       <div style={{ ...mono, color: subColor, fontSize: 12, marginTop: 2 }}>{who}</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 8 }}>
-        {items.map((it, i) => (
-          <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
-            <span style={{ ...mono, fontSize: 13, fontWeight: 700, color: titleColor }}>
-              {it.name}
-              {it.title && <span style={{ color: titleGold, fontSize: 11, marginLeft: 6 }}>титул «{it.title}»</span>}
-            </span>
-            <span style={{ ...mono, fontSize: 12.5, fontWeight: 800, color: gasColor, whiteSpace: "nowrap" }}>
-              +{it.gas} ⛽
-            </span>
-          </div>
-        ))}
+        {items.map((it, i) => {
+          const secret = it.cat === "secret";
+          return (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
+              <span style={{ ...mono, fontSize: 13, fontWeight: 700, color: secret ? titleGold : titleColor }}>
+                {secret ? "🔓 " : ""}{it.name}
+                {it.title && <span style={{ color: titleGold, fontSize: 11, marginLeft: 6 }}>титул «{it.title}»</span>}
+              </span>
+              <span style={{ ...mono, fontSize: 12.5, fontWeight: 800, color: secret ? titleGold : gasColor, whiteSpace: "nowrap" }}>
+                +{it.gas} ⛽
+              </span>
+            </div>
+          );
+        })}
       </div>
       {(payload.new_level || payload.gas_total != null) && (
         <div style={{ ...mono, fontSize: 11.5, color: subColor, marginTop: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>

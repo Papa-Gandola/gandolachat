@@ -137,6 +137,22 @@ async def _finalize_one(db, season: str) -> None:
     push_title = f"🏆 Итоги сезона — {month_gen(season)}"
     push_body = f"Чемпион: {rows[0]['username']} ({rows[0]['gas']}⛽)! Подиум в чате."
 
+    # Приз сезона (если админ разыгрывал): раскрываем и пишем чемпиона.
+    # Дарит хозяин руками — карточка лишь объявляет, что именно.
+    try:
+        from app.compendium import prizes as _prizes
+        d = await _prizes.reveal(db, season, rows[0]["user_id"], rows[0]["username"])
+        if d:
+            await db.commit()
+            payload["prize"] = {"title": d.title, "winner": rows[0]["username"]}
+            push_body = f"Чемпион: {rows[0]['username']} ({rows[0]['gas']}⛽) забирает приз: {d.title}!"
+    except Exception as e:
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        print(f"[finale] приз сезона {season} не раскрылся: {type(e).__name__}: {e}")
+
     chats_res = await db.execute(
         select(Chat.id).where(Chat.compendium_enabled.is_(True), Chat.is_group.is_(True))
     )
@@ -191,3 +207,34 @@ async def finalize_season() -> None:
         pending = sorted(s for (s,) in seas_res.all() if s not in closed)
         for season in pending:
             await _finalize_one(db, season)
+        await _catch_up_prizes(db, cur)
+
+
+async def _catch_up_prizes(db, cur: str) -> None:
+    """Приз сезона, который финал не раскрыл (reveal упал ровно в тот момент,
+    а season_results уже закоммичены — сезон закрыт и в pending больше не
+    попадёт): раскрываем задним числом по чемпиону из season_results, без
+    второй карточки-подиума. Сезон без результатов (никто не играл) —
+    чемпиона нет, приз остаётся нераскрытым."""
+    try:
+        from app.compendium import prizes as _prizes
+        from app.models import SeasonPrizeDraw
+        stale = (await db.execute(
+            select(SeasonPrizeDraw.season)
+            .where(SeasonPrizeDraw.revealed.is_(False), SeasonPrizeDraw.season < cur)
+        )).scalars().all()
+        for season in stale:
+            champ = (await db.execute(
+                select(SeasonResult).where(SeasonResult.season == season, SeasonResult.place == 1)
+            )).scalar_one_or_none()
+            if not champ:
+                continue
+            await _prizes.reveal(db, season, champ.user_id, champ.username)
+            await db.commit()
+            print(f"[finale] приз сезона {season} раскрыт задним числом: чемпион {champ.username}")
+    except Exception as e:
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        print(f"[finale] догон приза не удался: {type(e).__name__}: {e}")

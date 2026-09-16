@@ -941,6 +941,10 @@ async def _finish_hand_and_maybe_next(table_id: int, g, db=None):
     from sqlalchemy import select as _select
     from app.models import PokerSeat as _PokerSeat, PokerTable as _PokerTable
 
+    # Стол закрыли/снесли, пока доигрывалась раздача (кнопка «Закрыть»,
+    # автозакрытие, «сыграть ещё») — эта игра уже никому не принадлежит
+    if game_store.get(table_id) is not g:
+        return
     own_session = db is None
     if own_session:
         db = AsyncSessionLocal()
@@ -957,22 +961,19 @@ async def _finish_hand_and_maybe_next(table_id: int, g, db=None):
 
         alive = [p for p in g.players.values() if p.stack > 0]
         if len(alive) <= 1:
-            g.finished = True
-            g.winner_user_id = alive[0].user_id if alive else None
-            t_rows = await db.execute(_select(_PokerTable).where(_PokerTable.id == table_id))
-            t = t_rows.scalar_one_or_none()
-            if t:
-                t.status = "finished"
-                from datetime import datetime as _dt, timezone as _tz
-                t.finished_at = _dt.now(_tz.utc)
-                await db.commit()
-            for uid in g.players.keys():
-                await manager.send_to_user(uid, {
-                    "type": "poker_game_state",
-                    "table_id": table_id,
-                    "state": public_view(g, uid),
-                })
+            # Режим «за газ»: фишки остались у одного, но вылетевшие ещё
+            # вправе докупиться — даём им паузу, турнир не закрываем. Иначе
+            # в игре на двоих докупка была бы невозможна в принципе.
+            from app.poker_game import reentry_candidates
+            if reentry_candidates(g):
+                if g.reentry_open_until is None:
+                    g.reentry_open_until = time.time() + REENTRY_GRACE_SECONDS
+                    _spawn(_grace_watch(table_id, g))
+                await _broadcast_state(table_id, g)
+                return
+            await _finish_tournament(table_id, g, db)
             return
+        g.reentry_open_until = None
 
         # Schedule the next hand after a short pause. The pause is longer at showdown
         # (5s — players want to see who had what) and shorter on uncalled wins (3s).
@@ -996,6 +997,154 @@ async def _finish_hand_and_maybe_next(table_id: int, g, db=None):
     finally:
         if own_session:
             await db.close()
+
+
+# Сколько ждём докупку, когда фишки остались у одного (режим «за газ»).
+REENTRY_GRACE_SECONDS = 30
+
+
+async def _broadcast_state(table_id: int, g) -> None:
+    from app.poker_game import public_view
+    for uid in list(g.players.keys()):
+        await manager.send_to_user(uid, {
+            "type": "poker_game_state",
+            "table_id": table_id,
+            "state": public_view(g, uid),
+        })
+
+
+async def post_chat_text(db: AsyncSession, chat_id: int, sender: User, text: str) -> None:
+    """Обычное текстовое сообщение от имени юзера + бродкаст (как /call_record)."""
+    msg = Message(chat_id=chat_id, sender_id=sender.id, content=text)
+    db.add(msg)
+    await db.commit()
+    await db.refresh(msg)
+    await manager.broadcast_to_chat(chat_id, {
+        "type": "message",
+        "id": msg.id,
+        "chat_id": chat_id,
+        "sender_id": sender.id,
+        "sender_username": sender.username,
+        "sender_avatar": sender.avatar_url,
+        "content": text,
+        "file_url": None,
+        "file_name": None,
+        "is_edited": False,
+        "created_at": msg.created_at.isoformat(),
+        "reply_to_id": None,
+        "reply_to_username": None,
+        "reply_to_content": None,
+        "_temp_id": None,
+    })
+
+
+async def _finish_tournament(table_id: int, g, db=None) -> None:
+    """Закрыть турнир: победитель, статус стола; в режиме «за газ» — котёл
+    победителю (в профиль ТЕКУЩЕГО сезона, как выплаты ставок) + строка в
+    чат + profile_updated, чтобы ⛽ у ника обновился сразу."""
+    from app.database import AsyncSessionLocal
+    from app.models import PokerTable as _PokerTable
+    from app.poker_game import game_store
+    from sqlalchemy.orm import selectinload
+    own = db is None
+    if own:
+        db = AsyncSessionLocal()
+    try:
+        alive = [p for p in g.players.values() if p.stack > 0]
+        g.finished = True
+        g.reentry_open_until = None
+        g.winner_user_id = alive[0].user_id if len(alive) == 1 else None
+        # FOR UPDATE, как в api/poker: параллельное «Закрыть стол» либо
+        # дождётся нашего коммита и увидит finished (ничего не возвращая
+        # поверх котла), либо успело раньше — тогда стола уже нет и котёл
+        # платить нельзя: всем уже вернули gas_paid.
+        t = (await db.execute(
+            select(_PokerTable).options(selectinload(_PokerTable.seats))
+            .where(_PokerTable.id == table_id).with_for_update()
+        )).scalar_one_or_none()
+        if t is None or game_store.get(table_id) is not g:
+            await db.rollback()
+            await _broadcast_state(table_id, g)
+            return
+        t.status = "finished"
+        t.finished_at = datetime.now(timezone.utc)
+        t.gas_pot = g.gas_pot
+        from app.compendium.bets import _credit
+        from app.compendium.engine import current_season
+        if g.mode == "gas":
+            # Место, которого нет в игре (сел в лобби в самый момент старта):
+            # его энтри в котёл не попал — назад, а не в никуда
+            for s in t.seats:
+                if s.user_id not in g.players and s.gas_paid > 0:
+                    await _credit(db, s.user_id, current_season(), s.gas_paid)
+                    s.gas_paid = 0
+        payout = g.mode == "gas" and g.gas_pot > 0 and g.winner_user_id is not None
+        if payout:
+            await _credit(db, g.winner_user_id, current_season(), g.gas_pot)
+        await db.commit()
+        # Клиенты гейтят «Сыграть ещё» (и прячут «Закрыть») по status стола —
+        # без этого бродкаста у всех он оставался бы «playing»
+        try:
+            from app.api.poker import _broadcast_table
+            await _broadcast_table(db, t, "poker_table_updated")
+        except Exception as exc:
+            print(f"[poker] finished-table broadcast failed: {exc}")
+        if payout:
+            winner = (await db.execute(select(User).where(User.id == g.winner_user_id))).scalar_one_or_none()
+            if winner:
+                try:
+                    await post_chat_text(
+                        db, g.chat_id, winner,
+                        f"🏆 Покер, стол #{table_id}: {winner.username} забирает котёл {g.gas_pot} ⛽",
+                    )
+                    from app.api.users import _broadcast_profile
+                    await _broadcast_profile(db, winner)
+                except Exception as exc:
+                    print(f"[poker] payout announce failed: {exc}")
+        await _broadcast_state(table_id, g)
+    finally:
+        if own:
+            await db.close()
+
+
+async def _grace_watch(table_id: int, g) -> None:
+    """Дождаться дедлайна паузы докупки: если снова ≥2 с фишками —
+    следующая раздача, иначе турнир окончен. Досрочно игру возобновляет
+    resume_after_reentry (дедлайн обнуляется — мы выходим)."""
+    from app.poker_game import game_store, start_hand
+    try:
+        while True:
+            deadline = g.reentry_open_until
+            if deadline is None:
+                return
+            await asyncio.sleep(max(0.2, deadline - time.time()))
+            if game_store.get(table_id) is not g or g.finished or g.reentry_open_until is None:
+                return
+            if time.time() < g.reentry_open_until:
+                continue
+            alive = [p for p in g.players.values() if p.stack > 0]
+            if len(alive) >= 2:
+                g.reentry_open_until = None
+                start_hand(g)
+                await _broadcast_state(table_id, g)
+            else:
+                await _finish_tournament(table_id, g)
+            return
+    except Exception as exc:
+        print(f"[poker] grace watch failed: {exc}")
+
+
+async def resume_after_reentry(table_id: int, g) -> None:
+    """После докупки (API): если шла пауза и фишки снова у двоих —
+    продолжаем сразу, не дожидаясь дедлайна. Иначе игрок просто зайдёт со
+    следующей раздачи (start_hand сдаёт всем, у кого stack > 0)."""
+    from app.poker_game import start_hand
+    alive = [p for p in g.players.values() if p.stack > 0]
+    if (g.reentry_open_until is not None and len(alive) >= 2 and not g.finished
+            and (g.hand is None or g.hand.street == "done")):
+        g.reentry_open_until = None
+        start_hand(g)
+    await _broadcast_state(table_id, g)
 
 
 async def _persist_call_record(chat_id: int, db: AsyncSession, ended_by: int, declined: bool):

@@ -387,6 +387,8 @@ export interface PokerSeatOut {
   seat_index: number;
   stack: number;
   is_active: boolean;
+  reentries: number;
+  gas_paid: number;
 }
 
 export interface PokerTableOut {
@@ -399,11 +401,45 @@ export interface PokerTableOut {
   starting_big_blind: number;
   blind_increase_minutes: number;
   max_seats: number;
+  /** chips — обычный на фишки; gas — «за газ ⛽»: энтри, докупки, котёл победителю */
+  mode: "chips" | "gas";
+  entry_gas: number;
+  max_reentries: number;
+  reentry_until_level: number;
+  gas_pot: number;
   seats: PokerSeatOut[];
   started_at: string | null;
   finished_at: string | null;
   created_at: string;
 }
+
+/** Настройки стола — создатель задаёт при создании и правит в лобби. */
+export interface PokerTableSettings {
+  max_seats?: number;
+  starting_stack?: number;
+  starting_small_blind?: number;
+  blind_increase_minutes?: number;
+  mode?: "chips" | "gas";
+  entry_gas?: number;
+  max_reentries?: number;
+  reentry_until_level?: number;
+}
+
+export interface PokerHistoryAction { user_id: number; action: string; to: number; all_in: boolean }
+export interface PokerHistoryStreet { street: string; community: string[]; actions: PokerHistoryAction[] }
+export interface PokerHistoryHand {
+  hand_no: number;
+  blinds: [number, number];
+  players: Array<{ user_id: number; seat: number; stack: number }>;
+  streets: PokerHistoryStreet[];
+  pot: number;
+  reason: string;
+  winners: number[];
+  winning_hand: string | null;
+  community: string[];
+  showdown: Array<{ user_id: number; hole: string[]; hand: string | null }>;
+}
+export interface PokerHistory { table_id: number; names: Record<string, string>; hands: PokerHistoryHand[] }
 
 export interface PokerPlayerView {
   user_id: number;
@@ -412,6 +448,8 @@ export interface PokerPlayerView {
   bet: number;
   has_folded: boolean;
   is_all_in: boolean;
+  reentries: number;
+  can_reenter: boolean;
   is_my_turn: boolean;
   hole: string[];
 }
@@ -446,18 +484,34 @@ export interface PokerGameView {
   finished: boolean;
   winner_user_id: number | null;
   last_summary: PokerHandSummary | null;
+  starting_stack: number;
+  mode: "chips" | "gas";
+  entry_gas: number;
+  gas_pot: number;
+  max_reentries: number;
+  reentry_until_level: number;
+  /** epoch-секунды дедлайна паузы «докупись или всё» (режим за газ), иначе null */
+  reentry_open_until: number | null;
+  history_len: number;
   hand: PokerHandView | null;
   players: PokerPlayerView[];
 }
 
 export const pokerApi = {
   list: (chatId: number) => getInstance().get<PokerTableOut[]>(`/api/poker?chat_id=${chatId}`),
-  create: (chatId: number, maxSeats = 6) =>
-    getInstance().post<PokerTableOut>("/api/poker", { chat_id: chatId, max_seats: maxSeats }),
+  create: (chatId: number, settings: PokerTableSettings = { max_seats: 6 }) =>
+    getInstance().post<PokerTableOut>("/api/poker", { chat_id: chatId, ...settings }),
+  settings: (tableId: number, patch: PokerTableSettings) =>
+    getInstance().patch<PokerTableOut>(`/api/poker/${tableId}/settings`, patch),
   join: (tableId: number) => getInstance().post<PokerTableOut>(`/api/poker/${tableId}/join`),
   leave: (tableId: number) => getInstance().post<PokerTableOut | null>(`/api/poker/${tableId}/leave`),
   start: (tableId: number) => getInstance().post<PokerTableOut>(`/api/poker/${tableId}/start`),
   close: (tableId: number) => getInstance().post<{ ok: boolean }>(`/api/poker/${tableId}/close`),
+  /** Докупка в режиме «за газ» (вылетел → энтри ещё раз → стартовый стек) */
+  reentry: (tableId: number) => getInstance().post<PokerTableOut>(`/api/poker/${tableId}/reentry`),
+  /** «Сыграть ещё»: новый стол с теми же настройками и людьми, старый удаляется */
+  restart: (tableId: number) => getInstance().post<PokerTableOut>(`/api/poker/${tableId}/restart`),
+  history: (tableId: number) => getInstance().get<PokerHistory>(`/api/poker/${tableId}/history`),
 };
 
 export const notesApi = {
@@ -566,8 +620,22 @@ export const pinsApi = {
     getInstance().delete<PinOut[]>(`/api/chats/${chatId}/pin/${messageId}`),
 };
 
+/** Тизер приза сезона: до финала — только открытые подсказки, после — название и чемпион. */
+export interface SeasonPrizeTeaser {
+  season: string;
+  drawn: boolean;
+  revealed: boolean;
+  hints: string[];
+  hints_total: number;
+  next_hint_day: number | null;
+  title: string | null;
+  winner: string | null;
+  last: { season: string; title: string; winner: string | null } | null;
+}
+
 export const compendiumApi = {
   me: () => getInstance().get<CompendiumMe>("/api/compendium/me"),
+  prize: () => getInstance().get<SeasonPrizeTeaser>("/api/compendium/prize"),
   season: () =>
     getInstance().get<{ season: string; rows: CompendiumSeasonRow[]; me: number }>("/api/compendium/season"),
   seasons: () => getInstance().get<SeasonArchive[]>("/api/compendium/seasons"),
