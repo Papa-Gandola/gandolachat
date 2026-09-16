@@ -14,6 +14,7 @@ import Poker from "../components/Poker";
 import CompendiumPage from "../components/CompendiumPage";
 import { useTheme } from "../services/theme";
 import { APP_VERSION, CHANGELOG } from "../changelog";
+import Icon, { Gas } from "../components/Icon";
 
 interface Props {
   token: string;
@@ -506,7 +507,7 @@ export default function Main({ token, user, onLogout }: Props) {
                       fontFamily: "inherit",
                     }}
                   >
-                    {m === "compendium" ? "Гандолиум ⛽" : `Gandola${m === "chat" ? "Chat" : "Poker"}`}
+                    {m === "compendium" ? <>Гандолиум <Gas size={12} /></> : `Gandola${m === "chat" ? "Chat" : "Poker"}`}
                   </button>
                 ))}
               </div>
@@ -553,7 +554,7 @@ export default function Main({ token, user, onLogout }: Props) {
         } : {};
         return (
           <div key={call.chatId} style={{ ...s.incomingCallBanner, ...neoStyle }}>
-            <span>{isNeo ? `● ВХОДЯЩИЙ · ${chatName}` : `📞 Звонок: ${chatName}`}</span>
+            <span>{isNeo ? `● ВХОДЯЩИЙ · ${chatName}` : <><Icon name="phone" size={14} style={{ marginRight: 6 }} />Звонок: {chatName}</>}</span>
             <div style={{ display: "flex", gap: 8 }}>
               <button style={{ ...s.acceptBtn, ...acceptNeo }} onClick={() => acceptCall(call)}>
                 {isNeo ? "[ПРИНЯТЬ]" : "Принять"}

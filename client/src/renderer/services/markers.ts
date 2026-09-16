@@ -1,5 +1,23 @@
 // Служебные маркеры сообщений → человеческое превью (сайдбар, уведомления).
 // Без этого в превью и нотификациях светился бы сырой "/quest_card {json}".
+// Строки со значком-эмодзи впереди: в системных уведомлениях так и уходят,
+// а в интерфейсе ведущий значок превращается в линейную иконку
+// (PREVIEW_ICONS + <PreviewText> из Emoji.tsx) — стиль «Б».
+import type { IconName } from "../components/icons";
+
+/** Ведущий значок превью → иконка единого набора. Чего тут нет
+ *  (💀 🤝 🚨 …) — остаётся эмодзи из шрифта Twemoji. */
+export const PREVIEW_ICONS: Record<string, IconName> = {
+  "🎤": "mic", "🖼": "image", "🎬": "film", "🎵": "music", "📎": "clip", "📊": "poll", "⏰": "bell",
+  "🃏": "cards", "📞": "phone", "⚔️": "swords", "⛽": "fuel", "🏆": "trophy", "🎲": "dice", "📅": "calendar",
+};
+
+export function splitPreviewIcon(text: string): { icon: IconName | null; rest: string } {
+  for (const glyph of Object.keys(PREVIEW_ICONS)) {
+    if (text.startsWith(glyph + " ")) return { icon: PREVIEW_ICONS[glyph], rest: text.slice(glyph.length + 1) };
+  }
+  return { icon: null, rest: text };
+}
 /** Превью файлового сообщения по имени файла: голосовые с телефона
  *  приходят как voice_<ts>.m4a — в сайдбаре/закрепах вместо этого
  *  показываем человеческое «🎤 Голосовое». */

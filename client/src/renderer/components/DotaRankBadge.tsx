@@ -1,4 +1,5 @@
 import React from "react";
+import Icon from "./Icon";
 
 // rank_tier из OpenDota: десятки — медаль (1..8), единицы — звёзды (1..5).
 // Например 54 = Легенда ★4, 80 = Титан.
@@ -56,7 +57,7 @@ export default function DotaRankBadge({ rankTier, leaderboardRank, isNeo, size =
         whiteSpace: "nowrap",
       }}
     >
-      <span aria-hidden style={{ fontSize: sm ? 10 : 12 }}>⚔</span>
+      <Icon name="swords" size={sm ? 11 : 13} strokeWidth={2} />
       {label}
     </span>
   );

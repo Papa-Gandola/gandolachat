@@ -4,6 +4,7 @@ import { wsService } from "../services/ws";
 import { useTheme } from "../services/theme";
 import { playCardSound, playChipSound, playTurnSound } from "../services/sounds";
 import PokerAssistPanel from "./PokerAssistPanel";
+import Icon, { Gas } from "./Icon";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -427,7 +428,7 @@ export default function Poker({ chat, currentUser }: Props) {
                         </div>
                         {t.mode === "gas" && (
                           <div style={{ ...s.tableMeta, ...mono, color: "var(--accent)", fontWeight: 700 }}>
-                            ⛽ За газ · энтри {t.entry_gas} · котёл {t.gas_pot} · докупок {t.max_reentries} до {t.reentry_until_level}-го повышения блайндов
+                            <Gas /> За газ · энтри {t.entry_gas} · котёл {t.gas_pot} · докупок {t.max_reentries} до {t.reentry_until_level}-го повышения блайндов
                           </div>
                         )}
                       </div>
@@ -514,7 +515,7 @@ export default function Poker({ chat, currentUser }: Props) {
           )}
           {t.mode === "gas" && (
             <span style={{ ...mono, marginLeft: 12, fontSize: 12, color: "var(--accent)", fontWeight: 700 }}>
-              ⛽ котёл {(liveGame?.gas_pot ?? t.gas_pot).toLocaleString()}
+              <Gas /> котёл {(liveGame?.gas_pot ?? t.gas_pot).toLocaleString()}
             </span>
           )}
         </span>
@@ -526,7 +527,7 @@ export default function Poker({ chat, currentUser }: Props) {
               title="Стек, блайнды, интервал, режим — пока игра не началась"
               style={{ ...s.secondaryBtn, ...mono, ...(isNeo ? { borderRadius: 0 } : {}) }}
             >
-              {isNeo ? "[НАСТРОЙКИ]" : "⚙ Настройки"}
+              {isNeo ? "[НАСТРОЙКИ]" : <><Icon name="gear" size={14} style={{ marginRight: 6 }} />Настройки</>}
             </button>
           )}
           {liveGame && (
@@ -545,7 +546,7 @@ export default function Poker({ chat, currentUser }: Props) {
               title={`Ещё ${Math.max(0, liveGame.max_reentries - myPlayer.reentries)} из ${liveGame.max_reentries} докупок`}
               style={{ ...s.primaryBtn, ...mono, ...(isNeo ? { borderRadius: 0 } : {}) }}
             >
-              {isNeo ? `[ДОКУПИТЬСЯ ${liveGame.entry_gas}⛽]` : `⛽ Докупиться за ${liveGame.entry_gas}`}
+              {isNeo ? <>[ДОКУПИТЬСЯ {liveGame.entry_gas}<Gas size={11} />]</> : <><Gas style={{ marginRight: 5 }} />Докупиться за {liveGame.entry_gas}</>}
               {` (${Math.max(0, liveGame.max_reentries - myPlayer.reentries)}/${liveGame.max_reentries})`}
             </button>
           )}
@@ -556,7 +557,7 @@ export default function Poker({ chat, currentUser }: Props) {
               title="Новый стол с теми же настройками и людьми"
               style={{ ...s.primaryBtn, ...mono, ...(isNeo ? { borderRadius: 0 } : {}), background: "#3ba55d" }}
             >
-              {isNeo ? "[СЫГРАТЬ ЕЩЁ]" : "🔁 Сыграть ещё"}
+              {isNeo ? "[СЫГРАТЬ ЕЩЁ]" : <><Icon name="flip" size={14} style={{ marginRight: 6 }} />Сыграть ещё</>}
             </button>
           )}
           {!mySeat && t.status === "lobby" && t.seats.length < t.max_seats && (
@@ -573,7 +574,7 @@ export default function Poker({ chat, currentUser }: Props) {
               disabled={busy}
               style={{ ...s.primaryBtn, ...mono, ...(isNeo ? { borderRadius: 0 } : {}), background: "#3ba55d" }}
             >
-              {isNeo ? "[НАЧАТЬ ИГРУ]" : "▶ Начать игру"}
+              {isNeo ? "[НАЧАТЬ ИГРУ]" : <><Icon name="play" size={14} style={{ marginRight: 6 }} />Начать игру</>}
             </button>
           )}
           {mySeat && (
@@ -627,7 +628,7 @@ export default function Poker({ chat, currentUser }: Props) {
         <div style={{ ...mono, padding: "10px 16px", background: isNeo ? "rgba(198,255,61,0.06)" : "var(--bg-secondary)", borderBottom: "1px solid var(--border)", fontSize: 13, textAlign: "center", color: "var(--text-primary)" }}>
           🏆 Турнир окончен — победил{" "}
           <b>{t.seats.find((sx) => sx.user_id === liveGame.winner_user_id)?.username ?? "?"}</b>
-          {t.mode === "gas" && liveGame.gas_pot > 0 && <span style={{ color: "var(--accent)", fontWeight: 700 }}> · забирает котёл {liveGame.gas_pot} ⛽</span>}
+          {t.mode === "gas" && liveGame.gas_pot > 0 && <span style={{ color: "var(--accent)", fontWeight: 700 }}> · забирает котёл {liveGame.gas_pot} <Gas /></span>}
           {t.created_by === currentUser.id && <span style={{ color: "var(--text-muted)" }}> · «Сыграть ещё» — новая партия с теми же людьми</span>}
         </div>
       )}
@@ -668,7 +669,7 @@ export default function Poker({ chat, currentUser }: Props) {
             textAlign: "center" as const,
             ...(isYou ? { animation: "neo-blink 1.2s infinite" } : {}),
           }}>
-            {isNeo ? (isYou ? "> ТВОЙ_ХОД" : `> ходит ${name.toLowerCase()}`) : (isYou ? "🎯 Твой ход" : `Ходит ${name}`)}
+            {isNeo ? (isYou ? "> ТВОЙ_ХОД" : `> ходит ${name.toLowerCase()}`) : (isYou ? <><Icon name="target" size={13} style={{ marginRight: 5 }} />Твой ход</> : `Ходит ${name}`)}
           </div>
         );
       })()}
@@ -1069,13 +1070,13 @@ function TableSettingsForm({ isNeo, busy, title, initial, lockMoney, onSubmit, o
               color: st.mode === m ? "var(--accent-text)" : "var(--text-primary)",
               border: `1px solid ${st.mode === m ? "var(--accent)" : "var(--border)"}`,
               opacity: lockMoney ? 0.6 : 1,
-            }}>{m === "chips" ? "Обычный" : "⛽ За газ"}</button>
+            }}>{m === "chips" ? "Обычный" : <><Gas size={12} style={{ marginRight: 4 }} />За газ</>}</button>
           ))}
           {lockMoney && <span style={{ ...label, marginBottom: 0 }}>за столом уже сидят — режим и цена заморожены, пусть встанут</span>}
         </div>
         {gas && (
           <div style={row}>
-            <div><span style={label}>Энтри, ⛽</span><input type="number" min={10} max={500} step={10} disabled={!!lockMoney} value={st.entry_gas} onChange={(e) => set({ entry_gas: Number(e.target.value) })} style={field} /></div>
+            <div><span style={label}>Энтри, <Gas size={11} /></span><input type="number" min={10} max={500} step={10} disabled={!!lockMoney} value={st.entry_gas} onChange={(e) => set({ entry_gas: Number(e.target.value) })} style={field} /></div>
             <div><span style={label}>Докупок на человека</span><input type="number" min={0} max={5} value={st.max_reentries} onChange={(e) => set({ max_reentries: Number(e.target.value) })} style={field} /></div>
             <div><span style={label}>Докупка открыта до повышения №</span><input type="number" min={0} max={10} value={st.reentry_until_level} onChange={(e) => set({ reentry_until_level: Number(e.target.value) })} style={field} /></div>
             <div style={{ ...label, flexBasis: "100%", marginTop: -4 }}>

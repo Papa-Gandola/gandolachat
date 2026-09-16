@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { authApi } from "../services/api";
 import { useTheme } from "../services/theme";
+import Icon from "../components/Icon";
 
 interface Props {
   onLogin: (token: string, user: any) => void;
@@ -73,7 +74,7 @@ export default function Auth({ onLogin }: Props) {
             <h1 style={{ ...styles.appName, ...mono }}>{isNeo ? <>Gandola<span style={{ color: "var(--accent)" }}>Chat</span></> : "GandolaChat"}</h1>
           </div>
           <div style={{ textAlign: "center", padding: "24px 0" }}>
-            <span style={{ fontSize: 48 }}>⏳</span>
+            <span style={{ color: "var(--accent)", display: "inline-flex" }}><Icon name="hourglass" size={48} strokeWidth={1.25} /></span>
             <h2 style={{ ...mono, color: isNeo ? "var(--accent)" : "var(--text-header)", fontSize: 20, margin: "16px 0 8px", letterSpacing: isNeo ? "0.05em" : undefined }}>
               {isNeo ? "// ЗАЯВКА_ОТПРАВЛЕНА" : "Заявка отправлена"}
             </h2>
@@ -156,7 +157,7 @@ export default function Auth({ onLogin }: Props) {
                 minLength={4}
               />
               <button type="button" style={styles.eyeBtn} onClick={() => setShowPassword(!showPassword)} title={showPassword ? "Скрыть" : "Показать"}>
-                {showPassword ? "🙈" : "👁"}
+                <Icon name={showPassword ? "eye-off" : "eye"} size={16} />
               </button>
             </div>
           </div>

@@ -8,6 +8,8 @@ import { useTheme } from "../services/theme";
 import DotaRankBadge from "./DotaRankBadge";
 import { frameClass, frameStyle } from "./cosmetics";
 import { useDotaPlaying } from "../services/presence";
+import Icon, { Gas } from "./Icon";
+import type { IconName } from "./icons";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 const BLOOD = "#ff6a5e";
@@ -219,7 +221,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
       <div style={{ ...s.header, ...(isNeo ? { borderBottomColor: "var(--accent)" } : {}) }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
           <span style={{ ...s.title, ...mono, color: "var(--accent)", letterSpacing: "0.1em" }}>
-            {isNeo ? "// ГАНДОЛИУМ" : "⛽ ГАНДОЛИУМ"}
+            {isNeo ? "// ГАНДОЛИУМ" : <><Gas size={16} style={{ marginRight: 6 }} />ГАНДОЛИУМ</>}
           </span>
           <span style={{ ...mono, color: "var(--text-muted)", fontSize: 12 }}>сезон · {seasonTitle}</span>
         </div>
@@ -231,7 +233,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
 
         {data && !data.linked && (
           <div style={{ ...s.panel(isNeo), textAlign: "center", padding: 32 }}>
-            <div style={{ fontSize: 40, marginBottom: 8 }}>⛽</div>
+            <div style={{ marginBottom: 8, color: "var(--accent)" }}><Icon name="fuel" size={44} strokeWidth={1.25} /></div>
             <h3 style={{ ...mono, color: accentText, margin: "0 0 8px", letterSpacing: "0.05em" }}>
               Steam ещё не привязан
             </h3>
@@ -258,7 +260,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
               </div>
               <div style={{ flex: 1, minWidth: 200 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
-                  <span style={{ ...mono, fontSize: 12, color: "var(--text-secondary)" }}>⛽ {data.gas} газа</span>
+                  <span style={{ ...mono, fontSize: 12, color: "var(--text-secondary)" }}><Gas /> {data.gas} газа</span>
                   <span style={{ ...mono, fontSize: 11, color: "var(--text-muted)" }}>
                     {data.level_progress}/{data.level_target} до уровня {(data.level || 0) + 1}
                   </span>
@@ -313,7 +315,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                   onChange={(e) => setIntroOff(e.target.checked)}
                   style={{ accentColor: "var(--accent)", width: 13, height: 13, cursor: "pointer" }}
                 />
-                🎬 отключить заставку
+                <Icon name="film" size={12} />отключить заставку
               </label>
             </div>
 
@@ -335,7 +337,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
               <div style={s.panel(isNeo)}>
                 {seasonError && (
                   <p style={{ ...mono, color: BLOOD, fontSize: 12, margin: "0 0 10px" }}>
-                    ⚠ Не удалось обновить таблицу — показываю что есть, тыкни вкладку ещё раз
+                    <Icon name="warning" size={12} style={{ marginRight: 4 }} />Не удалось обновить таблицу — показываю что есть, тыкни вкладку ещё раз
                   </p>
                 )}
                 {!seasonRows && !seasonError && (
@@ -370,8 +372,8 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                         </div>
                       )}
                       <span style={{ ...mono, flex: 1, fontWeight: 700, fontSize: 13.5, color: r.comp_color || "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {r.username}{r.comp_badge ? " ⛽" : ""}{r.user_id === currentUser.id ? " (ты)" : ""}
-                        {dotaPlaying.has(r.user_id) && <span title="Сейчас в Доте" style={{ marginLeft: 5, fontSize: 11 }}>🎮</span>}
+                        {r.username}{r.comp_badge && <Gas size={11} style={{ marginLeft: 4 }} />}{r.user_id === currentUser.id ? " (ты)" : ""}
+                        {dotaPlaying.has(r.user_id) && <span title="Сейчас в Доте" style={{ marginLeft: 5, color: "var(--accent)" }}><Icon name="pad" size={12} /></span>}
                         {r.comp_title && <span style={{ color: GOLD, fontWeight: 500, fontSize: 11, marginLeft: 6 }}>«{r.comp_title}»</span>}
                       </span>
                       <DotaRankBadge rankTier={r.rank_tier} leaderboardRank={r.leaderboard_rank} isNeo={isNeo} size="sm" />
@@ -381,7 +383,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                       )}
                       <span style={{ ...mono, fontSize: 11.5, color: "var(--text-muted)" }}>ур. {r.level}</span>
                       <span style={{ ...mono, fontWeight: 800, fontSize: 13.5, color: "var(--accent)", minWidth: 70, textAlign: "right" }}>
-                        {r.gas} ⛽
+                        {r.gas} <Gas />
                       </span>
                     </div>
                     {expandedUsers.has(r.user_id) && (
@@ -414,7 +416,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 {archiveError && (
                   <p style={{ ...mono, color: BLOOD, fontSize: 12, margin: 0 }}>
-                    ⚠ Не удалось загрузить архив — тыкни вкладку ещё раз
+                    <Icon name="warning" size={12} style={{ marginRight: 4 }} />Не удалось загрузить архив — тыкни вкладку ещё раз
                   </p>
                 )}
                 {!archive && !archiveError && (
@@ -454,7 +456,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                         )}
                         <span style={{ ...mono, fontSize: 11.5, color: "var(--text-muted)" }}>ур. {r.level}</span>
                         <span style={{ ...mono, fontWeight: 800, fontSize: 13, color: "var(--accent)", minWidth: 64, textAlign: "right" }}>
-                          {r.gas} ⛽
+                          {r.gas} <Gas />
                         </span>
                       </div>
                     ))}
@@ -480,7 +482,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
               <div style={s.panel(isNeo)}>
                 {!data.trophies?.length ? (
                   <p style={{ ...mono, color: "var(--text-muted)", fontSize: 13, margin: 0 }}>
-                    Пока пусто. Иди катай — газ сам себя не заработает ⛽
+                    Пока пусто. Иди катай — газ сам себя не заработает <Gas />
                   </p>
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -500,8 +502,8 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                         borderLeft: `3px solid ${hue}`,
                         boxShadow: secret ? "0 0 12px rgba(255,210,74,0.18)" : undefined,
                       }}>
-                        <span style={{ fontSize: 16 }}>
-                          {bad ? "💀" : secret ? "🔓" : t.cat === "team" ? "🤝" : "⛽"}
+                        <span style={{ fontSize: 16, display: "inline-flex", color: secret ? GOLD : "var(--accent)" }}>
+                          {bad ? "💀" : secret ? <Icon name="unlock" size={17} /> : t.cat === "team" ? "🤝" : <Icon name="fuel" size={17} />}
                         </span>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ ...mono, fontWeight: 700, fontSize: 13, color: bad ? BLOOD : secret ? GOLD : "var(--text-primary)" }}>
@@ -514,7 +516,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                           </div>
                         </div>
                         <span style={{ ...mono, fontWeight: 800, fontSize: 13, color: bad ? BLOOD : secret ? GOLD : "var(--accent)" }}>
-                          +{t.gas} ⛽
+                          +{t.gas} <Gas />
                         </span>
                       </div>
                       );
@@ -538,10 +540,10 @@ const BET_MARKETS: Array<{ key: string; name: string; sides: Array<[string, stri
   { key: "streak", name: "ВИНСТРИК", sides: [["win", "подряд"]] },
 ];
 
-function betOutcomeText(b: BetOut): { text: string; color: string } {
-  if (b.status === "won") return { text: `✅ +${b.payout - b.stake}⛽`, color: "#57f287" };
-  if (b.status === "lost") return { text: `❌ -${b.stake}⛽`, color: BLOOD };
-  if (b.status === "refunded") return { text: `↩ возврат ${b.stake}⛽`, color: "var(--text-muted)" };
+function betOutcomeText(b: BetOut): { text: React.ReactNode; color: string } {
+  if (b.status === "won") return { text: <>✅ +{b.payout - b.stake}<Gas size={11} /></>, color: "#57f287" };
+  if (b.status === "lost") return { text: <>❌ -{b.stake}<Gas size={11} /></>, color: BLOOD };
+  if (b.status === "refunded") return { text: <><Icon name="reply" size={11} style={{ marginRight: 3 }} />возврат {b.stake}<Gas size={11} /></>, color: "var(--text-muted)" };
   return { text: "…", color: "var(--text-muted)" };
 }
 
@@ -571,7 +573,7 @@ function BetsTab({ isNeo, refreshTick, currentUserId }: {
   }, [refreshTick]);
 
   if (loadErr) {
-    return <p style={{ ...mono, color: BLOOD, fontSize: 12 }}>⚠ Не удалось загрузить ставки — тыкни вкладку ещё раз</p>;
+    return <p style={{ ...mono, color: BLOOD, fontSize: 12 }}><Icon name="warning" size={12} style={{ marginRight: 4 }} />Не удалось загрузить ставки — тыкни вкладку ещё раз</p>;
   }
   if (!ov) {
     return <p style={{ ...mono, color: "var(--text-muted)", fontSize: 13 }}>Загружаю ставки…</p>;
@@ -635,7 +637,7 @@ function BetsTab({ isNeo, refreshTick, currentUserId }: {
           {betOutcomeText(b).text}
         </span>
       ) : (
-        <span style={{ ...mono, fontSize: 12, fontWeight: 800, color: "var(--accent)", whiteSpace: "nowrap" }}>{b.stake}⛽</span>
+        <span style={{ ...mono, fontSize: 12, fontWeight: 800, color: "var(--accent)", whiteSpace: "nowrap" }}>{b.stake}<Gas size={11} /></span>
       )}
     </div>
   );
@@ -645,7 +647,7 @@ function BetsTab({ isNeo, refreshTick, currentUserId }: {
       <div style={s.panel(isNeo)}>
         <div style={{ padding: "10px 12px", display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, borderBottom: "1px solid var(--border)" }}>
           <span style={{ ...mono, fontWeight: 800, fontSize: 12.5, letterSpacing: "0.08em", color: "var(--accent)" }}>// НОВАЯ СТАВКА</span>
-          <span style={{ ...mono, fontSize: 12, color: "var(--text-muted)" }}>твой газ: <b style={{ color: "var(--accent)" }}>{ov.my_gas} ⛽</b></span>
+          <span style={{ ...mono, fontSize: 12, color: "var(--text-muted)" }}>твой газ: <b style={{ color: "var(--accent)" }}>{ov.my_gas} <Gas size={11} /></b></span>
         </div>
         {!ov.linked ? (
           <p style={{ ...mono, fontSize: 12.5, color: "var(--text-muted)", padding: "12px" }}>
@@ -695,7 +697,7 @@ function BetsTab({ isNeo, refreshTick, currentUserId }: {
                     onChange={(e) => setStake(e.target.value)}
                     style={{ ...mono, width: 80, padding: "6px 8px", background: "var(--bg-tertiary)", color: "var(--text-primary)", border: "1px solid var(--border)", borderRadius: isNeo ? 0 : 6, fontSize: 13 }}
                   />
-                  <span style={{ ...mono, fontSize: 11, color: "var(--text-muted)" }}>от {ov.stake_min} до {cap}⛽ · выплата ×{mult}</span>
+                  <span style={{ ...mono, fontSize: 11, color: "var(--text-muted)" }}>от {ov.stake_min} до {cap}<Gas size={10} /> · выплата ×{mult}</span>
                   <button
                     onClick={place}
                     disabled={busy}
@@ -726,7 +728,7 @@ function BetsTab({ isNeo, refreshTick, currentUserId }: {
           // ОТКРЫТЫЕ СТАВКИ · {ov.open.length}
         </div>
         {!ov.open.length ? (
-          <p style={{ ...mono, fontSize: 12.5, color: "var(--text-muted)", padding: 12, margin: 0 }}>Пока тихо — стол ждёт смелых ⛽</p>
+          <p style={{ ...mono, fontSize: 12.5, color: "var(--text-muted)", padding: 12, margin: 0 }}>Пока тихо — стол ждёт смелых <Gas size={12} /></p>
         ) : ov.open.map((b) => betLine(b, false))}
       </div>
 
@@ -780,12 +782,12 @@ function CosmeticsTab({ isNeo, cos, onSaved }: {
 
   // trophy: разблокировка не уровнем, а местом в финале сезона — строка
   // видна всегда, замки́ на самих кнопках
-  function Row({ need, name, desc, children, trophy }: { need: number; name: string; desc: string; children?: React.ReactNode; trophy?: boolean }) {
+  function Row({ need, name, desc, children, trophy }: { need: number; name: React.ReactNode; desc: string; children?: React.ReactNode; trophy?: boolean }) {
     const locked = !trophy && lvl < need;
     return (
       <div style={{ display: "flex", gap: 14, padding: "13px 14px", borderBottom: "1px solid var(--border)", alignItems: "flex-start", opacity: locked ? 0.75 : 1 }}>
         <span style={{ ...mono, fontSize: 11, fontWeight: 800, minWidth: 44, color: locked ? "var(--text-muted)" : "var(--accent)", paddingTop: 3 }}>
-          {trophy ? "🏆" : locked ? `🔒 ${need}` : `ур.${need}`}
+          {trophy ? "🏆" : locked ? <><Icon name="lock" size={11} style={{ marginRight: 3 }} />{need}</> : `ур.${need}`}
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ ...mono, fontWeight: 700, fontSize: 13, color: "var(--text-primary)" }}>{name}</div>
@@ -807,7 +809,7 @@ function CosmeticsTab({ isNeo, cos, onSaved }: {
         </span>
       </div>
 
-      <Row need={U.badge ?? 2} name="Значок ⛽ у ника" desc="Виден в чате, списке участников и профиле">
+      <Row need={U.badge ?? 2} name={<>Значок <Gas size={12} /> у ника</>} desc="Виден в чате, списке участников и профиле">
         <div style={{ display: "flex", gap: 6 }}>
           <button style={chip(cos.badge, false)} onClick={() => save({ badge: !cos.badge })} disabled={busy}>
             {cos.badge ? (isNeo ? "[ВКЛ]" : "Вкл") : (isNeo ? "[ВЫКЛ]" : "Выкл")}
@@ -863,7 +865,7 @@ function CosmeticsTab({ isNeo, cos, onSaved }: {
             disabled={busy || lvl < (U.frame_animated ?? 12)}
             title={lvl < (U.frame_animated ?? 12) ? `Откроется на уровне ${U.frame_animated ?? 12}` : ""}
           >
-            переливающаяся{lvl < (U.frame_animated ?? 12) ? ` 🔒${U.frame_animated ?? 12}` : ""}
+            переливающаяся{lvl < (U.frame_animated ?? 12) ? <> <Icon name="lock" size={10} />{U.frame_animated ?? 12}</> : ""}
           </button>
         </div>
       </Row>
@@ -888,7 +890,7 @@ function CosmeticsTab({ isNeo, cos, onSaved }: {
                 onClick={() => has && save({ frame: f })}
                 title={has ? "" : `За ${place}-е место в финале любого сезона`}
               >
-                {label}{has ? "" : " 🔒"}
+                {label}{!has && <Icon name="lock" size={10} style={{ marginLeft: 4 }} />}
               </button>
             );
           })}
@@ -957,14 +959,14 @@ function PrizePanel({ isNeo, isAdmin, refreshTick }: { isNeo: boolean; isAdmin: 
   // Обычному человеку нечего показывать, пока приз не разыгран и прошлых нет
   if (!isAdmin && !t.drawn && !t.last) return null;
 
-  const btn = (label: string, onClick: () => void, primary?: boolean): React.ReactNode => (
+  const btn = (label: string, onClick: () => void, primary?: boolean, icon?: IconName): React.ReactNode => (
     <button disabled={busy} onClick={onClick} style={{
       ...mono, padding: "6px 12px", fontSize: 12, fontWeight: 700, cursor: busy ? "wait" : "pointer",
       borderRadius: isNeo ? 0 : 6,
       background: primary ? GOLD : "transparent",
       color: primary ? "#1a1400" : GOLD,
       border: `1px solid ${primary ? GOLD : "rgba(255,210,74,0.55)"}`,
-    }}>{isNeo ? `[${label.toUpperCase()}]` : label}</button>
+    }}>{icon && <Icon name={icon} size={13} style={{ marginRight: 5 }} />}{isNeo ? `[${label.toUpperCase()}]` : label}</button>
   );
 
   return (
@@ -993,7 +995,7 @@ function PrizePanel({ isNeo, isAdmin, refreshTick }: { isNeo: boolean; isAdmin: 
               <span key={i} style={{ ...mono, fontSize: 12.5, color: "var(--text-secondary)" }}>💡 {h}</span>
             ))}
             {t.next_hint_day != null && (
-              <span style={{ ...mono, fontSize: 11.5, color: "var(--text-muted)" }}>🔒 следующая подсказка — {t.next_hint_day}-го</span>
+              <span style={{ ...mono, fontSize: 11.5, color: "var(--text-muted)" }}><Icon name="lock" size={11} style={{ marginRight: 4 }} />следующая подсказка — {t.next_hint_day}-го</span>
             )}
             {t.hints_total === 0 && (
               <span style={{ ...mono, fontSize: 11.5, color: "var(--text-muted)" }}>без подсказок — чистая интрига</span>
@@ -1015,7 +1017,7 @@ function PrizePanel({ isNeo, isAdmin, refreshTick }: { isNeo: boolean; isAdmin: 
 
       {isAdmin && (
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {!t.drawn && btn("🎲 Разыграть", draw, true)}
+          {!t.drawn && btn("Разыграть", draw, true, "dice")}
           {btn("Пул призов", () => setPoolOpen(true))}
         </div>
       )}
@@ -1178,7 +1180,7 @@ function TrophyChip({ t, isNeo }: { t: CompendiumTrophy; isNeo: boolean }) {
       boxShadow: secret ? "0 0 8px rgba(255,210,74,0.25)" : undefined,
       borderRadius: isNeo ? 0 : 999, whiteSpace: "nowrap",
     }}>
-      {bad ? "💀 " : secret ? "🔓 " : ""}{t.name}
+      {bad ? "💀 " : secret ? <Icon name="unlock" size={11} style={{ marginRight: 4 }} /> : ""}{t.name}
       {open && t.desc && (
         <span style={{ display: "block", fontWeight: 500, fontSize: 10.5, opacity: 0.85, marginTop: 2, maxWidth: 240, whiteSpace: "normal" }}>
           {t.desc}
@@ -1255,7 +1257,8 @@ function QuestGroup({ isNeo, title, meta, quests, pool, blood, accent }: {
               )}
             </div>
             <span style={{ ...mono, fontWeight: 800, fontSize: 12.5, color: blood ? BLOOD : "var(--accent)", whiteSpace: "nowrap" }}>
-              {blood ? "+" : ""}{q.gas} ⛽
+              {blood ? "+" : ""}{q.gas} <Gas />
+
             </span>
           </div>
         );

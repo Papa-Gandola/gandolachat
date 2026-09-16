@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ChatOut, ChatStats, UserOut, chatApi } from "../services/api";
 import { useTheme } from "../services/theme";
+import Icon, { Gas } from "./Icon";
+import type { IconName } from "./icons";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -182,11 +184,11 @@ export default function GroupInfoPage({ chat, currentUser, onClose, onOpenSearch
 
         {/* Action buttons */}
         <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 20, marginBottom: 20 }}>
-          <ActionBtn isNeo={isNeo} icon={muted ? "🔕" : "🔔"} label="MUTE" active={muted} onClick={toggleMute} />
-          <ActionBtn isNeo={isNeo} icon="🔍" label="SEARCH" onClick={onOpenSearch} />
-          <ActionBtn isNeo={isNeo} icon="↗" label="ADD" onClick={onAddMember} disabled={!isAdmin || memberCount >= 7} />
+          <ActionBtn isNeo={isNeo} icon={muted ? "bell-off" : "bell"} label="MUTE" active={muted} onClick={toggleMute} />
+          <ActionBtn isNeo={isNeo} icon="search" label="SEARCH" onClick={onOpenSearch} />
+          <ActionBtn isNeo={isNeo} icon="user-plus" label="ADD" onClick={onAddMember} disabled={!isAdmin || memberCount >= 7} />
           {isAdmin && (
-            <ActionBtn isNeo={isNeo} icon="⚠" label="BAN" active={banMode} onClick={() => setBanMode((v) => !v)} />
+            <ActionBtn isNeo={isNeo} icon="ban" label="BAN" active={banMode} onClick={() => setBanMode((v) => !v)} />
           )}
         </div>
 
@@ -227,7 +229,7 @@ export default function GroupInfoPage({ chat, currentUser, onClose, onOpenSearch
         }}>
           <div style={{ minWidth: 0 }}>
             <div style={{ ...mono, fontSize: 13, fontWeight: 700, color: palette.text }}>
-              ⛽ Карточки компендиума в этом чате
+              <Gas style={{ marginRight: 5 }} />Карточки компендиума в этом чате
             </div>
             <div style={{ ...mono, fontSize: 11.5, color: palette.muted, marginTop: 2 }}>
               {chat.compendium_enabled
@@ -381,7 +383,7 @@ function StatCard({ value, label, isNeo }: { value: number; label: string; isNeo
 }
 
 function ActionBtn({ icon, label, onClick, active, disabled, isNeo }: {
-  icon: string; label: string; onClick: () => void; active?: boolean; disabled?: boolean; isNeo: boolean;
+  icon: IconName; label: string; onClick: () => void; active?: boolean; disabled?: boolean; isNeo: boolean;
 }) {
   return (
     <button
@@ -402,7 +404,7 @@ function ActionBtn({ icon, label, onClick, active, disabled, isNeo }: {
         opacity: disabled ? 0.4 : 1,
       }}
     >
-      <span style={{ fontSize: 20 }}>{icon}</span>
+      <Icon name={icon} size={22} />
       <span style={{ fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>{label}</span>
     </button>
   );

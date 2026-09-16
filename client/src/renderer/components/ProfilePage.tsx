@@ -3,6 +3,7 @@ import { UserOut, userApi, chatApi } from "../services/api";
 import { useTheme } from "../services/theme";
 import DotaRankBadge from "./DotaRankBadge";
 import { CompBadge, CompTitle, frameStyle, frameClass } from "./cosmetics";
+import Icon, { Gas } from "./Icon";
 import QRCode from "qrcode";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "https://2-26-117-77.sslip.io";
@@ -156,7 +157,7 @@ export default function ProfilePage({ user: initialUser, currentUser, onClose, o
           ) : (
             <div style={{ ...s.valueRow, ...neoValueRow }}>
               <span style={{ ...s.value, ...mono }}>{isNeo ? `@${user.username}` : user.username}</span>
-              {isOwn && <button style={{ ...s.editBtn, ...mono, ...(isNeo ? { color: "var(--accent)" } : {}) }} onClick={() => { setNameVal(user.username); setEditingName(true); }}>{isNeo ? "[edit]" : "✏️"}</button>}
+              {isOwn && <button style={{ ...s.editBtn, ...mono, ...(isNeo ? { color: "var(--accent)" } : {}) }} onClick={() => { setNameVal(user.username); setEditingName(true); }} title="Изменить">{isNeo ? "[edit]" : <Icon name="edit" size={14} />}</button>}
             </div>
           )}
           {error && <span style={{ ...s.error, ...mono }}>{error}</span>}
@@ -183,7 +184,7 @@ export default function ProfilePage({ user: initialUser, currentUser, onClose, o
               <span style={{ ...s.value, ...mono, fontStyle: user.status ? "normal" : "italic", color: user.status ? "var(--text-primary)" : "var(--text-muted)" }}>
                 {user.status || (isNeo ? "// не_задан" : "не задан")}
               </span>
-              {isOwn && <button style={{ ...s.editBtn, ...mono, ...(isNeo ? { color: "var(--accent)" } : {}) }} onClick={() => { setStatusVal(user.status || ""); setEditingStatus(true); }}>{isNeo ? "[edit]" : "✏️"}</button>}
+              {isOwn && <button style={{ ...s.editBtn, ...mono, ...(isNeo ? { color: "var(--accent)" } : {}) }} onClick={() => { setStatusVal(user.status || ""); setEditingStatus(true); }} title="Изменить">{isNeo ? "[edit]" : <Icon name="edit" size={14} />}</button>}
             </div>
           )}
         </div>
@@ -208,7 +209,7 @@ export default function ProfilePage({ user: initialUser, currentUser, onClose, o
               <span style={{ ...s.value, ...mono, whiteSpace: "pre-wrap" as const, fontStyle: user.about ? "normal" : "italic", color: user.about ? "var(--text-primary)" : "var(--text-muted)" }}>
                 {user.about || (isNeo ? "// ничего_не_заполнено" : "ничего не заполнено")}
               </span>
-              {isOwn && <button style={{ ...s.editBtn, ...mono, ...(isNeo ? { color: "var(--accent)" } : {}) }} onClick={() => { setAboutVal(user.about || ""); setEditingAbout(true); }}>{isNeo ? "[edit]" : "✏️"}</button>}
+              {isOwn && <button style={{ ...s.editBtn, ...mono, ...(isNeo ? { color: "var(--accent)" } : {}) }} onClick={() => { setAboutVal(user.about || ""); setEditingAbout(true); }} title="Изменить">{isNeo ? "[edit]" : <Icon name="edit" size={14} />}</button>}
             </div>
           )}
         </div>
@@ -431,13 +432,13 @@ function DotaSection({ user, isOwn, isNeo, onUser }: {
                 }}
                 style={{ accentColor: "var(--accent)", width: 13, height: 13, cursor: "pointer" }}
               />
-              🎮 показывать чату, что я сейчас в Доте
+              <Icon name="pad" size={13} style={{ marginRight: 5 }} />показывать чату, что я сейчас в Доте
             </label>
           )}
           {isOwn && (
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button style={btn} onClick={refresh} disabled={busy}>
-                {busy ? "..." : isNeo ? "[ОБНОВИТЬ]" : "🔄 Обновить"}
+                {busy ? "..." : isNeo ? "[ОБНОВИТЬ]" : <><Icon name="flip" size={13} style={{ marginRight: 5 }} />Обновить</>}
               </button>
               {!confirmUnlink ? (
                 <button style={{ ...btn, color: "var(--text-muted)" }} onClick={() => setConfirmUnlink(true)} disabled={busy}>
@@ -459,7 +460,7 @@ function DotaSection({ user, isOwn, isNeo, onUser }: {
       ) : (
         <div style={{ background: "var(--bg-secondary)", borderRadius: isNeo ? 0 : 6, border: isNeo ? "1px solid var(--border)" : "none", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
           <span style={{ ...mono, color: "var(--text-muted)", fontSize: 12.5, lineHeight: 1.5 }}>
-            Привяжи Steam — в профиле появится звание, а катки начнут засчитываться в Гандолиум ⛽
+            Привяжи Steam — в профиле появится звание, а катки начнут засчитываться в Гандолиум <Gas size={12} />
           </span>
           <div style={{ display: "flex", gap: 6 }}>
             <input
@@ -555,7 +556,7 @@ function AdminCleanup({ isNeo }: { isNeo: boolean }) {
               ...mono,
             }}
           >
-            {isNeo ? "[ПОЧИСТИТЬ]" : "🗑 Почистить"}
+            {isNeo ? "[ПОЧИСТИТЬ]" : <><Icon name="trash" size={13} style={{ marginRight: 5 }} />Почистить</>}
           </button>
         ) : (
           <>

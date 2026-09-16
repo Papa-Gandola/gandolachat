@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useTheme } from "../services/theme";
+import { Emoji } from "./Emoji";
 
 const CATEGORIES: Record<string, string[]> = {
   "Частые": ["😀", "😂", "🤣", "😊", "😍", "🥰", "😎", "🤔", "😭", "😡", "🥺", "😱", "🤮", "💀", "🤡", "👍", "👎", "❤️", "🔥", "💯", "🗿", "🫠", "🫡", "💅", "🥴", "🤯"],
@@ -41,7 +42,7 @@ export default function EmojiPicker({ onSelect, onClose }: Props) {
         <div style={s.grid}>
           {CATEGORIES[category].map((emoji, i) => (
             <button key={i} style={{ ...s.emoji, ...(isNeo ? { borderRadius: 0 } : {}) }} onClick={() => onSelect(emoji)}>
-              {emoji}
+              <Emoji e={emoji} />
             </button>
           ))}
         </div>
