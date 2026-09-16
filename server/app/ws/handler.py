@@ -941,6 +941,10 @@ async def _finish_hand_and_maybe_next(table_id: int, g, db=None):
     from sqlalchemy import select as _select
     from app.models import PokerSeat as _PokerSeat, PokerTable as _PokerTable
 
+    # Стол закрыли/снесли, пока доигрывалась раздача (кнопка «Закрыть»,
+    # автозакрытие, «сыграть ещё») — эта игра уже никому не принадлежит
+    if game_store.get(table_id) is not g:
+        return
     own_session = db is None
     if own_session:
         db = AsyncSessionLocal()
@@ -1040,6 +1044,8 @@ async def _finish_tournament(table_id: int, g, db=None) -> None:
     чат + profile_updated, чтобы ⛽ у ника обновился сразу."""
     from app.database import AsyncSessionLocal
     from app.models import PokerTable as _PokerTable
+    from app.poker_game import game_store
+    from sqlalchemy.orm import selectinload
     own = db is None
     if own:
         db = AsyncSessionLocal()
@@ -1048,17 +1054,41 @@ async def _finish_tournament(table_id: int, g, db=None) -> None:
         g.finished = True
         g.reentry_open_until = None
         g.winner_user_id = alive[0].user_id if len(alive) == 1 else None
-        t = (await db.execute(select(_PokerTable).where(_PokerTable.id == table_id))).scalar_one_or_none()
-        if t:
-            t.status = "finished"
-            t.finished_at = datetime.now(timezone.utc)
-            t.gas_pot = g.gas_pot
+        # FOR UPDATE, как в api/poker: параллельное «Закрыть стол» либо
+        # дождётся нашего коммита и увидит finished (ничего не возвращая
+        # поверх котла), либо успело раньше — тогда стола уже нет и котёл
+        # платить нельзя: всем уже вернули gas_paid.
+        t = (await db.execute(
+            select(_PokerTable).options(selectinload(_PokerTable.seats))
+            .where(_PokerTable.id == table_id).with_for_update()
+        )).scalar_one_or_none()
+        if t is None or game_store.get(table_id) is not g:
+            await db.rollback()
+            await _broadcast_state(table_id, g)
+            return
+        t.status = "finished"
+        t.finished_at = datetime.now(timezone.utc)
+        t.gas_pot = g.gas_pot
+        from app.compendium.bets import _credit
+        from app.compendium.engine import current_season
+        if g.mode == "gas":
+            # Место, которого нет в игре (сел в лобби в самый момент старта):
+            # его энтри в котёл не попал — назад, а не в никуда
+            for s in t.seats:
+                if s.user_id not in g.players and s.gas_paid > 0:
+                    await _credit(db, s.user_id, current_season(), s.gas_paid)
+                    s.gas_paid = 0
         payout = g.mode == "gas" and g.gas_pot > 0 and g.winner_user_id is not None
         if payout:
-            from app.compendium.bets import _credit
-            from app.compendium.engine import current_season
             await _credit(db, g.winner_user_id, current_season(), g.gas_pot)
         await db.commit()
+        # Клиенты гейтят «Сыграть ещё» (и прячут «Закрыть») по status стола —
+        # без этого бродкаста у всех он оставался бы «playing»
+        try:
+            from app.api.poker import _broadcast_table
+            await _broadcast_table(db, t, "poker_table_updated")
+        except Exception as exc:
+            print(f"[poker] finished-table broadcast failed: {exc}")
         if payout:
             winner = (await db.execute(select(User).where(User.id == g.winner_user_id))).scalar_one_or_none()
             if winner:

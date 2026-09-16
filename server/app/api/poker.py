@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, or_, and_, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
@@ -58,6 +59,10 @@ def _apply_settings(table: PokerTable, s: TableSettingsIn) -> None:
             raise HTTPException(400, "Мест за столом — от 2 до 6")
         if len(table.seats) > s.max_seats:
             raise HTTPException(400, "Уже сидит больше людей, чем мест")
+        # Клиенты рисуют слоты 0..max_seats-1: игрок на убираемом месте
+        # пропал бы с экрана, а движок раздавал бы ему карты
+        if any(seat.seat_index >= s.max_seats for seat in table.seats):
+            raise HTTPException(400, "Кто-то сидит на убираемом месте — пусть сначала встанет")
         table.max_seats = s.max_seats
     if s.starting_stack is not None:
         if not STACK_MIN <= s.starting_stack <= STACK_MAX:
@@ -275,15 +280,27 @@ async def create_table(
     return await _table_to_out(db, table)
 
 
+def _locked_table(table_id: int):
+    """Стол под FOR UPDATE (места — отдельным selectin-запросом, на них
+    блокировка не нужна). ВСЕ мутирующие ручки читают стол так: join × start,
+    join × join, close × финал шли параллельно и ловили гонки — место после
+    снапшота игры (энтри терялся), два места одного юзера с двойным
+    списанием, lost update котла. Под замком второй запрос ждёт коммита
+    первого и перечитывает уже новое состояние. Замок держится до
+    commit/rollback — не делать под ним долгих await'ов вне БД."""
+    return (
+        select(PokerTable).options(selectinload(PokerTable.seats))
+        .where(PokerTable.id == table_id).with_for_update()
+    )
+
+
 @router.post("/{table_id}/join", response_model=PokerTableOut)
 async def join_table(
     table_id: int,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    result = await db.execute(
-        select(PokerTable).options(selectinload(PokerTable.seats)).where(PokerTable.id == table_id)
-    )
+    result = await db.execute(_locked_table(table_id))
     table = result.scalar_one_or_none()
     if not table:
         raise HTTPException(404, "Table not found")
@@ -312,7 +329,13 @@ async def join_table(
         gas_paid=paid,
     )
     db.add(seat)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # uq_poker_seat_user: второе место того же юзера (дабл-тап) —
+        # откатывается вместе со списанием энтри (одна транзакция)
+        await db.rollback()
+        raise HTTPException(400, "Already seated")
     if paid:
         await _announce_gas(db, current_user)
     # Reload. populate_existing is CRITICAL here: the table object is already
@@ -340,9 +363,7 @@ async def start_table(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    result = await db.execute(
-        select(PokerTable).options(selectinload(PokerTable.seats)).where(PokerTable.id == table_id)
-    )
+    result = await db.execute(_locked_table(table_id))
     table = result.scalar_one_or_none()
     if not table:
         raise HTTPException(404, "Table not found")
@@ -385,9 +406,11 @@ async def close_table(
     current_user: User = Depends(get_current_user),
 ):
     """Force-close a table — only the creator can do this."""
-    result = await db.execute(
-        select(PokerTable).options(selectinload(PokerTable.seats)).where(PokerTable.id == table_id)
-    )
+    # Под замком: параллельный финал турнира (_finish_tournament тоже
+    # берёт FOR UPDATE) либо успеет первым — и мы увидим finished, ничего не
+    # возвращая поверх выплаченного котла, — либо дождётся нас и увидит,
+    # что стола нет
+    result = await db.execute(_locked_table(table_id))
     table = result.scalar_one_or_none()
     if not table:
         raise HTTPException(404, "Table not found")
@@ -461,10 +484,9 @@ async def update_settings(
     current_user: User = Depends(get_current_user),
 ):
     """Создатель правит настройки, пока стол в лобби. Смена энтри/режима
-    при уже сидящих людях запрещена: они платили по старым правилам."""
-    result = await db.execute(
-        select(PokerTable).options(selectinload(PokerTable.seats)).where(PokerTable.id == table_id)
-    )
+    при уже сидящих людях запрещена: они садились по старым правилам —
+    переключи chips→gas при сидящих, и они играли бы за котёл бесплатно."""
+    result = await db.execute(_locked_table(table_id))
     table = result.scalar_one_or_none()
     if not table:
         raise HTTPException(404, "Table not found")
@@ -476,8 +498,8 @@ async def update_settings(
         (data.mode is not None and data.mode != table.mode)
         or (data.entry_gas is not None and data.entry_gas != table.entry_gas)
     )
-    if money_changed and any(s.gas_paid > 0 for s in table.seats):
-        raise HTTPException(400, "Кто-то уже заплатил энтри — режим и цену менять поздно, пусть встанут")
+    if money_changed and table.seats:
+        raise HTTPException(400, "За столом уже сидят — режим и цену меняют до посадки, пусть встанут")
     _apply_settings(table, data)
     await db.commit()
     result = await db.execute(
@@ -500,9 +522,7 @@ async def reentry(
     (окно по блайндам, лимит докупок)."""
     from app.poker_game import can_reenter, reenter
     from app.ws.handler import resume_after_reentry
-    result = await db.execute(
-        select(PokerTable).options(selectinload(PokerTable.seats)).where(PokerTable.id == table_id)
-    )
+    result = await db.execute(_locked_table(table_id))
     table = result.scalar_one_or_none()
     if not table:
         raise HTTPException(404, "Table not found")
@@ -550,9 +570,7 @@ async def restart_table(
     """«Сыграть ещё» после финала: новый стол с теми же настройками и теми
     же людьми, не выходя. В режиме «за газ» энтри списывается заново —
     кому не хватило, за новый стол не садится (сообщим в ответе)."""
-    result = await db.execute(
-        select(PokerTable).options(selectinload(PokerTable.seats)).where(PokerTable.id == table_id)
-    )
+    result = await db.execute(_locked_table(table_id))
     old = result.scalar_one_or_none()
     if not old:
         raise HTTPException(404, "Table not found")
@@ -674,9 +692,7 @@ async def close_stale_tables() -> None:
         try:
             async with AsyncSessionLocal() as db:
                 # «За газ» и не доиграно — вернуть занесённое, прежде чем сносить
-                t = (await db.execute(
-                    select(PokerTable).options(selectinload(PokerTable.seats)).where(PokerTable.id == table_id)
-                )).scalar_one_or_none()
+                t = (await db.execute(_locked_table(table_id))).scalar_one_or_none()
                 if t is None:
                     continue
                 refunded = await _refund_seats(db, t)
@@ -702,9 +718,7 @@ async def leave_table(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    result = await db.execute(
-        select(PokerTable).options(selectinload(PokerTable.seats)).where(PokerTable.id == table_id)
-    )
+    result = await db.execute(_locked_table(table_id))
     table = result.scalar_one_or_none()
     if not table:
         raise HTTPException(404, "Table not found")

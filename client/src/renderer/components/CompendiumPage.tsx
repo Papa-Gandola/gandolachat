@@ -1025,7 +1025,8 @@ function PrizePanel({ isNeo, isAdmin, refreshTick }: { isNeo: boolean; isAdmin: 
   );
 }
 
-const EMPTY_PRIZE: Required<Omit<SeasonPrize, "id">> = { title: "", hint1: "", hint2: "", hint3: "", weight: 1, active: true };
+type PrizeForm = { title: string; hint1: string; hint2: string; hint3: string; weight: number; active: boolean };
+const EMPTY_PRIZE: PrizeForm = { title: "", hint1: "", hint2: "", hint3: "", weight: 1, active: true };
 
 // Админский редактор пула: список с весами (и честными процентами шанса),
 // форма добавления/правки, тумблер «в розыгрыше», удаление. Уже разыгранные
@@ -1033,7 +1034,7 @@ const EMPTY_PRIZE: Required<Omit<SeasonPrize, "id">> = { title: "", hint1: "", h
 function PrizePoolModal({ isNeo, onClose }: { isNeo: boolean; onClose: () => void }) {
   const mono = { fontFamily: "var(--font-mono)" };
   const [list, setList] = useState<SeasonPrize[] | null>(null);
-  const [form, setForm] = useState<Required<Omit<SeasonPrize, "id">>>(EMPTY_PRIZE);
+  const [form, setForm] = useState<PrizeForm>(EMPTY_PRIZE);
   const [editId, setEditId] = useState<number | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);

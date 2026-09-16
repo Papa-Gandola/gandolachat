@@ -32,6 +32,7 @@ export default function Poker({ chat, currentUser }: Props) {
   const prevCommunityCountRef = useRef<number>(0);
   const prevLastActionRef = useRef<string | null>(null);
   const prevMyTurnRef = useRef<boolean>(false);
+  const joiningRef = useRef<Set<number>>(new Set());
 
   // Load tables for this chat
   useEffect(() => {
@@ -267,8 +268,14 @@ export default function Poker({ chat, currentUser }: Props) {
         seat_index: freeIdx,
         stack: forTable.starting_stack,
         is_active: true,
+        reentries: 0,
+        gas_paid: 0,
       };
     }
+    // Дабл-клик по «Сесть» — второй запрос сервер и так отбил бы (одно место
+    // на юзера), но незачем показывать ему ошибку «Already seated»
+    if (joiningRef.current.has(tableId)) return;
+    joiningRef.current.add(tableId);
     // Update list optimistically
     setTables((prev) => prev.map((t) => {
       if (t.id !== tableId || t.seats.find((s) => s.user_id === currentUser.id)) return t;
@@ -303,6 +310,8 @@ export default function Poker({ chat, currentUser }: Props) {
         ? { ...cur, seats: cur.seats.filter((s) => s.id !== ghostId) }
         : cur);
       setError(e.response?.data?.detail || "Не удалось сесть");
+    } finally {
+      joiningRef.current.delete(tableId);
     }
   }
 
@@ -540,7 +549,7 @@ export default function Poker({ chat, currentUser }: Props) {
               {` (${Math.max(0, liveGame.max_reentries - myPlayer.reentries)}/${liveGame.max_reentries})`}
             </button>
           )}
-          {t.status === "finished" && t.created_by === currentUser.id && (
+          {(t.status === "finished" || !!liveGame?.finished) && t.created_by === currentUser.id && (
             <button
               onClick={() => restartTable(t.id)}
               disabled={busy}
@@ -580,7 +589,7 @@ export default function Poker({ chat, currentUser }: Props) {
               {isNeo ? "[ВСТАТЬ]" : "Встать"}
             </button>
           )}
-          {t.created_by === currentUser.id && t.status !== "finished" && (
+          {t.created_by === currentUser.id && t.status !== "finished" && !liveGame?.finished && (
             <button
               onClick={() => closeTable(t.id)}
               disabled={busy}
@@ -609,7 +618,7 @@ export default function Poker({ chat, currentUser }: Props) {
             blind_increase_minutes: t.blind_increase_minutes, mode: t.mode, entry_gas: t.entry_gas || 50,
             max_reentries: t.max_reentries, reentry_until_level: t.reentry_until_level,
           }}
-          lockMoney={t.seats.some((sx) => sx.gas_paid > 0)}
+          lockMoney={t.seats.length > 0}
           onSubmit={(st) => saveSettings(t.id, st)}
           onCancel={() => setShowSettings(false)}
         />
@@ -1007,7 +1016,7 @@ function TableSettingsForm({ isNeo, busy, title, initial, lockMoney, onSubmit, o
   busy: boolean;
   title: string;
   initial: Required<PokerTableSettings>;
-  /** Кто-то уже заплатил энтри — режим и цену менять нельзя */
+  /** За столом уже сидят — режим и цену менять нельзя (сели по старым правилам) */
   lockMoney?: boolean;
   onSubmit: (s: PokerTableSettings) => void;
   onCancel: () => void;
@@ -1062,7 +1071,7 @@ function TableSettingsForm({ isNeo, busy, title, initial, lockMoney, onSubmit, o
               opacity: lockMoney ? 0.6 : 1,
             }}>{m === "chips" ? "Обычный" : "⛽ За газ"}</button>
           ))}
-          {lockMoney && <span style={{ ...label, marginBottom: 0 }}>кто-то уже заплатил энтри — режим заморожен</span>}
+          {lockMoney && <span style={{ ...label, marginBottom: 0 }}>за столом уже сидят — режим и цена заморожены, пусть встанут</span>}
         </div>
         {gas && (
           <div style={row}>

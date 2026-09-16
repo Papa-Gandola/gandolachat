@@ -189,19 +189,28 @@ def maybe_escalate_blinds(g: GameState) -> bool:
     """Returns True if blinds were just raised. Caller can broadcast."""
     if time.time() < g.next_blind_increase_at:
         return False
-    # 1.5x rounding up to nearest 50 chips for nicer numbers
-    new_sb = round_chip(int(g.small_blind * 1.5))
-    new_bb = round_chip(int(g.big_blind * 1.5))
-    g.small_blind = max(g.small_blind + 50, new_sb)
-    g.big_blind = max(g.big_blind + 100, new_bb)
+    # ×1,5 с округлением до «красивого» шага. Шаг — от порядка величины
+    # ТЕКУЩЕГО малого блайнда (10 → 5, 100 → 50, 1000 → 500): стол с
+    # настраиваемым SB=10 на жёстких +50/+100 улетал 10/20 → 60/120, а BB
+    # переставал быть 2×SB. Большой блайнд — всегда удвоенный малый.
+    step = blind_step(g.small_blind)
+    new_sb = max(g.small_blind + step, round_chip(int(g.small_blind * 1.5), step))
+    g.small_blind = new_sb
+    g.big_blind = new_sb * 2
     g.blind_level += 1
     g.next_blind_increase_at = time.time() + g.blind_increase_seconds
     return True
 
 
-def round_chip(x: int) -> int:
-    """Round to nearest 50 to keep blind numbers tidy."""
-    return ((x + 25) // 50) * 50
+def blind_step(sb: int) -> int:
+    """Шаг округления блайндов по порядку величины: 10..99 → 5, 100..999 →
+    50, 1000..9999 → 500."""
+    return max(5, (10 ** (len(str(max(1, sb))) - 1)) // 2)
+
+
+def round_chip(x: int, step: int = 50) -> int:
+    """Round to the nearest `step` to keep blind numbers tidy."""
+    return max(step, ((x + step // 2) // step) * step)
 
 
 def start_hand(g: GameState, button_seat: Optional[int] = None) -> HandState:

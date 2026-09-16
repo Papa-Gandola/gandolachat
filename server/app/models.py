@@ -359,6 +359,9 @@ class WebPushSubscription(Base):
 
 class PokerSeat(Base):
     __tablename__ = "poker_seats"
+    # Одно место на юзера за столом (миграция 0015): дабл-тап «Сесть» давал
+    # два места и двойное списание энтри; теперь второй INSERT — IntegrityError
+    __table_args__ = (UniqueConstraint("table_id", "user_id", name="uq_poker_seat_user"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     table_id: Mapped[int] = mapped_column(ForeignKey("poker_tables.id", ondelete="CASCADE"), index=True)

@@ -207,6 +207,10 @@ export function PokerScreen({ navigation, route }: Props) {
   }, [gameState?.reentry_open_until]);
 
   const joinTable = async (tableId: number) => {
+    // Дабл-тап «Сесть» слал два join — сервер теперь второй отбивает, но
+    // ошибку «Already seated» человеку показывать незачем
+    if (busy) return;
+    setBusy(true);
     setError(null);
     try {
       const res = await pokerApi.join(tableId);
@@ -214,6 +218,8 @@ export function PokerScreen({ navigation, route }: Props) {
       setActiveTable(res.data);
     } catch (e) {
       setError(apiErrorMessage(e));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -425,7 +431,7 @@ export function PokerScreen({ navigation, route }: Props) {
 
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, padding: 10 }}>
         {!mySeat && t.status === "lobby" && t.seats.length < t.max_seats ? (
-          <TableBtn theme={theme} label={theme.decorate ? "[сесть]" : "Сесть"} primary onPress={() => joinTable(t.id)} />
+          <TableBtn theme={theme} label={theme.decorate ? "[сесть]" : "Сесть"} primary onPress={() => joinTable(t.id)} disabled={busy} />
         ) : null}
         {t.status === "lobby" && t.created_by === user?.id ? (
           <TableBtn theme={theme} label={theme.decorate ? "[настройки]" : "⚙ Настройки"} onPress={() => setShowSettings(true)} disabled={busy} />
@@ -442,14 +448,14 @@ export function PokerScreen({ navigation, route }: Props) {
             disabled={busy}
           />
         ) : null}
-        {t.status === "finished" && t.created_by === user?.id ? (
+        {(t.status === "finished" || live?.finished) && t.created_by === user?.id ? (
           <TableBtn theme={theme} primary label={theme.decorate ? "[сыграть ещё]" : "🔁 Сыграть ещё"} onPress={() => restartTable(t.id)} disabled={busy} />
         ) : null}
         {t.status === "lobby" && t.created_by === user?.id && t.seats.length >= 2 ? (
           <TableBtn theme={theme} label={theme.decorate ? "[начать]" : "▶ Начать"} primary onPress={() => startGame(t.id)} disabled={busy} />
         ) : null}
         {mySeat ? <TableBtn theme={theme} label={theme.decorate ? "[встать]" : "Встать"} danger onPress={() => leaveTable(t.id)} /> : null}
-        {t.created_by === user?.id && t.status !== "finished" ? (
+        {t.created_by === user?.id && t.status !== "finished" && !live?.finished ? (
           <TableBtn theme={theme} label={theme.decorate ? "[закрыть]" : "✕ Закрыть"} danger solid onPress={() => closeTable(t.id)} disabled={busy} />
         ) : null}
       </View>
@@ -496,7 +502,7 @@ export function PokerScreen({ navigation, route }: Props) {
             blind_increase_minutes: t.blind_increase_minutes, mode: t.mode, entry_gas: t.entry_gas || 50,
             max_reentries: t.max_reentries, reentry_until_level: t.reentry_until_level,
           }}
-          lockMoney={t.seats.some((s) => s.gas_paid > 0)}
+          lockMoney={t.seats.length > 0}
           onSubmit={(st) => saveSettings(t.id, st)}
           onCancel={() => setShowSettings(false)}
         />
@@ -575,7 +581,7 @@ function SettingsSheet({ theme, busy, title, initial, lockMoney, onSubmit, onCan
           <View style={{ flexDirection: "row", gap: 8, alignItems: "center", flexWrap: "wrap", borderTopWidth: 1, borderTopColor: theme.colors.border, paddingTop: 10 }}>
             <Chip theme={theme} label="Обычный" active={st.mode === "chips"} disabled={!!lockMoney} onPress={() => set({ mode: "chips" })} />
             <Chip theme={theme} label="⛽ За газ" active={st.mode === "gas"} disabled={!!lockMoney} onPress={() => set({ mode: "gas" })} />
-            {lockMoney ? <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: theme.colors.inkMuted }}>кто-то уже заплатил — режим заморожен</Text> : null}
+            {lockMoney ? <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: theme.colors.inkMuted }}>за столом уже сидят — режим и цена заморожены</Text> : null}
           </View>
           {st.mode === "gas" ? (
             <View style={{ gap: 8 }}>
