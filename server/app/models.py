@@ -171,6 +171,43 @@ class Reminder(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+class SeasonPrize(Base):
+    """Пул призов чемпиону сезона (Аркана, Dota Plus, сет...). Правит админ
+    из клиента. Приложение только выбирает и объявляет — дарит хозяин руками."""
+    __tablename__ = "season_prizes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(120))
+    hint1: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    hint2: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    hint3: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    weight: Mapped[int] = mapped_column(Integer, default=1)   # вес выпадения
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class SeasonPrizeDraw(Base):
+    """Розыгрыш приза на сезон — один на сезон (уникально). Снапшот названия и
+    подсказок: пул потом могут править, а тизер и финал должны стоять.
+    До финала клиенты видят только открытые по неделям подсказки; revealed
+    ставит финал вместе с победителем."""
+    __tablename__ = "season_prize_draws"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    season: Mapped[str] = mapped_column(String(7), unique=True, index=True)
+    prize_id: Mapped[int | None] = mapped_column(ForeignKey("season_prizes.id", ondelete="SET NULL"), nullable=True)
+    title: Mapped[str] = mapped_column(String(120))
+    hint1: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    hint2: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    hint3: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    drawn_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    drawn_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    revealed: Mapped[bool] = mapped_column(Boolean, default=False)
+    winner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    winner_username: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+
 class SeasonResult(Base):
     """Итог сезона Гандолиума: снапшот финальной таблицы на момент закрытия
     месяца (ники меняются, привязки отвязываются — а история должна стоять).

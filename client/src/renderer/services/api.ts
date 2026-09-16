@@ -266,8 +266,39 @@ export interface BetsOverview {
   my_recent: BetOut[];
 }
 
+/** Тизер приза сезона: до финала — только открытые подсказки, после — название и чемпион. */
+export interface SeasonPrizeTeaser {
+  season: string;
+  drawn: boolean;
+  revealed: boolean;
+  hints: string[];
+  hints_total: number;
+  /** число месяца (МСК), когда откроется следующая подсказка; null — больше нечего ждать */
+  next_hint_day: number | null;
+  title: string | null;
+  winner: string | null;
+  last: { season: string; title: string; winner: string | null } | null;
+}
+export interface SeasonPrize {
+  id: number;
+  title: string;
+  hint1: string | null;
+  hint2: string | null;
+  hint3: string | null;
+  weight: number;
+  active: boolean;
+}
+export type SeasonPrizeIn = Partial<Omit<SeasonPrize, "id">>;
+
 export const compendiumApi = {
   me: () => api.get<CompendiumMe>("/api/compendium/me"),
+  prize: () => api.get<SeasonPrizeTeaser>("/api/compendium/prize"),
+  // --- админ: пул призов и розыгрыш ---
+  prizes: () => api.get<SeasonPrize[]>("/api/compendium/prizes"),
+  createPrize: (data: SeasonPrizeIn) => api.post<SeasonPrize>("/api/compendium/prizes", data),
+  updatePrize: (id: number, data: SeasonPrizeIn) => api.patch<SeasonPrize>(`/api/compendium/prizes/${id}`, data),
+  deletePrize: (id: number) => api.delete<{ ok: boolean }>(`/api/compendium/prizes/${id}`),
+  drawPrize: () => api.post<SeasonPrizeTeaser>("/api/compendium/prize/draw"),
   // ""/false = снять; надеть можно только открытое уровнем
   updateCosmetics: (data: { badge?: boolean; title?: string; color?: string; frame?: string }) =>
     api.patch<CompendiumCosmetics>("/api/compendium/cosmetics", data),

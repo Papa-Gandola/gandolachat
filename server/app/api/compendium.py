@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import User, Bet, DotaMatch, CompendiumProfile, QuestCompletion, SeasonResult
+from app.models import User, Bet, DotaMatch, CompendiumProfile, QuestCompletion, SeasonResult, SeasonPrize
 from app.compendium.finale import month_gen
 from app.auth import get_current_user
 from app.compendium.engine import (
@@ -615,3 +615,130 @@ async def user_trophies(
         "gas": gas, "level": level_for_gas(gas), "trophies": trophies,
         "rank_tier": user.dota_rank_tier, "leaderboard_rank": user.dota_leaderboard_rank,
     }
+
+
+# === Приз чемпиону сезона ===================================================
+# Пул призов ведёт админ (клиент), розыгрыш — тоже только админ, кнопкой.
+# Все остальные видят тизер: «🎁 ???» + подсказки по неделям; финал сезона
+# раскрывает приз вместе с чемпионом (см. compendium/prizes.py).
+from app.compendium import prizes as prizes_mod
+
+
+def _require_admin(user: User) -> None:
+    if not user.is_admin:
+        raise HTTPException(403, "Только админ")
+
+
+class PrizeIn(BaseModel):
+    title: str | None = None
+    hint1: str | None = None
+    hint2: str | None = None
+    hint3: str | None = None
+    weight: int | None = None
+    active: bool | None = None
+
+
+def _apply_prize(p: SeasonPrize, data: PrizeIn, creating: bool) -> None:
+    if data.title is not None or creating:
+        title = (data.title or "").strip()
+        if not 1 <= len(title) <= 120:
+            raise HTTPException(400, "Название приза — от 1 до 120 символов")
+        p.title = title
+    for field in ("hint1", "hint2", "hint3"):
+        val = getattr(data, field)
+        if val is not None:
+            val = val.strip()
+            if len(val) > 200:
+                raise HTTPException(400, "Подсказка — до 200 символов")
+            setattr(p, field, val or None)
+    if data.weight is not None:
+        if not 1 <= data.weight <= 100:
+            raise HTTPException(400, "Вес выпадения — от 1 до 100")
+        p.weight = data.weight
+    if data.active is not None:
+        p.active = data.active
+
+
+@router.get("/prize")
+async def prize_teaser(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Тизер приза текущего сезона (видят все) + прошлый раскрытый."""
+    return await prizes_mod.teaser(db)
+
+
+@router.get("/prizes")
+async def list_prizes(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_admin(current_user)
+    rows = (await db.execute(select(SeasonPrize).order_by(SeasonPrize.id))).scalars().all()
+    return [prizes_mod.prize_dict(p) for p in rows]
+
+
+@router.post("/prizes")
+async def create_prize(
+    data: PrizeIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_admin(current_user)
+    p = SeasonPrize(weight=1, active=True, created_by=current_user.id)
+    _apply_prize(p, data, creating=True)
+    db.add(p)
+    await db.commit()
+    await db.refresh(p)
+    return prizes_mod.prize_dict(p)
+
+
+@router.patch("/prizes/{prize_id}")
+async def update_prize(
+    prize_id: int,
+    data: PrizeIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_admin(current_user)
+    p = (await db.execute(select(SeasonPrize).where(SeasonPrize.id == prize_id))).scalar_one_or_none()
+    if not p:
+        raise HTTPException(404, "Приз не найден")
+    _apply_prize(p, data, creating=False)
+    await db.commit()
+    return prizes_mod.prize_dict(p)
+
+
+@router.delete("/prizes/{prize_id}")
+async def delete_prize(
+    prize_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_admin(current_user)
+    p = (await db.execute(select(SeasonPrize).where(SeasonPrize.id == prize_id))).scalar_one_or_none()
+    if not p:
+        raise HTTPException(404, "Приз не найден")
+    # Уже разыгранные сезоны хранят снапшот названия — удаление пула их не трогает
+    await db.delete(p)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/prize/draw")
+async def draw_prize(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Разыграть приз на текущий сезон — только админ, один раз на сезон."""
+    _require_admin(current_user)
+    try:
+        d = await prizes_mod.draw(db, current_user)
+        await db.commit()
+    except prizes_mod.DrawError as e:
+        raise HTTPException(400, str(e))
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(400, "Приз на этот сезон уже разыгран")
+    print(f"[prize] сезон {d.season}: разыгран «{d.title}» (админ {current_user.username})")
+    return await prizes_mod.teaser(db)

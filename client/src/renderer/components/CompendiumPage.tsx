@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   UserOut, compendiumApi, CompendiumMe, CompendiumCosmetics, CompendiumQuest, CompendiumSeasonRow, CompendiumTrophy,
-  SeasonArchive, BetsOverview, BetOut,
+  SeasonArchive, BetsOverview, BetOut, SeasonPrizeTeaser, SeasonPrize, SeasonPrizeIn,
 } from "../services/api";
 import { wsService } from "../services/ws";
 import { useTheme } from "../services/theme";
@@ -12,6 +12,12 @@ import { useDotaPlaying } from "../services/presence";
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 const BLOOD = "#ff6a5e";
 const GOLD = "#ffd24a";
+const MONTHS_RU = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
+// "2026-09" → "сентябрь 2026"
+function seasonName(season: string): string {
+  const [y, m] = season.split("-");
+  return `${MONTHS_RU[Number(m) - 1] ?? m} ${y}`;
+}
 // Тизер: по умолчанию крутится при КАЖДОМ заходе в Гандолиум (по
 // многочисленным просьбам трудящихся), по кругу — пока не нажали
 // «Пропустить». Чек-бокс «отключить заставку» (на оверлее и в строке
@@ -49,6 +55,9 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
   const [data, setData] = useState<CompendiumMe | null>(null);
   const [tab, setTab] = useState<"quests" | "season" | "bets" | "archive" | "trophies" | "cosmetics">("quests");
   const [betsTick, setBetsTick] = useState(0);
+  // Панель приза перечитывается по финальной карточке и в полночь МСК
+  // (подсказки открываются 8/15/22-го — на открытом экране иначе не появятся)
+  const [prizeTick, setPrizeTick] = useState(0);
   const dotaPlaying = useDotaPlaying();
   const [seasonRows, setSeasonRows] = useState<CompendiumSeasonRow[] | null>(null);
   const [seasonError, setSeasonError] = useState(false);
@@ -127,8 +136,9 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
       if (typeof m?.content === "string" && m.content.startsWith("/quest_card")) {
         load();
         loadSeason();
-        // Карточка финала = архив пополнился (раз в месяц — лишний фетч не жмёт)
-        if (m.content.includes("season_final")) loadArchive();
+        // Карточка финала = архив пополнился (раз в месяц — лишний фетч не жмёт),
+        // а приз сезона раскрыт
+        if (m.content.includes("season_final")) { loadArchive(); setPrizeTick((t) => t + 1); }
         // Ставки рассудились — открытая вкладка СТАВКИ обновится сама
         if (m.content.includes("bet_result")) setBetsTick((t) => t + 1);
         // Развёрнутые полки трофеев в таблице сезона могли устареть
@@ -147,6 +157,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
         lastDay = day;
         load();
         loadSeason();
+        setPrizeTick((t) => t + 1);
       }
     }, 30_000);
     return () => {
@@ -171,12 +182,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
   }
 
   const accentText = isNeo ? "var(--accent)" : "var(--text-header)";
-  const seasonTitle = useMemo(() => {
-    if (!data?.season) return "";
-    const [y, m] = data.season.split("-");
-    const months = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
-    return `${months[Number(m) - 1]} ${y}`;
-  }, [data?.season]);
+  const seasonTitle = useMemo(() => (data?.season ? seasonName(data.season) : ""), [data?.season]);
 
   return (
     <div style={s.root}>
@@ -267,6 +273,9 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                 <DotaRankBadge rankTier={data.rank_tier} leaderboardRank={data.leaderboard_rank} isNeo={isNeo} />
               </div>
             </div>
+
+            {/* --- приз сезона: секретное --- */}
+            <PrizePanel isNeo={isNeo} isAdmin={!!currentUser.is_admin} refreshTick={prizeTick} />
 
             {/* --- вкладки --- */}
             <div style={{ display: "flex", gap: 6, margin: "18px 0 14px", flexWrap: "wrap" }}>
@@ -900,6 +909,253 @@ function Stat({ mono, label, value }: { mono: React.CSSProperties; label: string
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
       <span style={{ ...mono, fontSize: 10, color: "var(--text-muted)", letterSpacing: "0.08em" }}>{label}</span>
       <span style={{ ...mono, fontSize: 18, fontWeight: 800, color: "var(--text-primary)", lineHeight: 1 }}>{value}</span>
+    </div>
+  );
+}
+
+// ---- Приз чемпиону сезона --------------------------------------------------
+// «Секретное» в шапке Гандолиума. До финала все видят «🎁 ???» и подсказки,
+// которые сервер открывает по неделям (8/15/22-го по МСК); финал сезона
+// раскрывает приз вместе с чемпионом — он показывается строкой «прошлый
+// сезон» (финал закрывает ПРОШЛЫЙ месяц, текущий к тому моменту уже новый).
+// Пул призов и кнопка розыгрыша — только админу. Дарит хозяин руками,
+// приложение только выбирает и объявляет.
+function PrizePanel({ isNeo, isAdmin, refreshTick }: { isNeo: boolean; isAdmin: boolean; refreshTick: number }) {
+  const mono = { fontFamily: "var(--font-mono)" };
+  const [t, setT] = useState<SeasonPrizeTeaser | null>(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [poolOpen, setPoolOpen] = useState(false);
+
+  async function load() {
+    try {
+      const res = await compendiumApi.prize();
+      setT(res.data);
+      setErr("");
+    } catch (e: any) {
+      // 404 — сервер ещё не обновлён: панель просто не показываем
+      if (e?.response?.status !== 404) setErr("Приз сезона не загрузился");
+    }
+  }
+  useEffect(() => { load(); }, [refreshTick]);
+
+  async function draw() {
+    if (!window.confirm("Разыграть приз на этот сезон? Выбор случайный из пула, отменить или перекинуть нельзя.")) return;
+    setBusy(true);
+    try {
+      const res = await compendiumApi.drawPrize();
+      setT(res.data);
+      setErr("");
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || "Розыгрыш не удался");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!t) return err ? <p style={{ ...mono, color: BLOOD, fontSize: 12, margin: "12px 0 0" }}>{err}</p> : null;
+  // Обычному человеку нечего показывать, пока приз не разыгран и прошлых нет
+  if (!isAdmin && !t.drawn && !t.last) return null;
+
+  const btn = (label: string, onClick: () => void, primary?: boolean): React.ReactNode => (
+    <button disabled={busy} onClick={onClick} style={{
+      ...mono, padding: "6px 12px", fontSize: 12, fontWeight: 700, cursor: busy ? "wait" : "pointer",
+      borderRadius: isNeo ? 0 : 6,
+      background: primary ? GOLD : "transparent",
+      color: primary ? "#1a1400" : GOLD,
+      border: `1px solid ${primary ? GOLD : "rgba(255,210,74,0.55)"}`,
+    }}>{isNeo ? `[${label.toUpperCase()}]` : label}</button>
+  );
+
+  return (
+    <div style={{
+      ...s.panel(isNeo), marginTop: 12, padding: "12px 16px",
+      border: "1px solid rgba(255,210,74,0.45)", borderLeft: `3px solid ${GOLD}`,
+      background: "linear-gradient(90deg, rgba(255,210,74,0.10), rgba(255,210,74,0.02) 55%, var(--bg-secondary))",
+      display: "flex", gap: 14, alignItems: "flex-start", flexWrap: "wrap",
+    }}>
+      <div style={{ flex: 1, minWidth: 240, display: "flex", flexDirection: "column", gap: 6 }}>
+        <span style={{ ...mono, fontSize: 11, color: GOLD, letterSpacing: "0.08em", fontWeight: 700 }}>🎁 ПРИЗ ЧЕМПИОНУ СЕЗОНА</span>
+
+        {t.revealed ? (
+          <span style={{ ...mono, fontSize: 15, fontWeight: 800, color: "var(--text-primary)" }}>
+            «{t.title}» — забирает <span style={{ color: GOLD }}>{t.winner ?? "—"}</span>
+          </span>
+        ) : t.drawn ? (
+          <>
+            <span style={{ ...mono, fontSize: 24, fontWeight: 800, color: GOLD, lineHeight: 1, textShadow: "0 0 12px rgba(255,210,74,0.35)" }}>
+              ???
+              <span style={{ fontSize: 11, fontWeight: 500, color: "var(--text-muted)", marginLeft: 10, textShadow: "none" }}>
+                узнаем 1-го числа вместе с чемпионом
+              </span>
+            </span>
+            {t.hints.map((h, i) => (
+              <span key={i} style={{ ...mono, fontSize: 12.5, color: "var(--text-secondary)" }}>💡 {h}</span>
+            ))}
+            {t.next_hint_day != null && (
+              <span style={{ ...mono, fontSize: 11.5, color: "var(--text-muted)" }}>🔒 следующая подсказка — {t.next_hint_day}-го</span>
+            )}
+            {t.hints_total === 0 && (
+              <span style={{ ...mono, fontSize: 11.5, color: "var(--text-muted)" }}>без подсказок — чистая интрига</span>
+            )}
+          </>
+        ) : (
+          <span style={{ ...mono, fontSize: 12.5, color: "var(--text-muted)" }}>
+            в этом сезоне ещё не разыгран{isAdmin ? " — жми «Разыграть», пока люди не начали копить" : ""}
+          </span>
+        )}
+
+        {t.last && (
+          <span style={{ ...mono, fontSize: 12, color: t.drawn ? "var(--text-muted)" : "var(--text-secondary)", marginTop: t.drawn ? 2 : 0 }}>
+            🏆 {seasonName(t.last.season)}: «{t.last.title}» — {t.last.winner ? <span style={{ color: GOLD, fontWeight: 700 }}>{t.last.winner}</span> : "чемпиона не было"}
+          </span>
+        )}
+        {err && <span style={{ ...mono, fontSize: 12, color: BLOOD }}>{err}</span>}
+      </div>
+
+      {isAdmin && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {!t.drawn && btn("🎲 Разыграть", draw, true)}
+          {btn("Пул призов", () => setPoolOpen(true))}
+        </div>
+      )}
+
+      {poolOpen && <PrizePoolModal isNeo={isNeo} onClose={() => setPoolOpen(false)} />}
+    </div>
+  );
+}
+
+const EMPTY_PRIZE: Required<Omit<SeasonPrize, "id">> = { title: "", hint1: "", hint2: "", hint3: "", weight: 1, active: true };
+
+// Админский редактор пула: список с весами (и честными процентами шанса),
+// форма добавления/правки, тумблер «в розыгрыше», удаление. Уже разыгранные
+// сезоны хранят снапшот названия — правки и удаления их не трогают.
+function PrizePoolModal({ isNeo, onClose }: { isNeo: boolean; onClose: () => void }) {
+  const mono = { fontFamily: "var(--font-mono)" };
+  const [list, setList] = useState<SeasonPrize[] | null>(null);
+  const [form, setForm] = useState<Required<Omit<SeasonPrize, "id">>>(EMPTY_PRIZE);
+  const [editId, setEditId] = useState<number | null>(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    try {
+      const res = await compendiumApi.prizes();
+      setList(res.data);
+      setErr("");
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || "Пул не загрузился");
+    }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function run(fn: () => Promise<unknown>, after?: () => void) {
+    setBusy(true);
+    try {
+      await fn();
+      await load();
+      after?.();
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || "Не получилось");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function startEdit(p: SeasonPrize) {
+    setEditId(p.id);
+    setForm({ title: p.title, hint1: p.hint1 ?? "", hint2: p.hint2 ?? "", hint3: p.hint3 ?? "", weight: p.weight, active: p.active });
+  }
+  function reset() { setEditId(null); setForm(EMPTY_PRIZE); }
+  function submit() {
+    const data: SeasonPrizeIn = { ...form, title: form.title.trim() };
+    if (!data.title) { setErr("Название приза пустое"); return; }
+    run(() => (editId != null ? compendiumApi.updatePrize(editId, data) : compendiumApi.createPrize(data)), reset);
+  }
+
+  const totalWeight = (list ?? []).filter((p) => p.active).reduce((acc, p) => acc + p.weight, 0);
+  const field: React.CSSProperties = {
+    ...mono, background: "var(--bg-input)", color: "var(--text-primary)", border: "1px solid var(--border)",
+    borderRadius: isNeo ? 0 : 4, padding: "6px 8px", fontSize: 13, width: "100%", boxSizing: "border-box",
+  };
+  const label: React.CSSProperties = { ...mono, fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 3 };
+  const small: React.CSSProperties = {
+    ...mono, padding: "3px 8px", fontSize: 11.5, cursor: "pointer", borderRadius: isNeo ? 0 : 4,
+    background: "transparent", color: "var(--text-secondary)", border: "1px solid var(--border)",
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--bg-modal)", border: "1px solid var(--border)", borderRadius: isNeo ? 0 : 10, padding: 20, width: 560, maxWidth: "94vw", maxHeight: "88vh", overflowY: "auto", boxShadow: "var(--shadow)", boxSizing: "border-box" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <span style={{ ...mono, fontWeight: 800, fontSize: 14, color: GOLD, letterSpacing: isNeo ? "0.08em" : undefined }}>🎁 ПУЛ ПРИЗОВ</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--text-muted)", fontSize: 18, cursor: "pointer" }}>✕</button>
+        </div>
+        <p style={{ ...mono, fontSize: 11.5, color: "var(--text-muted)", margin: "0 0 12px", lineHeight: 1.5 }}>
+          Розыгрыш берёт один приз из активных, шанс — по весу. Название и подсказки
+          снапшотятся в момент розыгрыша: править и удалять потом можно спокойно.
+          Подсказки открываются людям 8-го, 15-го и 22-го числа.
+        </p>
+
+        {list === null ? (
+          <p style={{ ...mono, fontSize: 12, color: "var(--text-muted)" }}>Загрузка…</p>
+        ) : list.length === 0 ? (
+          <p style={{ ...mono, fontSize: 12, color: "var(--text-muted)" }}>Пусто — добавь первый приз ниже.</p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
+            {list.map((p) => {
+              const hints = [p.hint1, p.hint2, p.hint3].filter(Boolean).length;
+              const pct = p.active && totalWeight > 0 ? Math.round((p.weight / totalWeight) * 100) : 0;
+              return (
+                <div key={p.id} style={{
+                  display: "flex", gap: 10, alignItems: "center", padding: "8px 10px",
+                  background: "var(--bg-secondary)", border: `1px solid ${editId === p.id ? GOLD : "var(--border)"}`,
+                  borderRadius: isNeo ? 0 : 6, opacity: p.active ? 1 : 0.55,
+                }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ ...mono, fontSize: 13, fontWeight: 700, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>
+                    <div style={{ ...mono, fontSize: 11, color: "var(--text-muted)" }}>
+                      вес {p.weight} · шанс {p.active ? `${pct}%` : "—"} · подсказок {hints}/3{p.active ? "" : " · выключен"}
+                    </div>
+                  </div>
+                  <button disabled={busy} onClick={() => startEdit(p)} style={small}>✎</button>
+                  <button disabled={busy} onClick={() => run(() => compendiumApi.updatePrize(p.id, { active: !p.active }))} style={small} title={p.active ? "Убрать из розыгрыша" : "Вернуть в розыгрыш"}>
+                    {p.active ? "вкл" : "выкл"}
+                  </button>
+                  <button disabled={busy} onClick={() => { if (window.confirm(`Удалить «${p.title}» из пула?`)) run(() => compendiumApi.deletePrize(p.id), () => { if (editId === p.id) reset(); }); }} style={{ ...small, color: BLOOD }}>✕</button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+          <div style={{ ...mono, fontSize: 12, fontWeight: 700, color: "var(--text-secondary)", marginBottom: 8 }}>
+            {editId != null ? "Правка приза" : "Новый приз"}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 90px", gap: 10, marginBottom: 8 }}>
+            <div><span style={label}>Название (его увидят в финале)</span><input value={form.title} maxLength={120} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Аркана на любимого героя" style={field} /></div>
+            <div><span style={label}>Вес 1..100</span><input type="number" min={1} max={100} value={form.weight} onChange={(e) => setForm({ ...form, weight: Math.max(1, Math.min(100, Number(e.target.value) || 1)) })} style={field} /></div>
+          </div>
+          {(["hint1", "hint2", "hint3"] as const).map((k, i) => (
+            <div key={k} style={{ marginBottom: 8 }}>
+              <span style={label}>Подсказка {i + 1} — откроется {[8, 15, 22][i]}-го</span>
+              <input value={form[k]} maxLength={200} onChange={(e) => setForm({ ...form, [k]: e.target.value })} placeholder={i === 0 ? "Оно переливается" : i === 1 ? "Стоит дороже Dota Plus" : "Нужен герой, за которого не стыдно"} style={field} />
+            </div>
+          ))}
+          {err && <p style={{ ...mono, color: BLOOD, fontSize: 12, margin: "0 0 8px" }}>{err}</p>}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            {editId != null && (
+              <button disabled={busy} onClick={reset} style={{ ...mono, background: "transparent", color: "var(--text-muted)", border: "1px solid var(--border)", padding: "8px 14px", borderRadius: isNeo ? 0 : 4, cursor: "pointer", fontSize: 13 }}>
+                {isNeo ? "[ОТМЕНА]" : "Отмена"}
+              </button>
+            )}
+            <button disabled={busy} onClick={submit} style={{ ...mono, background: GOLD, color: "#1a1400", border: "none", padding: "8px 16px", borderRadius: isNeo ? 0 : 4, cursor: "pointer", fontSize: 13, fontWeight: 700 }}>
+              {isNeo ? (editId != null ? "[СОХРАНИТЬ]" : "[ДОБАВИТЬ]") : editId != null ? "Сохранить" : "Добавить"}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

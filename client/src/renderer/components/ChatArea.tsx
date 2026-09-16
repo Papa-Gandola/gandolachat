@@ -2386,6 +2386,12 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
             </div>
           ))}
         </div>
+        {payload.prize?.title && (
+          <div style={{ ...mono, fontSize: 12.5, marginTop: 8, color: darkOnLime ? "#0a0a0a" : GOLD, fontWeight: 800 }}>
+            🎁 Приз сезона: {payload.prize.title}
+            <span style={{ fontWeight: 500, color: subColor }}> — достаётся {payload.prize.winner}</span>
+          </div>
+        )}
         <div style={{ ...mono, fontSize: 11.5, color: subColor, marginTop: 8 }}>
           Подиум получил рамки, полная таблица — в архиве Гандолиума
         </div>

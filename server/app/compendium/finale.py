@@ -137,6 +137,22 @@ async def _finalize_one(db, season: str) -> None:
     push_title = f"🏆 Итоги сезона — {month_gen(season)}"
     push_body = f"Чемпион: {rows[0]['username']} ({rows[0]['gas']}⛽)! Подиум в чате."
 
+    # Приз сезона (если админ разыгрывал): раскрываем и пишем чемпиона.
+    # Дарит хозяин руками — карточка лишь объявляет, что именно.
+    try:
+        from app.compendium import prizes as _prizes
+        d = await _prizes.reveal(db, season, rows[0]["user_id"], rows[0]["username"])
+        if d:
+            await db.commit()
+            payload["prize"] = {"title": d.title, "winner": rows[0]["username"]}
+            push_body = f"Чемпион: {rows[0]['username']} ({rows[0]['gas']}⛽) забирает приз: {d.title}!"
+    except Exception as e:
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        print(f"[finale] приз сезона {season} не раскрылся: {type(e).__name__}: {e}")
+
     chats_res = await db.execute(
         select(Chat.id).where(Chat.compendium_enabled.is_(True), Chat.is_group.is_(True))
     )

@@ -620,8 +620,22 @@ export const pinsApi = {
     getInstance().delete<PinOut[]>(`/api/chats/${chatId}/pin/${messageId}`),
 };
 
+/** Тизер приза сезона: до финала — только открытые подсказки, после — название и чемпион. */
+export interface SeasonPrizeTeaser {
+  season: string;
+  drawn: boolean;
+  revealed: boolean;
+  hints: string[];
+  hints_total: number;
+  next_hint_day: number | null;
+  title: string | null;
+  winner: string | null;
+  last: { season: string; title: string; winner: string | null } | null;
+}
+
 export const compendiumApi = {
   me: () => getInstance().get<CompendiumMe>("/api/compendium/me"),
+  prize: () => getInstance().get<SeasonPrizeTeaser>("/api/compendium/prize"),
   season: () =>
     getInstance().get<{ season: string; rows: CompendiumSeasonRow[]; me: number }>("/api/compendium/season"),
   seasons: () => getInstance().get<SeasonArchive[]>("/api/compendium/seasons"),

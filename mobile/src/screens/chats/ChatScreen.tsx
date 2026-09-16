@@ -1799,6 +1799,12 @@ function QuestCardMobile({ theme, mine, payload }: {
               </Text>
             </View>
           ))}
+          {payload.prize?.title ? (
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "800", color: GOLD, marginTop: 6 }}>
+              🎁 Приз сезона: {payload.prize.title}
+              <Text style={{ fontWeight: "500", color: theme.colors.inkDim }}> — достаётся {payload.prize.winner}</Text>
+            </Text>
+          ) : null}
           <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted, marginTop: 6 }}>
             Подиум получил рамки · чемпион — титул «Чемпион {payload.season_name || ""}» · архив — в Гандолиуме
           </Text>
