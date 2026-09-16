@@ -4,6 +4,7 @@ import { webrtcService } from "../services/webrtc";
 import { wsService } from "../services/ws";
 import { playCallRing, playCallEndSound } from "../services/sounds";
 import { useTheme } from "../services/theme";
+import Icon from "./Icon";
 
 interface Props {
   chat: ChatOut;
@@ -533,9 +534,9 @@ export default function VideoCall({ chat, currentUser, initiator, initiatorUserI
             {isNeo ? (
               <><span style={{ animation: "neo-blink 1.2s infinite" }}>●</span> LIVE · {callName} · [{remoteVideos.length + 1}]</>
             ) : (
-              <>📞 {callName} — {remoteVideos.length + 1}</>
+              <><Icon name="phone" size={13} style={{ marginRight: 5 }} />{callName} — {remoteVideos.length + 1}</>
             )}
-            {usingRelay && <span title="Запасной сервер — соединение может быть хуже" style={{ marginLeft: 6, color: isNeo ? "var(--warning)" : "#faa61a" }}>⚠</span>}
+            {usingRelay && <span title="Запасной сервер — соединение может быть хуже" style={{ marginLeft: 6, color: isNeo ? "var(--warning)" : "#faa61a", display: "inline-flex" }}><Icon name="warning" size={13} /></span>}
           </span>
           <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
             <button
@@ -543,23 +544,21 @@ export default function VideoCall({ chat, currentUser, initiator, initiatorUserI
               onClick={(e) => { e.stopPropagation(); toggleMute(); }}
               title={muted ? "Включить микрофон" : "Заглушить"}
             >
-              <MicIcon muted={muted} color={isNeo ? "var(--accent)" : "#fff"} />
+              <Icon name={muted ? "mic-off" : "mic"} size={16} strokeWidth={2} style={{ color: isNeo ? "var(--accent)" : "#fff" }} />
             </button>
             <button
               style={{ ...s.miniBtn, background: "transparent", border: "1px solid rgba(255,255,255,0.4)", ...(isNeo ? { borderRadius: 0, borderColor: "var(--accent)" } : {}) }}
               onClick={(e) => { e.stopPropagation(); setMinimized(false); }}
               title="Развернуть"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={isNeo ? "var(--accent)" : "white"} strokeWidth="2.5" strokeLinecap="round"><polyline points="4 10 10 4 10 10" /><polyline points="20 14 14 20 14 14" /></svg>
+              <Icon name="expand" size={14} strokeWidth={2.25} style={{ color: isNeo ? "var(--accent)" : "#fff" }} />
             </button>
             <button
               style={{ ...s.miniBtn, background: "#ed4245", ...(isNeo ? { borderRadius: 0 } : {}) }}
               onClick={(e) => { e.stopPropagation(); handleEnd(); }}
               title="Завершить"
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="white">
-                <path d="M12 9c-1.66 0-3 1.34-3 3v2H5c-1.1 0-2-.9-2-2v-1c0-3.87 3.13-7 7-7h4c3.87 0 7 3.13 7 7v1c0 1.1-.9 2-2 2h-4v-2c0-1.66-1.34-3-3-3z" transform="rotate(135 12 12)"/>
-              </svg>
+              <Icon name="end" size={17} strokeWidth={2} style={{ color: "#fff" }} />
             </button>
           </div>
           {/* Resize handle (bottom-right corner) */}
@@ -620,7 +619,7 @@ export default function VideoCall({ chat, currentUser, initiator, initiatorUserI
               userSelect: "none" as const,
             }}
           >
-            {isNeo ? "// ⚠ запасной_сервер · соединение_может_быть_хуже" : "⚠ Запасной сервер — соединение может быть хуже"}
+            {isNeo ? "// ⚠ запасной_сервер · соединение_может_быть_хуже" : <><Icon name="warning" size={13} style={{ marginRight: 5 }} />Запасной сервер — соединение может быть хуже</>}
           </div>
         )}
         <button
@@ -628,7 +627,7 @@ export default function VideoCall({ chat, currentUser, initiator, initiatorUserI
           onClick={() => setMinimized(true)}
           title="Свернуть"
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={isNeo ? "var(--accent)" : "white"} strokeWidth="2.5" strokeLinecap="round"><polyline points="4 14 10 20 16 14"/><line x1="10" y1="20" x2="10" y2="4"/></svg>
+          <Icon name="collapse" size={16} strokeWidth={2.25} style={{ color: isNeo ? "var(--accent)" : "#fff" }} />
         </button>
       </div>
 
@@ -736,7 +735,7 @@ export default function VideoCall({ chat, currentUser, initiator, initiatorUserI
               <RemoteScreenVideo stream={entry.stream} freeMode={!!freeMode} enlarged={enlarged === screenKey} deafened={deafened} />
               {isNeo && <NeoCorners />}
               <span style={{ ...s.videoLabel, ...mono, ...(isNeo ? { background: "rgba(10,10,10,0.85)", color: "var(--accent)", borderRadius: 0, border: "1px solid var(--accent)", letterSpacing: "0.05em" } : {}) }}>
-                📺 {isNeo ? `@${member?.username || "?"}_screen` : `${member?.username || "?"} (экран)`}
+                <Icon name="screen" size={12} style={{ marginRight: 4 }} />{isNeo ? `@${member?.username || "?"}_screen` : `${member?.username || "?"} (экран)`}
               </span>
               {freeMode && <div style={s.resizeCorner} onMouseDown={(e) => { e.stopPropagation(); startDrag(screenKey, e, "resize"); }} />}
             </div>
@@ -873,13 +872,7 @@ export default function VideoCall({ chat, currentUser, initiator, initiatorUserI
           onClick={toggleMute}
           title={muted ? "Включить микрофон" : "Выключить микрофон"}
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={isNeo && !muted ? "var(--accent)" : "white"} strokeWidth="2" strokeLinecap="round">
-            {muted ? (
-              <><rect x="9" y="1" width="6" height="13" rx="3" fill="white"/><line x1="1" y1="1" x2="23" y2="23"/><path d="M17 11a5 5 0 01-8.2 3.8"/><path d="M12 19v4M8 23h8"/></>
-            ) : (
-              <><rect x="9" y="1" width="6" height="13" rx="3" fill={isNeo ? "var(--accent)" : "white"}/><path d="M5 11a7 7 0 0014 0"/><path d="M12 19v4M8 23h8"/></>
-            )}
-          </svg>
+          <Icon name={muted ? "mic-off" : "mic"} size={20} strokeWidth={2} style={{ color: isNeo && !muted ? "var(--accent)" : "#fff" }} />
         </button>
 
         {/* Video */}
@@ -888,13 +881,7 @@ export default function VideoCall({ chat, currentUser, initiator, initiatorUserI
           onClick={toggleVideo}
           title={videoOff ? "Включить камеру" : "Выключить камеру"}
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={isNeo && !videoOff ? "var(--accent)" : "white"} strokeWidth="2" strokeLinecap="round">
-            {videoOff ? (
-              <><line x1="1" y1="1" x2="23" y2="23"/><path d="M21 7l-5 3.5L21 14V7z"/><rect x="2" y="5" width="14" height="14" rx="2" fill="white" opacity="0.3"/></>
-            ) : (
-              <><rect x="2" y="5" width="14" height="14" rx="2" fill={isNeo ? "var(--accent)" : "white"}/><path d="M23 7l-7 5 7 5V7z" fill={isNeo ? "var(--accent)" : "white"}/></>
-            )}
-          </svg>
+          <Icon name={videoOff ? "cam-off" : "cam"} size={20} strokeWidth={2} style={{ color: isNeo && !videoOff ? "var(--accent)" : "#fff" }} />
         </button>
 
         {/* Screen share */}
@@ -903,9 +890,7 @@ export default function VideoCall({ chat, currentUser, initiator, initiatorUserI
           onClick={toggleScreenShare}
           title="Демонстрация экрана"
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={isNeo ? (screenSharing ? "#0a0a0a" : "var(--accent)") : "white"} strokeWidth="2" strokeLinecap="round">
-            <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
-          </svg>
+          <Icon name="screen" size={20} strokeWidth={2} style={{ color: isNeo ? (screenSharing ? "#0a0a0a" : "var(--accent)") : "#fff" }} />
         </button>
 
         {/* Deafen */}
@@ -914,13 +899,7 @@ export default function VideoCall({ chat, currentUser, initiator, initiatorUserI
           onClick={toggleDeafen}
           title={deafened ? "Включить звук" : "Заглушить всех"}
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={isNeo && !deafened ? "var(--accent)" : "white"} strokeWidth="2" strokeLinecap="round">
-            {deafened ? (
-              <><path d="M3 14h2a2 2 0 012 2v2a2 2 0 01-2 2H3V14z"/><path d="M21 14h-2a2 2 0 00-2 2v2a2 2 0 002 2h2V14z"/><path d="M3 14V9a9 9 0 0118 0v5"/><line x1="1" y1="1" x2="23" y2="23"/></>
-            ) : (
-              <><path d="M3 14h2a2 2 0 012 2v2a2 2 0 01-2 2H3V14z" fill={isNeo ? "var(--accent)" : "white"}/><path d="M21 14h-2a2 2 0 00-2 2v2a2 2 0 002 2h2V14z" fill={isNeo ? "var(--accent)" : "white"}/><path d="M3 14V9a9 9 0 0118 0v5"/></>
-            )}
-          </svg>
+          <Icon name={deafened ? "headphones-off" : "headphones"} size={20} strokeWidth={2} style={{ color: isNeo && !deafened ? "var(--accent)" : "#fff" }} />
         </button>
 
         {/* Free mode (universe icon) */}
@@ -929,9 +908,7 @@ export default function VideoCall({ chat, currentUser, initiator, initiatorUserI
           onClick={() => { setFreeMode(!freeMode); setTilePositions(new Map()); }}
           title="Свободный режим"
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={isNeo ? (freeMode ? "#0a0a0a" : "var(--accent)") : "white"} strokeWidth="2" strokeLinecap="round">
-            <circle cx="12" cy="12" r="10"/><ellipse cx="12" cy="12" rx="10" ry="4"/><path d="M2 12h20"/>
-          </svg>
+          <Icon name="globe" size={20} strokeWidth={2} style={{ color: isNeo ? (freeMode ? "#0a0a0a" : "var(--accent)") : "#fff" }} />
         </button>
 
         {/* Settings */}
@@ -940,9 +917,7 @@ export default function VideoCall({ chat, currentUser, initiator, initiatorUserI
           onClick={() => setShowSettings(!showSettings)}
           title="Настройки"
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={isNeo ? (showSettings ? "#0a0a0a" : "var(--accent)") : "white"} strokeWidth="2" strokeLinecap="round">
-            <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
-          </svg>
+          <Icon name="gear" size={20} strokeWidth={2} style={{ color: isNeo ? (showSettings ? "#0a0a0a" : "var(--accent)") : "#fff" }} />
         </button>
 
         {/* Hangup */}
@@ -954,9 +929,7 @@ export default function VideoCall({ chat, currentUser, initiator, initiatorUserI
           {isNeo ? (
             <span>[END]</span>
           ) : (
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="white">
-              <path d="M12 9c-1.66 0-3 1.34-3 3v2H5c-1.1 0-2-.9-2-2v-1c0-3.87 3.13-7 7-7h4c3.87 0 7 3.13 7 7v1c0 1.1-.9 2-2 2h-4v-2c0-1.66-1.34-3-3-3z" transform="rotate(135 12 12)"/>
-            </svg>
+            <Icon name="end" size={24} strokeWidth={2} style={{ color: "#fff" }} />
           )}
         </button>
       </div>
@@ -1053,8 +1026,8 @@ function RemoteVideo({ entry, chat, enlarged, deafened, peerMuted, peerVideoOff,
         title="В отдельное окно"
       >⧉</button>
       <span style={{ ...s.videoLabel, ...mono, ...(isNeo ? { background: "rgba(10,10,10,0.85)", color: "var(--accent)", borderRadius: 0, border: "1px solid var(--accent)", letterSpacing: "0.05em" } : {}) }}>
-        {peerMuted ? "🔇 " : ""}
-        {peerScreenSharing ? "📺 " : ""}
+        {peerMuted && <Icon name="mic-off" size={12} style={{ marginRight: 4 }} />}
+        {peerScreenSharing && <Icon name="screen" size={12} style={{ marginRight: 4 }} />}
         {isNeo ? "@" : ""}{member?.username || "Участник"}
         {peerScreenSharing ? (isNeo ? "_screen" : " (экран)") : ""}
       </span>
@@ -1092,25 +1065,6 @@ function CallAvatar({ name, url, isNeo }: { name: string; url: string | null; is
     <div style={{ width: 80, height: 80, borderRadius: radius, border, background: bg, display: "flex", alignItems: "center", justifyContent: "center", color: fg, fontWeight: 700, fontSize: 32, margin: "65px auto", fontFamily: isNeo ? "var(--font-mono)" : undefined }}>
       {name.charAt(0).toUpperCase()}
     </div>
-  );
-}
-
-function MicIcon({ muted, color }: { muted: boolean; color: string }) {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      {/* Mic body with inner grill detail */}
-      <rect x="9" y="2" width="6" height="12" rx="3" fill={color} opacity="0.92"/>
-      <line x1="10.5" y1="5" x2="13.5" y2="5" stroke={muted ? color : "rgba(0,0,0,0.35)"} strokeWidth="0.8" opacity="0.55"/>
-      <line x1="10.5" y1="8" x2="13.5" y2="8" stroke={muted ? color : "rgba(0,0,0,0.35)"} strokeWidth="0.8" opacity="0.55"/>
-      <line x1="10.5" y1="11" x2="13.5" y2="11" stroke={muted ? color : "rgba(0,0,0,0.35)"} strokeWidth="0.8" opacity="0.55"/>
-      {/* Arc catcher */}
-      <path d="M5 11a7 7 0 0014 0"/>
-      {/* Stand */}
-      <line x1="12" y1="18" x2="12" y2="22"/>
-      <line x1="8" y1="22" x2="16" y2="22"/>
-      {/* Muted slash */}
-      {muted && <line x1="3" y1="3" x2="21" y2="21" stroke={color} strokeWidth="2.2"/>}
-    </svg>
   );
 }
 

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import Icon from "./Icon";
 
 // Инлайн-плеер голосовых (и любого аудио-вложения) прямо в пузыре.
 //
@@ -146,7 +147,7 @@ export function VoicePlayer({ src, name, voice, isNeo }: {
   if (error) {
     return (
       <a href={src} target="_blank" rel="noreferrer" style={{ color: "currentColor", opacity: 0.85, fontSize: 13 }}>
-        📎 {name || "аудио"} (не удалось воспроизвести — открыть)
+        <Icon name="clip" size={13} style={{ marginRight: 4 }} />{name || "аудио"} (не удалось воспроизвести — открыть)
       </a>
     );
   }
@@ -203,7 +204,7 @@ export function VoicePlayer({ src, name, voice, isNeo }: {
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 5 }}>
         {!voice && name && (
           <span style={{ fontSize: 11.5, opacity: 0.8, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            🎵 {name}
+            <Icon name="music" size={12} style={{ marginRight: 4 }} />{name}
           </span>
         )}
         <div
@@ -227,7 +228,7 @@ export function VoicePlayer({ src, name, voice, isNeo }: {
           />
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, fontFamily: "var(--font-mono)", opacity: 0.85 }}>
-          <span>{voice ? "🎤 " : ""}{fmt(time)} / {fmt(duration)}</span>
+          <span>{voice && <Icon name="mic" size={11} style={{ marginRight: 4 }} />}{fmt(time)} / {fmt(duration)}</span>
           <button
             onClick={cycleSpeed}
             title="Скорость"

@@ -4,6 +4,11 @@ import { ChatOut, UserOut, chatApi, userApi, authApi, getFileUrl } from "../serv
 import { wsService } from "../services/ws";
 import { filePreview, markerPreview } from "../services/markers";
 import { applyTheme, getTheme, Theme, useTheme, getNeoColors, saveNeoColors, resetNeoColors, DEFAULT_NEO_COLORS } from "../services/theme";
+import Icon from "./Icon";
+import { PreviewText } from "./Emoji";
+
+// Пункт меню: линейная иконка + подпись (стиль «Б» — без эмодзи-кнопок)
+const mi = (name: React.ComponentProps<typeof Icon>["name"]) => <Icon name={name} size={14} style={{ marginRight: 7 }} />;
 
 interface Props {
   chats: ChatOut[];
@@ -341,14 +346,18 @@ export default function Sidebar({
           <span style={{ ...s.chatName, ...(isNeo ? mono : {}) }}>{name}</span>
           {hasActiveCall ? (
             <span style={{ ...s.callIndicator, ...(isNeo ? mono : {}) }}>
-              {isNeo ? "● LIVE" : "📞 Звонок..."}
+              {isNeo ? "● LIVE" : <><Icon name="phone" size={12} style={{ marginRight: 4 }} />Звонок...</>}
             </span>
           ) : chat.last_message ? (
             <span style={{ ...s.chatPreview, ...(isNeo ? mono : {}) }}>
               {chat.last_message.content
-                ? (markerPreview(chat.last_message.content)
-                  ?? <FormattedText text={chat.last_message.content} noBold staticSpoiler />)
-                : filePreview(chat.last_message.file_name)}
+                ? (() => {
+                    const mp = markerPreview(chat.last_message.content);
+                    return mp != null
+                      ? <PreviewText text={mp} />
+                      : <FormattedText text={chat.last_message.content} noBold staticSpoiler />;
+                  })()
+                : <PreviewText text={filePreview(chat.last_message.file_name)} />}
             </span>
           ) : null}
         </div>
@@ -377,9 +386,9 @@ export default function Sidebar({
           <button
             title="Заметки"
             onClick={onOpenNotes}
-            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, padding: 2, opacity: 0.85 }}
+            style={{ background: "none", border: "none", cursor: "pointer", padding: 2, opacity: 0.85, color: "var(--text-secondary)", display: "inline-flex" }}
           >
-            📝
+            <Icon name="note" size={17} />
           </button>
         )}
       </div>
@@ -387,7 +396,7 @@ export default function Sidebar({
       {/* Admin: pending users */}
       {isAdmin && pendingUsers.length > 0 && (
         <div style={s.pendingBtn} onClick={() => setShowPending(!showPending)}>
-          📋 Заявки ({pendingUsers.length})
+          {mi("users")}Заявки ({pendingUsers.length})
         </div>
       )}
       {showPending && pendingUsers.length > 0 && (
@@ -537,7 +546,7 @@ export default function Sidebar({
           }}
           onClick={() => (window as any).electron?.openExternal("https://github.com/Papa-Gandola/gandolachat/releases/latest")}
         >
-          {isNeo ? "● новая_версия → скачать" : "Доступна новая версия — скачать ↗"}
+          {isNeo ? "● новая_версия → скачать" : <>Доступна новая версия — скачать <Icon name="external" size={13} /></>}
         </div>
       )}
       {showUpdateBanner && updateStatus === "not-available" && (
@@ -589,7 +598,7 @@ export default function Sidebar({
               } catch (err: any) {
                 alert(err.response?.data?.detail || "Ошибка удаления");
               }
-            }}>🗑 Удалить чат</button>
+            }}>{mi("trash")}Удалить чат</button>
           </div>
         </>
       )}
@@ -616,10 +625,10 @@ export default function Sidebar({
               <div style={s.settingsMenuBackdrop} onClick={() => setShowSettingsMenu(false)} />
               <div style={s.settingsMenu}>
                 <button style={s.settingsMenuItem} onClick={() => { setShowSettingsMenu(false); onOpenProfile(); }}>
-                  ✏️ Профиль
+                  {mi("edit")}Профиль
                 </button>
                 <div style={{ ...s.settingsMenuItem, display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "default" }}>
-                  <span>🎨 Тема</span>
+                  <span>{mi("palette")}Тема</span>
                   <div style={{ display: "flex", gap: 4 }}>
                     <button style={{ ...s.themeBtn, background: currentTheme === "discord" ? "var(--accent)" : "var(--bg-hover)", color: currentTheme === "discord" ? "var(--accent-text)" : "var(--text-muted)" }}
                       onClick={() => { applyTheme("discord"); setCurrentTheme("discord"); }}>Discord</button>
@@ -630,7 +639,7 @@ export default function Sidebar({
                 {currentTheme === "neo" && (
                   <>
                     <div style={{ ...s.settingsMenuItem, cursor: "default", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                      <span style={{ fontSize: 12 }}>🖼 Фон</span>
+                      <span style={{ fontSize: 12 }}>{mi("image")}Фон</span>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <input
                           type="color"
@@ -646,7 +655,7 @@ export default function Sidebar({
                       </div>
                     </div>
                     <div style={{ ...s.settingsMenuItem, cursor: "default", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                      <span style={{ fontSize: 12 }}>⚡ Акцент</span>
+                      <span style={{ fontSize: 12 }}>{mi("zap")}Акцент</span>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <input
                           type="color"
@@ -665,7 +674,7 @@ export default function Sidebar({
                       style={{ ...s.settingsMenuItem, fontSize: 12, color: "var(--text-muted)" }}
                       onClick={() => { resetNeoColors(); setNeoColors(DEFAULT_NEO_COLORS); }}
                     >
-                      ↺ Сбросить цвета
+                      {mi("reset")}Сбросить цвета
                     </button>
                   </>
                 )}
@@ -675,10 +684,10 @@ export default function Sidebar({
                   setShowUpdateBanner(false);
                   (window as any).electron?.checkForUpdates();
                 }}>
-                  🔄 Проверить обновления
+                  {mi("flip")}Проверить обновления
                 </button>
                 <button style={{ ...s.settingsMenuItem, color: "#ed4245" }} onClick={() => { setShowSettingsMenu(false); onLogout(); }}>
-                  ⎋ Выйти
+                  {mi("logout")}Выйти
                 </button>
               </div>
             </>

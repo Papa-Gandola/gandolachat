@@ -8,6 +8,11 @@ import { CompBadge } from "./cosmetics";
 import { filePreview, markerPreview } from "../services/markers";
 import { useTheme } from "../services/theme";
 import { VoicePlayer } from "./VoicePlayer";
+import Icon, { Gas } from "./Icon";
+import { Emoji, PreviewText } from "./Emoji";
+
+// Пункт меню / заголовок: линейная иконка + подпись (стиль «Б»)
+const ci = (name: React.ComponentProps<typeof Icon>["name"], size = 14) => <Icon name={name} size={size} style={{ marginRight: 7 }} />;
 
 interface Props {
   chat: ChatOut;
@@ -55,8 +60,6 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
   const [polls, setPolls] = useState<Record<number, PollOut>>({});
   const [pins, setPins] = useState<PinOut[]>([]);
   const [showPinsList, setShowPinsList] = useState(false);
-  const [hoverEmoji, setHoverEmoji] = useState("😊");
-  const RANDOM_EMOJI = ["😊", "😂", "🤣", "😍", "🥰", "😎", "🤔", "😭", "🥺", "🤡", "💀", "🗿", "🔥", "💯", "👻", "🤓", "🫠", "🤯", "😈", "🥴"];
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [imgCtxMenu, setImgCtxMenu] = useState<{ x: number; y: number; flipX: boolean; flipY: boolean; url: string; filename: string } | null>(null);
   const [onlineUserIds, setOnlineUserIds] = useState<Set<number>>(new Set());
@@ -994,7 +997,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
             title={chat.is_group ? "Открыть информацию о группе" : "Открыть профиль"}
           >{getChatTitle()}</span>
           {chat.is_group && chat.allow_all_write === false && (
-            <span title="Канал — пишет только создатель" style={{ marginLeft: 6, color: "var(--text-muted)", fontSize: 14 }}>🔒</span>
+            <span title="Канал — пишет только создатель" style={{ marginLeft: 6, color: "var(--text-muted)", display: "inline-flex" }}><Icon name="lock" size={14} /></span>
           )}
           {!chat.is_group && (() => {
             const other = chat.members.find((m) => m.id !== currentUser.id);
@@ -1026,18 +1029,13 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
             }
             setChatMuted(!chatMuted);
           }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={chatMuted ? "#ed4245" : "currentColor"} strokeWidth="2" strokeLinecap="round">
-              <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/>
-              {chatMuted && <line x1="1" y1="1" x2="23" y2="23"/>}
-            </svg>
+            <Icon name={chatMuted ? "bell-off" : "bell"} size={18} style={chatMuted ? { color: "#ed4245" } : undefined} />
           </button>
           <button style={s.headerBtn} title="Поиск" onClick={() => setShowSearch(!showSearch)}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <Icon name="search" size={18} />
           </button>
           <button style={{ ...s.headerBtn, ...(chat.is_notes ? { display: "none" } : {}) }} title="Звонок" onClick={onStartCall}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M6.6 10.8a15.4 15.4 0 006.6 6.6l2.2-2.2a1 1 0 011.1-.2 11.5 11.5 0 003.6.7 1 1 0 011 1V21a1 1 0 01-1 1A17 17 0 012 5a1 1 0 011-1h3.5a1 1 0 011 1c0 1.25.2 2.45.7 3.6a1 1 0 01-.2 1.1L6.6 10.8z"/>
-            </svg>
+            <Icon name="phone" size={18} />
           </button>
         </div>
       </div>
@@ -1056,7 +1054,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
             color: "var(--text-primary)",
           }}
         >
-          <span>📞</span>
+          <Icon name="phone" size={14} style={{ color: "#3ba55d" }} />
           <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             В созвоне:{" "}
             {activeCallUsers!
@@ -1101,10 +1099,10 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
               fontSize: 12.5,
             }}
           >
-            <span style={{ fontSize: 13 }}>📌</span>
+            <Icon name="pin" size={14} style={{ color: "var(--accent)" }} />
             <span style={{ color: "var(--text-muted)", flexShrink: 0 }}>{pins[0].sender_username}:</span>
             <span style={{ color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-              {markerPreview(pins[0].content || "") || pins[0].content || (pins[0].file_name ? filePreview(pins[0].file_name) : "")}
+              <PreviewText text={markerPreview(pins[0].content || "") || pins[0].content || (pins[0].file_name ? filePreview(pins[0].file_name) : "")} />
             </span>
             {pins.length > 1 && (
               <button
@@ -1127,10 +1125,10 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
               {pins.map((pn) => (
                 <div key={pn.message_id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: "1px solid var(--border)", cursor: "pointer", fontSize: 12.5 }}
                      onClick={() => { setShowPinsList(false); scrollToMessage(pn.message_id); }}>
-                  <span>📌</span>
+                  <Icon name="pin" size={13} style={{ color: "var(--text-muted)" }} />
                   <span style={{ color: "var(--text-muted)", flexShrink: 0 }}>{pn.sender_username}:</span>
                   <span style={{ color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-                    {markerPreview(pn.content || "") || pn.content || (pn.file_name ? filePreview(pn.file_name) : "")}
+                    <PreviewText text={markerPreview(pn.content || "") || pn.content || (pn.file_name ? filePreview(pn.file_name) : "")} />
                   </span>
                   {canPin && (
                     <button onClick={(e) => { e.stopPropagation(); togglePin(pn.message_id); }} title="Открепить"
@@ -1415,7 +1413,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
                         />
                       ) : (
                         <a href={`${BASE_URL}${msg.file_url}`} target="_blank" rel="noreferrer" style={s.fileLink}>
-                          📎 {msg.file_name}
+                          <Icon name="clip" size={14} />{msg.file_name}
                         </a>
                       )
                     )}
@@ -1446,7 +1444,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
                                 }
                               }}
                               title={myReact ? "Убрать реакцию" : "Добавить реакцию"}
-                            >{emoji} {count}</span>
+                            ><Emoji e={emoji} /> {count}</span>
                           );
                         })}
                       </div>
@@ -1545,11 +1543,11 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
       {/* Context menu */}
       {contextMenu && (
         <div style={{ ...s.ctxMenu, left: contextMenu.x, top: contextMenu.y, transform: `translate(${contextMenu.flipX ? "-100%" : "0"}, ${contextMenu.flipY ? "-100%" : "0"})` }}>
-          <button style={s.ctxItem} onClick={() => { setReplyTo(contextMenu.msg); setContextMenu(null); }}>↩ Ответить</button>
-          <button style={s.ctxItem} onClick={() => { setForwardMsg(contextMenu.msg); setContextMenu(null); }}>➡ Переслать</button>
+          <button style={s.ctxItem} onClick={() => { setReplyTo(contextMenu.msg); setContextMenu(null); }}>{ci("reply")}Ответить</button>
+          <button style={s.ctxItem} onClick={() => { setForwardMsg(contextMenu.msg); setContextMenu(null); }}>{ci("forward")}Переслать</button>
           {canPin && (
             <button style={s.ctxItem} onClick={() => { togglePin(contextMenu.msg.id); setContextMenu(null); }}>
-              {pins.some((pn) => pn.message_id === contextMenu.msg.id) ? "📌 Открепить" : "📌 Закрепить"}
+              {ci("pin")}{pins.some((pn) => pn.message_id === contextMenu.msg.id) ? "Открепить" : "Закрепить"}
             </button>
           )}
           <div style={s.ctxReactions}>
@@ -1557,13 +1555,13 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
               <button key={e} style={s.ctxReactionBtn} onClick={() => {
                 wsService.send({ type: "reaction", message_id: contextMenu!.msg.id, chat_id: chat.id, emoji: e });
                 setContextMenu(null);
-              }}>{e}</button>
+              }}><Emoji e={e} /></button>
             ))}
           </div>
           {contextMenu.msg.sender_id === currentUser.id && (
             <>
-              <button style={s.ctxItem} onClick={() => { setEditingMsg(contextMenu.msg); setContextMenu(null); }}>✏️ Редактировать</button>
-              <button style={{ ...s.ctxItem, color: "var(--danger)" }} onClick={() => { handleDelete(contextMenu.msg.id); setContextMenu(null); }}>🗑 Удалить</button>
+              <button style={s.ctxItem} onClick={() => { setEditingMsg(contextMenu.msg); setContextMenu(null); }}>{ci("edit")}Редактировать</button>
+              <button style={{ ...s.ctxItem, color: "var(--danger)" }} onClick={() => { handleDelete(contextMenu.msg.id); setContextMenu(null); }}>{ci("trash")}Удалить</button>
             </>
           )}
         </div>
@@ -1664,13 +1662,13 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
               style={{ ...s.ctxItem, width: "100%" }}
               onClick={() => { downloadImage(imgCtxMenu.url, imgCtxMenu.filename); setImgCtxMenu(null); }}
             >
-              💾 Сохранить как...
+              {ci("download")}Сохранить как...
             </button>
             <button
               style={{ ...s.ctxItem, width: "100%" }}
               onClick={() => { copyImage(imgCtxMenu.url); setImgCtxMenu(null); }}
             >
-              📋 Копировать изображение
+              {ci("copy")}Копировать изображение
             </button>
           </div>
         </>
@@ -1774,7 +1772,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
                 {att.preview ? (
                   <img src={att.preview} style={{ width: 48, height: 48, objectFit: "cover", borderRadius: isNeo ? 0 : 4, flexShrink: 0 }} />
                 ) : (
-                  <div style={{ width: 48, height: 48, background: "var(--bg-input)", borderRadius: isNeo ? 0 : 4, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>📎</div>
+                  <div style={{ width: 48, height: 48, background: "var(--bg-input)", borderRadius: isNeo ? 0 : 4, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", flexShrink: 0 }}><Icon name="clip" size={22} /></div>
                 )}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ ...mono, fontSize: 12, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>
@@ -1838,28 +1836,27 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
               textAlign: "center" as const,
               ...(isNeo ? { fontFamily: "var(--font-mono)", letterSpacing: "0.04em" } : {}),
             }}>
-              {isNeo ? "// канал · писать_может_только_создатель" : "🔒 Это канал — писать может только создатель"}
+              {isNeo ? "// канал · писать_может_только_создатель" : <>{ci("lock", 13)}Это канал — писать может только создатель</>}
             </div>
           );
         }
         return null;
       })()}
       <form onSubmit={sendMessage} style={{ ...s.inputBar, ...(chat.is_group && chat.allow_all_write === false && chat.created_by !== currentUser.id ? { display: "none" } : {}) }}>
-        <button type="button" style={s.attachBtn} onClick={() => fileRef.current?.click()} title="Прикрепить файл">+</button>
+        <button type="button" style={s.attachBtn} onClick={() => fileRef.current?.click()} title="Прикрепить файл"><Icon name="clip" size={18} /></button>
         {!chat.is_notes && (
-          <button type="button" style={s.attachBtn} onClick={() => setShowPollModal(true)} title="Опрос">📊</button>
+          <button type="button" style={s.attachBtn} onClick={() => setShowPollModal(true)} title="Опрос"><Icon name="poll" size={18} /></button>
         )}
         {chat.is_notes && (
-          <button type="button" style={s.attachBtn} onClick={() => setShowReminderModal(true)} title="Напоминание">⏰</button>
+          <button type="button" style={s.attachBtn} onClick={() => setShowReminderModal(true)} title="Напоминание"><Icon name="bell" size={18} /></button>
         )}
         <input type="file" multiple ref={fileRef} style={{ display: "none" }} onChange={handleFileInput} />
         <button
           type="button"
           style={s.emojiBtn}
           onClick={() => setShowEmoji(!showEmoji)}
-          onMouseEnter={() => setHoverEmoji(RANDOM_EMOJI[Math.floor(Math.random() * RANDOM_EMOJI.length)])}
           title="Эмодзи"
-        >{hoverEmoji}</button>
+        ><Icon name="smile" size={20} /></button>
         {isNeo && <span style={{ color: "var(--accent)", ...mono, fontSize: 14, marginRight: 2 }}>&gt;</span>}
         <div
           ref={textInputRef}
@@ -1918,7 +1915,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
             ...(pendingAttachments.length > 0 ? { opacity: 0.35, pointerEvents: "none" as const, transform: "none" } : {}),
           }}
           disabled={pendingAttachments.length > 0 || !text.trim()}
-        >{isNeo ? "SEND" : "➤"}</button>
+        >{isNeo ? "SEND" : <Icon name="send" size={18} strokeWidth={2} style={{ verticalAlign: "middle" }} />}</button>
       </form>
 
       {showPollModal && (
@@ -1990,7 +1987,7 @@ function ReminderModal({ isNeo, onClose }: { isNeo: boolean; onClose: () => void
     >
       <div style={box} onClick={(e) => e.stopPropagation()}>
         <div style={{ color: "var(--text-header)", fontWeight: 700, fontSize: 15, marginBottom: 12 }}>
-          {isNeo ? "// НАПОМИНАНИЕ" : "⏰ Напоминание"}
+          {isNeo ? "// НАПОМИНАНИЕ" : <>{ci("bell", 15)}Напоминание</>}
         </div>
         <input
           autoFocus
@@ -2043,7 +2040,7 @@ function ReminderCard({ payload, isNeo, isMine }: {
       ...(isNeo ? { fontFamily: "var(--font-mono)" } : {}),
     }}>
       <span style={{ fontSize: 11, fontWeight: 700, color: edge }}>
-        {fired ? "✓ сработало" : `⏰ на ${when}`}
+        {fired ? <>{ci("check", 12)}сработало</> : <>{ci("bell", 12)}на {when}</>}
       </span>
       <span style={{ fontSize: 13.5, color: isNeo && isMine ? "#0a0a0a" : isMine ? "#fff" : "var(--text-primary)" }}>
         {payload.text}
@@ -2128,25 +2125,25 @@ function CallRecordCard({ kind, durationSec, participants, initiatorId, currentU
   const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
   const initiatedByMe = initiatorId === currentUserId;
   let title = "";
-  let icon = "📞";
+  let icon: React.ComponentProps<typeof Icon>["name"] = "phone";
   let color = "var(--text-primary)";
   if (kind === "completed") {
     const min = Math.floor(durationSec / 60);
     const sec = durationSec % 60;
     const time = min > 0 ? `${min} мин ${sec.toString().padStart(2, "0")} сек` : `${sec} сек`;
     title = participants > 2 ? `Звонок · ${time} · ${participants} участника` : `Звонок · ${time}`;
-    icon = "📞";
+    icon = "phone";
   } else if (kind === "missed") {
     title = initiatedByMe ? "Никто не ответил" : "Пропущенный звонок";
-    icon = "📵";
+    icon = "phone-off";
     color = "#ed4245";
   } else if (kind === "declined") {
     title = initiatedByMe ? "Отклонён" : "Вы отклонили звонок";
-    icon = "✕";
+    icon = "x";
     color = "#ed4245";
   } else if (kind === "cancelled") {
     title = initiatedByMe ? "Вы отменили звонок" : "Звонок отменён";
-    icon = "↩";
+    icon = "reply";
     color = "var(--text-muted)";
   }
   const cardBg = isMine
@@ -2169,7 +2166,7 @@ function CallRecordCard({ kind, durationSec, participants, initiatorId, currentU
       ...mono,
       fontSize: 13,
     }}>
-      <span style={{ fontSize: 18 }}>{icon}</span>
+      <Icon name={icon} size={18} style={{ color: titleColor }} />
       <span style={{ color: titleColor, fontWeight: 600 }}>{isNeo ? `// ${title.toLowerCase()}` : title}</span>
     </div>
   );
@@ -2222,12 +2219,14 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
   const levelColor = darkOnLime ? "#0a0a0a" : lightOnBlurple ? "#fff" : "var(--accent)";
   const titleGold = darkOnLime ? "rgba(10,10,10,0.8)" : GOLD;
 
-  const header = special === "rampage" ? "🚨 РАМПАГА!!!"
+  // Заголовок: эмодзи-акценты — из шрифта Twemoji, а «фирменные» ⛽/🔓 —
+  // линейными иконками (стиль «Б»)
+  const header: React.ReactNode = special === "rampage" ? "🚨 РАМПАГА!!!"
     : special === "fullstack" ? "🏆 СТАК ПОБЕДИЛ"
     : isAnti ? "💀 ПРОЖАРКА"
     : isTeam ? "🤝 КОМАНДНОЕ"
-    : hasSecret && secretCount === items.length ? "🔓 ТАЙНОЕ ОТКРЫТО"
-    : "⛽ ЗАДАНИЕ ЗАКРЫТО";
+    : hasSecret && secretCount === items.length ? <>{ci("unlock", 13)}ТАЙНОЕ ОТКРЫТО</>
+    : <><Gas size={13} style={{ marginRight: 6 }} />ЗАДАНИЕ ЗАКРЫТО</>;
 
   const who = isTeam
     ? (payload.who || payload.names || []).join(" + ")
@@ -2270,7 +2269,7 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
                   {medals[i] || `${i + 1}.`} {r.username}
                 </span>
                 <span style={{ ...mono, fontSize: 12.5, fontWeight: 800, color: gasColor, whiteSpace: "nowrap" }}>
-                  +{r.gas} ⛽
+                  +{r.gas} <Gas />
                 </span>
               </div>
             ))}
@@ -2297,10 +2296,10 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
       payload.items || [];
     const outcomeColor = (o: string) =>
       darkOnLime ? "#0a0a0a" : o === "won" ? "#57f287" : o === "lost" ? BLOOD : subColor;
-    const outcomeText = (it: any) =>
-      it.outcome === "won" ? `✅ +${it.delta}⛽`
-        : it.outcome === "lost" ? `❌ -${it.stake}⛽`
-        : `↩ возврат`;
+    const outcomeText = (it: any): React.ReactNode =>
+      it.outcome === "won" ? <>✅ +{it.delta}<Gas size={12} /></>
+        : it.outcome === "lost" ? <>❌ -{it.stake}<Gas size={12} /></>
+        : <>{ci("reply", 12)}возврат</>;
     return (
       <div
         onClick={openCompendium}
@@ -2381,7 +2380,7 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
                 )}
               </span>
               <span style={{ ...mono, fontSize: 12.5, fontWeight: 800, color: gasColor, whiteSpace: "nowrap" }}>
-                {p.gas} ⛽ · ур. {p.level}
+                {p.gas} <Gas /> · ур. {p.level}
               </span>
             </div>
           ))}
@@ -2424,11 +2423,11 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
           return (
             <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
               <span style={{ ...mono, fontSize: 13, fontWeight: 700, color: secret ? titleGold : titleColor }}>
-                {secret ? "🔓 " : ""}{it.name}
+                {secret && ci("unlock", 12)}{it.name}
                 {it.title && <span style={{ color: titleGold, fontSize: 11, marginLeft: 6 }}>титул «{it.title}»</span>}
               </span>
               <span style={{ ...mono, fontSize: 12.5, fontWeight: 800, color: secret ? titleGold : gasColor, whiteSpace: "nowrap" }}>
-                +{it.gas} ⛽
+                +{it.gas} <Gas />
               </span>
             </div>
           );
@@ -2441,7 +2440,7 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
               🆙 УРОВЕНЬ {payload.new_level}
             </span>
           )}
-          {payload.gas_total != null && <span>всего: {payload.gas_total} ⛽ · ур. {payload.level}</span>}
+          {payload.gas_total != null && <span>всего: {payload.gas_total} <Gas size={12} /> · ур. {payload.level}</span>}
         </div>
       )}
     </div>
@@ -2512,7 +2511,7 @@ function DotaInviteCard({ msgId, chatId, isNeo, isMine, senderName, ready, myId,
       maxWidth: 360,
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={{ fontSize: 28 }}>{gold ? "👑" : "⚔️"}</div>
+        <div style={{ fontSize: 28, display: "flex", color: gold ? "#ffd24a" : titleColor }}>{gold ? <Emoji e="👑" /> : <Icon name="swords" size={30} strokeWidth={1.5} />}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ ...mono, color: gold ? "#ffd24a" : titleColor, fontWeight: 700, fontSize: 14 }}>
             {isNeo ? "// ГАЗУЕМ_В_ДОТАН" : "Газуем в дотан"}
@@ -2542,7 +2541,7 @@ function DotaInviteCard({ msgId, chatId, isNeo, isMine, senderName, ready, myId,
       </div>
       {readyLine && (
         <div style={{ ...mono, color: subColor, fontSize: 11.5, marginTop: 8 }}>
-          {isNeo ? `> готовы: ${readyLine}` : `✅ Готовы: ${readyLine}`}
+          {isNeo ? `> готовы: ${readyLine}` : <>{ci("check", 12)}Готовы: {readyLine}</>}
         </div>
       )}
     </div>
@@ -2586,7 +2585,7 @@ function PokerInviteCard({ tableId, chatId, isNeo, isMine, senderName }: { table
       margin: "4px 0",
       maxWidth: 360,
     }}>
-      <div style={{ fontSize: 28 }}>🎴</div>
+      <div style={{ display: "flex", color: titleColor }}><Icon name="cards" size={30} strokeWidth={1.5} /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ ...mono, color: titleColor, fontWeight: 700, fontSize: 14 }}>
           {isNeo ? `// ПОКЕРНЫЙ_СТОЛ #${tableId}` : `Покерный стол #${tableId}`}
@@ -2728,7 +2727,7 @@ function PollCardMsg({ poll, pollId, chatId, isNeo, isMine, canModerate, current
       borderRadius: isNeo ? 0 : 8, margin: "4px 0", minWidth: 260, maxWidth: 400,
     }}>
       <div style={{ ...mono, fontWeight: 800, fontSize: 12, letterSpacing: "0.06em", color: darkOnLime ? "#0a0a0a" : "var(--accent)" }}>
-        📊 ОПРОС{poll.closed ? " · ЗАВЕРШЁН" : poll.allow_multi ? " · НЕСКОЛЬКО ОТВЕТОВ" : ""}
+        {ci("poll", 13)}ОПРОС{poll.closed ? " · ЗАВЕРШЁН" : poll.allow_multi ? " · НЕСКОЛЬКО ОТВЕТОВ" : ""}
       </div>
       <div style={{ ...mono, fontWeight: 700, fontSize: 14, color: titleColor, marginTop: 4 }}>{poll.question}</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 8 }}>
@@ -2742,7 +2741,7 @@ function PollCardMsg({ poll, pollId, chatId, isNeo, isMine, canModerate, current
             >
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12.5 }}>
                 <span style={{ ...mono, color: titleColor, fontWeight: mineOpt ? 800 : 500 }}>
-                  {mineOpt ? "☑ " : poll.closed ? "" : "☐ "}{o.text}
+                  {mineOpt ? ci("check-square", 13) : poll.closed ? null : ci("square", 13)}{o.text}
                   {o.author && <span style={{ color: subColor, fontSize: 10.5 }}> · от {o.author}</span>}
                 </span>
                 <span style={{ ...mono, color: subColor, whiteSpace: "nowrap" }}>{o.votes}</span>
@@ -2778,7 +2777,7 @@ function PollCardMsg({ poll, pollId, chatId, isNeo, isMine, canModerate, current
           <button
             onClick={() => setAddOpen(true)}
             style={{ ...mono, marginTop: 8, background: "transparent", color: darkOnLime ? "#0a0a0a" : "var(--accent)", border: `1px dashed ${edge}`, borderRadius: isNeo ? 0 : 5, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}
-          >➕ Свой вариант</button>
+          >{ci("plus", 12)}Свой вариант</button>
         )
       )}
       <div style={{ ...mono, display: "flex", justifyContent: "space-between", gap: 10, fontSize: 11, color: subColor, marginTop: 8 }}>
@@ -2833,7 +2832,7 @@ function PollComposeModal({ isNeo, onClose, onCreate }: {
   return (
     <div style={s.imageOverlay} onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--bg-primary)", border: "1px solid var(--border)", borderRadius: isNeo ? 0 : 10, padding: 18, width: 380, maxWidth: "92vw", display: "flex", flexDirection: "column", gap: 10 }}>
-        <div style={{ ...mono, fontWeight: 800, fontSize: 14, color: "var(--text-header)" }}>📊 Новый опрос</div>
+        <div style={{ ...mono, fontWeight: 800, fontSize: 14, color: "var(--text-header)" }}>{ci("poll", 15)}Новый опрос</div>
         <input autoFocus placeholder="Вопрос" value={question} maxLength={300}
                onChange={(e) => setQuestion(e.target.value)} style={inputStyle} />
         {options.map((o, i) => (
@@ -2884,7 +2883,7 @@ const s: Record<string, React.CSSProperties> = {
   memberCount: { color: "var(--text-muted)", fontSize: 13, marginLeft: 8 },
   chatStatus: { color: "var(--text-muted)", fontSize: 13, marginLeft: 8, fontStyle: "italic" as const },
   lastSeen: { color: "var(--text-muted)", fontSize: 11, marginLeft: 8 },
-  headerBtn: { background: "none", color: "var(--text-secondary)", fontSize: 20, padding: "4px 8px", borderRadius: 4 },
+  headerBtn: { background: "none", color: "var(--text-secondary)", padding: "4px 8px", borderRadius: 4, display: "inline-flex", alignItems: "center" },
   searchBar: { display: "flex", gap: 8, padding: "8px 16px", borderBottom: "1px solid var(--border)", background: "var(--bg-secondary)" },
   searchInput: { flex: 1, background: "var(--bg-input)", borderRadius: 6, padding: "8px 12px", fontSize: 13, color: "var(--text-primary)" },
   searchClose: { background: "none", color: "var(--text-muted)", fontSize: 16, padding: "4px 8px" },
@@ -2932,8 +2931,8 @@ const s: Record<string, React.CSSProperties> = {
   formatBar: { display: "flex", gap: 4, padding: "4px 16px", background: "var(--bg-primary)", borderTop: "1px solid var(--border)" },
   formatBtn: { background: "none", color: "var(--text-muted)", padding: "4px 10px", borderRadius: 4, fontSize: 13, cursor: "pointer", border: "1px solid transparent" },
   inputBar: { display: "flex", alignItems: "center", gap: 8, padding: "8px 16px 12px", background: "var(--bg-primary)" },
-  attachBtn: { background: "var(--bg-input)", color: "var(--text-muted)", width: 36, height: 36, borderRadius: "50%", fontSize: 20, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
-  emojiBtn: { background: "none", fontSize: 22, padding: "4px", flexShrink: 0, opacity: 0.7 },
+  attachBtn: { background: "var(--bg-input)", color: "var(--text-secondary)", width: 36, height: 36, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
+  emojiBtn: { background: "none", color: "var(--text-secondary)", padding: "4px", flexShrink: 0, display: "flex", alignItems: "center" },
   textInput: { flex: 1, background: "var(--bg-input)", borderRadius: 8, padding: "10px 14px", fontSize: 14, color: "var(--text-primary)", resize: "none" as const, fontFamily: "inherit", lineHeight: 1.4, maxHeight: 120, minHeight: 38 },
-  sendBtn: { background: "var(--accent)", color: "var(--accent-text)", width: 36, height: 36, borderRadius: "50%", fontSize: 16, flexShrink: 0, opacity: 1, transition: "opacity 0.15s" },
+  sendBtn: { background: "var(--accent)", color: "var(--accent-text)", width: 36, height: 36, borderRadius: "50%", fontSize: 16, flexShrink: 0, opacity: 1, transition: "opacity 0.15s", display: "flex", alignItems: "center", justifyContent: "center" },
 };

@@ -3,6 +3,7 @@ import { ChatOut, UserOut, userApi, chatApi } from "../services/api";
 import { CompBadge, CompTitle } from "./cosmetics";
 import { useTheme } from "../services/theme";
 import { useDotaPlaying } from "../services/presence";
+import Icon from "./Icon";
 
 interface Props {
   chat: ChatOut;
@@ -52,7 +53,7 @@ export default function MemberList({ chat, currentUser, onChatUpdate, onDeleteCh
                 {m.id === currentUser.id ? (isNeo ? "_you" : " (вы)") : ""}
                 <CompBadge user={m} size={10} />
                 {dotaPlaying.has(m.id) && (
-                  <span title="Сейчас в Доте" style={{ fontSize: 10, marginLeft: 4 }}>🎮</span>
+                  <span title="Сейчас в Доте" style={{ marginLeft: 4, color: "var(--accent)", display: "inline-flex", verticalAlign: "-0.05em" }}><Icon name="pad" size={12} /></span>
                 )}
               </span>
               <CompTitle user={m} size={10} />

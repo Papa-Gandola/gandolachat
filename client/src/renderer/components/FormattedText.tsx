@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useTheme } from "../services/theme";
+import { EmojiText } from "./Emoji";
 
 // Parse markdown-like syntax into React nodes
 // Supports: **bold**, *italic*, ~~strike~~, __underline__, ||spoiler||
@@ -68,7 +69,7 @@ function renderText(text: string, keyBase: string): React.ReactNode[] {
     const trailing = url.match(/[.,!?;:)\]}]+$/);
     if (trailing) url = url.slice(0, url.length - trailing[0].length);
     if (match.index > lastIdx) {
-      out.push(<React.Fragment key={`${keyBase}-t${counter++}`}>{text.slice(lastIdx, match.index)}</React.Fragment>);
+      out.push(<EmojiText key={`${keyBase}-t${counter++}`} text={text.slice(lastIdx, match.index)} />);
     }
     out.push(
       <a
@@ -83,7 +84,8 @@ function renderText(text: string, keyBase: string): React.ReactNode[] {
     lastIdx = match.index + url.length;
   }
   if (lastIdx < text.length) {
-    out.push(<React.Fragment key={`${keyBase}-t${counter++}`}>{text.slice(lastIdx)}</React.Fragment>);
+    // Эмодзи в тексте — шрифтом Twemoji (стиль «Б», см. Emoji.tsx)
+    out.push(<EmojiText key={`${keyBase}-t${counter++}`} text={text.slice(lastIdx)} />);
   }
   return out;
 }

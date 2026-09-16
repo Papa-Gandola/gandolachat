@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { evaluateBest, computeOuts, potOddsPct, chenScore, CATEGORY_NAMES } from "./pokerAssist";
+import Icon from "./Icon";
 
 // Sidebar next to the felt: a hand-rankings cheat sheet for beginners (toggle)
 // and a pot-odds / outs helper (toggle, persisted). Pure client-side — uses
@@ -130,10 +131,10 @@ export default function PokerAssistPanel({ myHole, community, pot, toCall, stree
     }}>
       <div style={{ display: "flex", gap: 8 }}>
         <button onClick={() => setShowCombos((v) => !v)} style={toggleBtn(showCombos)} title="Шпаргалка комбинаций">
-          {isNeo ? "[КОМБИНАЦИИ]" : "🂡 Комбинации"}
+          {isNeo ? "[КОМБИНАЦИИ]" : <><Icon name="cards" size={13} style={{ marginRight: 5 }} />Комбинации</>}
         </button>
         <button onClick={toggleOdds} style={toggleBtn(showOdds)} title="Шанс банка и ауты">
-          {isNeo ? "[ШАНСЫ]" : "🎯 Шансы"}
+          {isNeo ? "[ШАНСЫ]" : <><Icon name="target" size={13} style={{ marginRight: 5 }} />Шансы</>}
         </button>
       </div>
 

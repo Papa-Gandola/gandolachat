@@ -1,0 +1,46 @@
+import React from "react";
+import { ICON_PATHS, IconName } from "./icons";
+
+/** Линейная иконка из единого набора (icons.ts). Размер — в пикселях,
+ *  цвет наследуется от текста (currentColor), по вертикали садится на
+ *  строку как символ. `title` — подсказка при наведении. */
+export default function Icon({
+  name, size = 16, strokeWidth = 1.75, title, style, className,
+}: {
+  name: IconName;
+  size?: number;
+  strokeWidth?: number;
+  title?: string;
+  style?: React.CSSProperties;
+  className?: string;
+}) {
+  return (
+    <svg
+      className={className}
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden={title ? undefined : true}
+      role={title ? "img" : undefined}
+      style={{ display: "inline-block", verticalAlign: "-0.18em", flexShrink: 0, ...style }}
+      dangerouslySetInnerHTML={{ __html: (title ? `<title>${title}</title>` : "") + ICON_PATHS[name] }}
+    />
+  );
+}
+
+/** Иконка в потоке текста: с отступом справа, как «📎 файл» раньше. */
+export function IconText({ name, size = 14, gap = 5, ...rest }: {
+  name: IconName; size?: number; gap?: number; strokeWidth?: number; title?: string; style?: React.CSSProperties;
+}) {
+  return <Icon name={name} size={size} {...rest} style={{ marginRight: gap, ...rest.style }} />;
+}
+
+/** ⛽ — фирменный значок газа Гандолиума, в UI везде линейный. */
+export function Gas({ size = 13, style }: { size?: number; style?: React.CSSProperties }) {
+  return <Icon name="fuel" size={size} style={{ verticalAlign: "-0.15em", ...style }} />;
+}

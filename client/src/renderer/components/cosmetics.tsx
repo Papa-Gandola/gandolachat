@@ -1,5 +1,6 @@
 import React from "react";
 import { UserOut } from "../services/api";
+import Icon from "./Icon";
 
 // Косметика Гандолиума: помощники отображения. Данные приходят в UserOut
 // (comp_*), живые обновления — через profile_updated.
@@ -11,14 +12,15 @@ export function nameColor(u?: Pick<UserOut, "comp_color"> | null): string | null
   return u?.comp_color || null;
 }
 
-// Маленький ⛽ рядом с ником (разблокировка ур.2)
+// Маленький значок газа рядом с ником (разблокировка ур.2) — линейная
+// иконка, не эмодзи: в Neo цветная колонка выбивалась из моно-стиля
 export function CompBadge({ user, size = 11 }: { user?: Pick<UserOut, "comp_badge" | "comp_max_level"> | null; size?: number }) {
   if (!user?.comp_badge) return null;
   return (
     <span
       title={`Гандолиум · уровень ${user.comp_max_level ?? "?"}`}
-      style={{ fontSize: size, marginLeft: 4, verticalAlign: "baseline" }}
-    >⛽</span>
+      style={{ marginLeft: 4, color: "var(--accent)", display: "inline-flex", verticalAlign: "-0.05em" }}
+    ><Icon name="fuel" size={size + 1} /></span>
   );
 }
 
