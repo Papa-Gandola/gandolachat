@@ -261,6 +261,12 @@ class WebRTCService {
     });
 
     map.set(targetUserId, peer);
+    // Мы уже шарим экран, а это новый участник (вошёл в идущий созвон):
+    // раньше startScreenShare открывал screen-peer только тем, кто был в
+    // звонке на момент старта, и опоздавший экрана не видел.
+    if (purpose === "webcam" && this.localScreenStream && !this.screenSendingPeers.has(targetUserId)) {
+      this._createPeer(targetUserId, true, "screen");
+    }
     if (purpose === "webcam" && pc2) {
       const vSender = pc2.getSenders().find((s: any) => s.track?.kind === "video");
       if (vSender) {

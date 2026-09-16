@@ -128,6 +128,15 @@ export function VideoOffIcon({ size = 24, color = "currentColor", strokeWidth = 
   );
 }
 
+export function ScreenIcon({ size = 20, color = "currentColor", strokeWidth = 1.8 }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <Rect x="3" y="4" width="18" height="12" rx="2" />
+      <Path d="M8 20 H16 M12 16 V20" />
+    </Svg>
+  );
+}
+
 export function HangupIcon({ size = 24, color = "#ffffff" }: IconProps) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
