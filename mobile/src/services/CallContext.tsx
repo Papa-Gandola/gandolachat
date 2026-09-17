@@ -7,7 +7,7 @@ import InCallManager from "react-native-incall-manager";
 import { MediaStream, RTCView } from "react-native-webrtc";
 
 import { Avatar } from "../components/Avatar";
-import { HangupIcon, MicIcon, MicOffIcon, PhoneIcon, VideoIcon, VideoOffIcon } from "../components/icons";
+import { HangupIcon, MicIcon, MicOffIcon, PhoneIcon, ScreenIcon, VideoIcon, VideoOffIcon } from "../components/icons";
 import { useTheme } from "../theme";
 import { UserOut, userApi } from "./api";
 import { useAuth } from "./AuthContext";
@@ -102,6 +102,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const [callName, setCallName] = useState("");
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remotes, setRemotes] = useState<Remote[]>([]);
+  // Экраны, которые шарят с десктопа (приём; сами не шарим). Тап по экрану
+  // разворачивает его на весь звонок, участники уезжают в узкую полосу.
+  const [screens, setScreens] = useState<Remote[]>([]);
+  const [screenFocus, setScreenFocus] = useState(false);
   const [muted, setMuted] = useState(false);
   const [videoOff, setVideoOff] = useState(false);
   const [facing, setFacing] = useState<"user" | "environment">("user");
@@ -211,6 +215,21 @@ export function CallProvider({ children }: { children: ReactNode }) {
       });
     };
     webrtcService.onPeerLeft = (uid) => setRemotes((prev) => prev.filter((r) => r.userId !== uid));
+    webrtcService.onScreenStream = (uid, stream) => {
+      setScreens((prev) => [...prev.filter((s) => s.userId !== uid), { userId: uid, stream }]);
+      // Имя шарящего могло ещё не подгрузиться (экран пришёл раньше вебки)
+      setPeerInfo((prev) => {
+        if (prev.has(uid)) return prev;
+        userApi
+          .getUser(uid)
+          .then((r: { data: UserOut }) =>
+            setPeerInfo((cur) => new Map(cur).set(uid, { username: r.data.username, avatarUrl: r.data.avatar_url })),
+          )
+          .catch(() => {});
+        return prev;
+      });
+    };
+    webrtcService.onScreenEnded = (uid) => setScreens((prev) => prev.filter((s) => s.userId !== uid));
     webrtcService.onCallEnded = () => {
       activeRef.current = false;
       setInCall(false);
@@ -218,6 +237,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
       setCallChatId(null);
       setLocalStream(null);
       setRemotes([]);
+      setScreens([]);
+      setScreenFocus(false);
       setMuted(false);
       setVideoOff(false);
       setFacing("user");
@@ -469,8 +490,22 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const reject = () => {
     if (!incoming) return;
     wsService.send({ type: "call_end", chat_id: incoming.chatId, declined: true });
+    // Оффер звонящего протух: по нашему call_end он снесёт свой peer к нам,
+    // и ответ на этот оффер при позднем «Присоединиться» ушёл бы в никуда.
+    webrtcService.discardPending(incoming.chatId);
     setIncoming(null);
   };
+
+  // Возврат из фона: пока приложение спало, сеть могла смениться, а
+  // соединения — развалиться. Просим сервис проверить и восстановить
+  // (ICE-restart упавших) — не ждём, пока человек сам заметит тишину.
+  useEffect(() => {
+    if (!inCall) return;
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") webrtcService.recover("foreground");
+    });
+    return () => sub.remove();
+  }, [inCall]);
 
   // Возврат из фона с включённой камерой: если Андроид успел её отобрать
   // (старые сборки без типа сервиса camera — и мало ли что ещё), дорожка
@@ -695,22 +730,40 @@ export function CallProvider({ children }: { children: ReactNode }) {
           кладёт трубку — раньше случайный back ронял звонок. */}
       <Modal visible={inCall && !minimized} animationType="slide" onRequestClose={() => setMinimized(true)}>
         <View style={{ flex: 1, backgroundColor: "#000" }}>
-          {/* Remote — full screen for 1:1, grid for groups */}
-          {remoteTiles.length === 0 ? (
+          {/* Remote — full screen for 1:1, grid for groups; сверху — чужой
+              экран, если кто-то шарит с компа (тап = развернуть/свернуть) */}
+          {remoteTiles.length === 0 && screens.length === 0 ? (
             <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
               <Text style={{ fontFamily: theme.fonts.mono, fontSize: 16, color: theme.colors.inkDim }}>
                 {theme.decorate ? `// звоним · ${callName}` : `Звоним · ${callName}`}
               </Text>
             </View>
           ) : (
-            <RemoteGrid
-              tiles={remoteTiles}
-              fallbackName={callName}
-              volumes={volumes}
-              onVolume={changeVolume}
-              openFor={volOpenFor}
-              onToggleOpen={(uid) => setVolOpenFor((cur) => (cur === uid ? null : uid))}
-            />
+            <View style={{ flex: 1 }}>
+              {screens.length > 0 && (
+                <ScreenTiles
+                  screens={screens}
+                  names={peerInfo}
+                  focus={screenFocus}
+                  onToggleFocus={() => setScreenFocus((v) => !v)}
+                  style={{ flex: screenFocus || remoteTiles.length === 0 ? 1 : 1.35 }}
+                />
+              )}
+              {remoteTiles.length > 0 && (
+                // Плитки участников НЕ размонтируем при развороте экрана: в
+                // вебе через их RTCView играет звук — пропали бы голоса.
+                <View style={screens.length > 0 && screenFocus ? { height: 104 } : { flex: 1 }}>
+                  <RemoteGrid
+                    tiles={remoteTiles}
+                    fallbackName={callName}
+                    volumes={volumes}
+                    onVolume={changeVolume}
+                    openFor={volOpenFor}
+                    onToggleOpen={(uid) => setVolOpenFor((cur) => (cur === uid ? null : uid))}
+                  />
+                </View>
+              )}
+            </View>
           )}
 
           {/* Local PiP (draggable) */}
@@ -789,6 +842,9 @@ export function CallProvider({ children }: { children: ReactNode }) {
           {remoteTiles.map((t) => (
             <RTCView key={t.userId} streamURL={t.stream.toURL()} style={{ width: 1, height: 1 }} />
           ))}
+          {screens.map((s) => (
+            <RTCView key={`scr-${s.userId}`} streamURL={s.stream.toURL()} style={{ width: 1, height: 1 }} />
+          ))}
         </View>
       )}
 
@@ -854,6 +910,64 @@ function RemoteGrid({
             onToggleOpen={onToggleOpen}
           />
         </View>
+      ))}
+    </View>
+  );
+}
+
+// Экран(ы), которые шарят с десктопа. objectFit=contain — на экране текст,
+// обрезать края нельзя. key по видеодорожке — та же грабля, что у RemoteTile:
+// нативный RTCView привязывает дорожку один раз.
+function ScreenTiles({
+  screens,
+  names,
+  focus,
+  onToggleFocus,
+  style,
+}: {
+  screens: Remote[];
+  names: Map<number, PeerInfo>;
+  focus: boolean;
+  onToggleFocus: () => void;
+  style: ViewStyle;
+}) {
+  const theme = useTheme();
+  return (
+    <View style={[{ backgroundColor: "#000" }, style]}>
+      {screens.map((s) => (
+        <Pressable key={s.userId} onPress={onToggleFocus} style={{ flex: 1, overflow: "hidden" }}>
+          <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+            <RTCView
+              key={s.stream.getVideoTracks()[0]?.id ?? "screen"}
+              streamURL={s.stream.toURL()}
+              objectFit="contain"
+              style={StyleSheet.absoluteFill}
+            />
+          </View>
+          <View
+            pointerEvents="none"
+            style={{
+              position: "absolute",
+              left: 10,
+              bottom: 8,
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 6,
+              backgroundColor: "rgba(0,0,0,0.55)",
+              paddingHorizontal: 8,
+              paddingVertical: 4,
+              borderRadius: theme.radius.sm,
+            }}
+          >
+            <ScreenIcon color="#fff" size={13} />
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: "#fff" }}>
+              {names.get(s.userId)?.username ?? "…"} · экран
+            </Text>
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: "rgba(255,255,255,0.6)" }}>
+              {focus ? "тап — свернуть" : "тап — развернуть"}
+            </Text>
+          </View>
+        </Pressable>
       ))}
     </View>
   );

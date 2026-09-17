@@ -27,6 +27,15 @@ function colorFor(id: number): string {
 // Служебные маркеры → человеческое превью (иначе в списке чатов светился бы
 // сырой "/quest_card {json}" от поллера Гандолиума). Зеркало десктопного
 // client/src/renderer/services/markers.ts.
+// Превью файлового сообщения в списке чатов — как markers.ts на десктопе
+// (голосовое/фото/видео — словом, остальное — именем файла).
+export function filePreview(name: string): string {
+  if (/^voice_\d+\./i.test(name)) return "🎤 Голосовое";
+  if (/\.(jpe?g|png|gif|webp|bmp|heic)$/i.test(name)) return "🖼 Фото";
+  if (/\.(mp4|mov|m4v|webm|mkv|3gp)$/i.test(name)) return "🎬 Видео";
+  return `📎 ${name}`;
+}
+
 export function markerPreview(content: string): string | null {
   if (content.startsWith("/quest_card ")) {
     try {
@@ -236,7 +245,7 @@ export function useChats(): ChatsState {
       const lastText = last?.content
         ? (markerPreview(last.content) ?? last.content)
         : last?.file_name
-          ? `📎 ${last.file_name}`
+          ? filePreview(last.file_name)
           : "";
       const senderPrefix =
         isGroup && last && last.sender_id !== user.id && last.sender_username

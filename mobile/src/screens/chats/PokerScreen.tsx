@@ -22,6 +22,7 @@ import {
 import { useAuth } from "../../services/AuthContext";
 import { wsService } from "../../services/ws";
 import { useTheme } from "../../theme";
+import { PokerAssist } from "./PokerAssist";
 
 type Props = NativeStackScreenProps<ChatsStackParamList, "Poker">;
 type ThemeT = ReturnType<typeof useTheme>;
@@ -471,6 +472,14 @@ export function PokerScreen({ navigation, route }: Props) {
         {live?.last_summary && live.hand?.street === "done" ? (
           <HandSummary theme={theme} summary={live.last_summary} players={live.players} />
         ) : null}
+        {/* Шпаргалка комбинаций + шанс банка (по своим картам) — под столом */}
+        <PokerAssist
+          myHole={myPlayer?.hole ?? null}
+          community={live?.hand?.community ?? []}
+          pot={live?.hand?.pot ?? 0}
+          toCall={live?.hand && myPlayer ? Math.max(0, live.hand.current_bet - myPlayer.bet) : 0}
+          street={live?.hand?.street ?? null}
+        />
         {live && !live.finished && live.reentry_open_until ? (
           <View style={{ marginTop: 12, padding: 10, borderRadius: theme.radius.md, borderWidth: 1, borderColor: theme.colors.amber }}>
             <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, color: theme.colors.amber, textAlign: "center" }}>

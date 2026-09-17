@@ -9,7 +9,7 @@ import type { IconName } from "../components/icons";
  *  (💀 🤝 🚨 …) — остаётся эмодзи из шрифта Twemoji. */
 export const PREVIEW_ICONS: Record<string, IconName> = {
   "🎤": "mic", "🖼": "image", "🎬": "film", "🎵": "music", "📎": "clip", "📊": "poll", "⏰": "bell",
-  "🃏": "cards", "📞": "phone", "⚔️": "swords", "⛽": "fuel", "🏆": "trophy", "🎲": "dice", "📅": "calendar",
+  "🃏": "cards", "📞": "phone", "⚔️": "swords", "🏆": "trophy", "🎲": "dice", "📅": "calendar",
 };
 
 export function splitPreviewIcon(text: string): { icon: IconName | null; rest: string } {
@@ -25,7 +25,7 @@ export function filePreview(name: string | null | undefined): string {
   if (!name) return "📎 Файл";
   if (/^voice_\d+\.(m4a|mp3|ogg|opus|webm|aac)$/i.test(name)) return "🎤 Голосовое";
   if (/\.(jpg|jpeg|png|gif|webp)$/i.test(name)) return "🖼 Фото";
-  if (/\.(mp4|mov|mkv|webm)$/i.test(name)) return "🎬 Видео";
+  if (/\.(mp4|mov|m4v|mkv|webm|3gp)$/i.test(name)) return "🎬 Видео";
   if (/\.(m4a|mp3|ogg|opus|wav|aac|flac)$/i.test(name)) return `🎵 ${name}`;
   return `📎 ${name}`;
 }

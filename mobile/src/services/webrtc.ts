@@ -59,7 +59,12 @@ class WebRTCService {
   private peers = new Map<number, RTCPeerConnection>();
   // Signals that arrive before we've acquired a local stream (i.e. before the
   // user accepts) are queued per remote user and flushed on joinCall().
-  private pending = new Map<number, unknown[]>();
+  // У записи — chat_id: по концу звонка (пустой call_active) и по
+  // «Отклонить» хвосты ЭТОГО чата выкидываются (discardPending), а флаш
+  // применяет только сигналы чата, в который входим — иначе протухший
+  // оффер отклонённого звонка отвечался при позднем «Присоединиться» в
+  // никуда и блокировал tie-break, а чужой чат получал фантомный peer.
+  private pending = new Map<number, { chatId: number; signal: unknown }[]>();
   // ICE candidates that arrived before setRemoteDescription completed for that
   // peer. Held here until the SDP lands, then drained.
   private earlyCandidates = new Map<number, unknown[]>();
@@ -74,9 +79,43 @@ class WebRTCService {
   // Какая камера сейчас: фронталка (user) или задняя (environment).
   private facing: "user" | "environment" = "user";
 
+  // --- Живучесть соединений -------------------------------------------------
+  // Кто офферил соединение — тот и делает ICE-restart (как у simple-peer на
+  // десктопе: restartIce зовёт только инициатор, респондер ждёт новый оффер).
+  private initiators = new Map<number, boolean>();
+  // Дебаунс «disconnected» (2с — ICE часто сам возвращается) и сторож
+  // «failed» (20/30с — если никто не восстановил, пересобираем соединение).
+  private restartTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  private failTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  // Висяк прозвона: наш оффер, на который так и не пришёл ансвер (та сторона
+  // была оффлайн / перезапустила приложение и вошла через call_join) — через
+  // 5с после call_active с ней пересобираем соединение по tie-break'у.
+  private staleTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  // Сигналы, не ушедшие из-за закрытого сокета (сеть моргнула): без очереди
+  // оффер/кандидаты терялись, и соединение висло навсегда. Доотправляем на
+  // _ws_open, потом просим ICE перепроверить пути.
+  private outbox: Array<Record<string, unknown>> = [];
+  // Сигналы применяем строго по очереди на каждого peer'а: setRemoteDescription
+  // асинхронный, и кандидат, прилетевший следом за новым оффером, иначе мог
+  // примениться к СТАРОМУ описанию (после ICE-restart — «unknown ufrag»).
+  private chains = new Map<number, Promise<void>>();
+
+  // --- Приём экрана с десктопа --------------------------------------------
+  // Десктоп шарит экран ОТДЕЛЬНЫМ simple-peer'ом на каждого (purpose=screen,
+  // сам — инициатор, role=sender). Мы только принимаем: свой RTCPeerConnection
+  // на каждого шарящего, ответы уходят с role=receiver — так десктоп
+  // маршрутизирует их в свой отправляющий peer. Сами экран не шарим
+  // (нужен MediaProjection — нативная работа, см. CLAUDE.md).
+  private screenPeers = new Map<number, RTCPeerConnection>();
+  private screenEarly = new Map<number, unknown[]>();
+  private pendingScreen = new Map<number, { chatId: number; signal: unknown }[]>();
+  private screenStreams = new Map<number, MediaStream>();
+
   onStream: StreamCb | null = null;
   onPeerLeft: LeftCb | null = null;
   onCallEnded: EndedCb | null = null;
+  onScreenStream: StreamCb | null = null;
+  onScreenEnded: LeftCb | null = null;
 
   getFacing() {
     return this.facing;
@@ -90,6 +129,8 @@ class WebRTCService {
     wsService.off("call_signal", this._onSignal);
     wsService.off("call_end", this._onEnd);
     wsService.off("call_active", this._onCallActive);
+    wsService.off("screen_share_status", this._onScreenStatus);
+    wsService.off("_ws_open", this._onWsOpen);
     wsService.on("call_signal", this._onSignal);
     wsService.on("call_end", this._onEnd);
     // Group calls: the server broadcasts the full participant list on each
@@ -97,6 +138,10 @@ class WebRTCService {
     // connected (mesh) — a brand-new joiner sees everyone, and existing
     // members open a connection to them.
     wsService.on("call_active", this._onCallActive);
+    // Десктоп объявляет старт/стоп шаринга — по «стоп» гасим плитку экрана
+    // сразу, не дожидаясь, пока соединение развалится само.
+    wsService.on("screen_share_status", this._onScreenStatus);
+    wsService.on("_ws_open", this._onWsOpen);
   }
 
   isInCall() {
@@ -133,16 +178,48 @@ class WebRTCService {
   // "waiting for participant". Sort SDP-first and await each apply to keep
   // them strictly sequential.
   private async _flushPending() {
-    for (const [uid, sigs] of Array.from(this.pending.entries())) {
+    const bySdpFirst = (a: unknown, b: unknown) => {
+      const aSdp = (a as { sdp?: string } | null)?.sdp ? 0 : 1;
+      const bSdp = (b as { sdp?: string } | null)?.sdp ? 0 : 1;
+      return aSdp - bSdp;
+    };
+    for (const [uid, entries] of Array.from(this.pending.entries())) {
+      // Только сигналы ТОГО чата, в который входим (звонок в ЛС, пока мы
+      // входили в групповой созвон, — не наш peer).
+      const sigs = entries.filter((e) => e.chatId === this.chatId).map((e) => e.signal);
+      // Хвост без оффера (кандидаты соединения, оффер которого мы не видели)
+      // бесполезен, а responder-peer под него блокировал бы tie-break в
+      // _onCallActive («peer уже есть» — и никто не офферит).
+      if (!sigs.some((s) => (s as { type?: string } | null)?.type === "offer")) continue;
       if (!this.peers.has(uid)) this._createPeer(uid, false);
-      const ordered = [...sigs].sort((a, b) => {
-        const aSdp = (a as { sdp?: string } | null)?.sdp ? 0 : 1;
-        const bSdp = (b as { sdp?: string } | null)?.sdp ? 0 : 1;
-        return aSdp - bSdp;
-      });
-      for (const s of ordered) await this._applySignal(uid, s);
+      for (const s of [...sigs].sort(bySdpFirst)) await this._enqueue(uid, s);
     }
     this.pending.clear();
+    // Экран, который начали шарить, пока мы ещё «звонили» (не приняли)
+    for (const [uid, entries] of Array.from(this.pendingScreen.entries())) {
+      const sigs = entries.filter((e) => e.chatId === this.chatId).map((e) => e.signal);
+      for (const s of [...sigs].sort(bySdpFirst)) await this._applyScreenSignal(uid, s);
+    }
+    this.pendingScreen.clear();
+  }
+
+  /** Выкинуть сигналы, накопленные до входа (чата или все): после
+   *  «Отклонить» и по концу звонка оффер звонившего протух — та сторона
+   *  снесла свой peer к нам, ответ ушёл бы в никуда. */
+  discardPending(chatId?: number) {
+    const prune = (map: Map<number, { chatId: number; signal: unknown }[]>) => {
+      if (chatId == null) {
+        map.clear();
+        return;
+      }
+      for (const [uid, entries] of Array.from(map.entries())) {
+        const rest = entries.filter((e) => e.chatId !== chatId);
+        if (rest.length) map.set(uid, rest);
+        else map.delete(uid);
+      }
+    };
+    prune(this.pending);
+    prune(this.pendingScreen);
   }
 
   /** Присоединение к УЖЕ идущему звонку (плашка «в созвоне» / кнопка при
@@ -178,8 +255,10 @@ class WebRTCService {
       }
       this.peers.delete(uid);
     }
+    this._clearTimers(uid);
     const pc = new RTCPeerConnection(ICE_CONFIG);
     this.peers.set(uid, pc);
+    this.initiators.set(uid, initiator);
 
     if (this.localStream) {
       for (const track of this.localStream.getTracks()) {
@@ -228,15 +307,38 @@ class WebRTCService {
     pc.addEventListener("negotiationneeded", () => {
       void this._renegotiate(uid, pc);
     });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // Живучесть. Раньше «failed» = участник выкинут навсегда: смена сети
+    // (Wi-Fi ↔ LTE, VPN) на любой стороне убивала звонок. Теперь:
+    //   disconnected → через 2с (ICE часто оживает сам) инициатор шлёт
+    //                  оффер с iceRestart, респондер ждёт чужой;
+    //   failed       → инициатор рестартит сразу; сторож 20с (инициатор)
+    //                  / 30с (респондер — чтобы не офферить одновременно)
+    //                  пересобирает соединение свежим оффером, если так и не
+    //                  ожило. Десктопный simple-peer на failed сам себя
+    //                  уничтожает и пару не восстанавливает — наш свежий
+    //                  оффер он примет как новый respondер (createIfMissing);
+    //   closed       → соединение закрыто явно, участник ушёл.
+    pc.addEventListener("iceconnectionstatechange", () => {
+      const st = pc.iceConnectionState as string;
+      if (st === "connected" || st === "completed") {
+        this._clearTimers(uid);
+        return;
+      }
+      if (st === "disconnected") this._scheduleRestart(uid, pc, 2000, "ice=disconnected");
+      if (st === "failed") {
+        this._scheduleRestart(uid, pc, 0, "ice=failed");
+        this._armFailWatch(uid, pc);
+      }
+    });
     pc.addEventListener("connectionstatechange", () => {
       const st = (pc as unknown as { connectionState?: string }).connectionState;
-      if (st === "failed" || st === "closed") {
-        this.peers.delete(uid);
-        this.remoteStreams.delete(uid);
-        this.videoSenders.delete(uid);
-        this.onPeerLeft?.(uid);
-        if (this.peers.size === 0) this._teardown();
+      if (st === "connected") {
+        this._clearTimers(uid);
+      } else if (st === "failed") {
+        this._scheduleRestart(uid, pc, 0, "pc=failed");
+        this._armFailWatch(uid, pc);
+      } else if (st === "closed") {
+        if (this.peers.get(uid) === pc) this._dropPeer(uid);
       }
     });
 
@@ -270,7 +372,7 @@ class WebRTCService {
   }
 
   private _send(uid: number, signal: unknown) {
-    wsService.send({
+    this._emit({
       type: "call_signal",
       chat_id: this.chatId,
       target_user_id: uid,
@@ -279,20 +381,312 @@ class WebRTCService {
     });
   }
 
+  private _sendScreen(uid: number, signal: unknown) {
+    this._emit({
+      type: "call_signal",
+      chat_id: this.chatId,
+      target_user_id: uid,
+      signal,
+      purpose: "screen",
+      role: "receiver",
+    });
+  }
+
+  /** Отправка с очередью: сокет закрыт (сеть моргнула) — сигнал ждёт
+   *  реконнекта, а не пропадает. Очередь конечная: старее полусотни
+   *  сообщений всё равно уже неактуально. */
+  private _emit(msg: Record<string, unknown>) {
+    if (wsService.send(msg)) return;
+    this.outbox.push(msg);
+    if (this.outbox.length > 60) this.outbox.splice(0, this.outbox.length - 60);
+  }
+
+  private _onWsOpen = () => {
+    if (!this.localStream) {
+      this.outbox = [];
+      return;
+    }
+    const queued = this.outbox;
+    this.outbox = [];
+    for (const msg of queued) wsService.send(msg);
+    // После обрыва сети адреса могли смениться — пусть ICE перепроверит пути
+    this.recover("ws-open");
+  };
+
+  /** Проверить все соединения и восстановить упавшие (реконнект сокета,
+   *  возврат приложения из фона). Безопасно звать сколько угодно. */
+  recover(reason: string) {
+    for (const [uid, pc] of this.peers) {
+      const st = pc.iceConnectionState as string;
+      if (st === "disconnected" || st === "failed") this._scheduleRestart(uid, pc, 0, reason);
+    }
+  }
+
+  private _clearTimers(uid: number) {
+    const r = this.restartTimers.get(uid);
+    if (r) clearTimeout(r);
+    this.restartTimers.delete(uid);
+    const f = this.failTimers.get(uid);
+    if (f) clearTimeout(f);
+    this.failTimers.delete(uid);
+    const s = this.staleTimers.get(uid);
+    if (s) clearTimeout(s);
+    this.staleTimers.delete(uid);
+  }
+
+  private _scheduleRestart(uid: number, pc: RTCPeerConnection, delay: number, reason: string) {
+    if (this.restartTimers.has(uid)) return;
+    this.restartTimers.set(
+      uid,
+      setTimeout(() => {
+        this.restartTimers.delete(uid);
+        if (this.peers.get(uid) !== pc) return;
+        const st = pc.iceConnectionState as string;
+        if (st !== "disconnected" && st !== "failed") return; // само ожило
+        void this._restartIce(uid, pc, reason);
+      }, delay),
+    );
+  }
+
+  /** ICE-restart: свежий оффер с новыми ufrag/pwd (только инициатор).
+   *  Если наш прошлый оффер так и висит без ответа (have-local-offer —
+   *  ответ потерялся в обрыве сети), просто шлём его ещё раз. */
+  private async _restartIce(uid: number, pc: RTCPeerConnection, reason: string) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const p = pc as any;
+    if (p.signalingState === "have-local-offer" && pc.localDescription) {
+      console.log(`[webrtc] resend offer to ${uid} (${reason})`);
+      this._send(uid, { type: pc.localDescription.type, sdp: pc.localDescription.sdp });
+      return;
+    }
+    if (!this.initiators.get(uid)) return; // респондер ждёт оффер инициатора
+    if (p.signalingState !== "stable") return;
+    try {
+      console.log(`[webrtc] ICE restart → ${uid} (${reason})`);
+      const offer = await pc.createOffer({ iceRestart: true });
+      await pc.setLocalDescription(offer);
+      this._send(uid, { type: pc.localDescription?.type, sdp: pc.localDescription?.sdp });
+    } catch (err) {
+      console.warn("[webrtc] ICE restart failed", err);
+    }
+  }
+
+  /** Сторож на «failed»: инициатор ждёт 20с, респондер 30с (чтобы не
+   *  офферить навстречу). Не ожило — пересобираем соединение с нуля свежим
+   *  оффером, уже В ЛЮБОЙ роли: другой стороне это обычный входящий оффер. */
+  private _armFailWatch(uid: number, pc: RTCPeerConnection) {
+    if (this.failTimers.has(uid)) return;
+    const delay = this.initiators.get(uid) ? 20000 : 30000;
+    this.failTimers.set(
+      uid,
+      setTimeout(() => {
+        this.failTimers.delete(uid);
+        if (this.peers.get(uid) !== pc || !this.localStream) return;
+        const st = pc.iceConnectionState as string;
+        if (st === "connected" || st === "completed") return;
+        console.log(`[webrtc] peer ${uid} dead for too long — rebuilding`);
+        this._createPeer(uid, true);
+      }, delay),
+    );
+  }
+
+  private _dropPeer(uid: number) {
+    this._clearTimers(uid);
+    const pc = this.peers.get(uid);
+    if (pc) {
+      try {
+        pc.close();
+      } catch {
+        // ignore
+      }
+    }
+    this.peers.delete(uid);
+    this.initiators.delete(uid);
+    this.chains.delete(uid);
+    this.remoteStreams.delete(uid);
+    this.videoSenders.delete(uid);
+    this.earlyCandidates.delete(uid);
+    this.onPeerLeft?.(uid);
+    // localStream уже null = teardown идёт прямо сейчас, второй не нужен
+    if (this.peers.size === 0 && this.localStream) this._teardown();
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private _onSignal = (data: any) => {
     const fromId = data.from_user_id as number;
-    if (data.purpose === "screen") return; // screen-share not supported on mobile yet
+    if (data.purpose === "screen") {
+      this._onScreenSignal(fromId, data);
+      return;
+    }
     const signal = data.signal;
     if (!this.localStream) {
       // Not in a call yet (incoming, awaiting accept) — queue.
       const q = this.pending.get(fromId) ?? [];
-      q.push(signal);
+      q.push({ chatId: Number(data.chat_id), signal });
       this.pending.set(fromId, q);
       return;
     }
-    if (!this.peers.has(fromId)) this._createPeer(fromId, false);
-    this._applySignal(fromId, signal);
+    const existing = this.peers.get(fromId);
+    if (!existing && signal?.type !== "offer") {
+      // Ансвер/кандидат без peer'а — хвост соединения, которого у нас уже
+      // нет. Peer, созданный под ансвер, тут же падал бы на
+      // setRemoteDescription, а созданный под кандидаты — блокировал бы
+      // tie-break в _onCallActive («peer уже есть»). Свежий оффер той
+      // стороны создаст peer как обычно.
+      console.log(`[webrtc] ${signal?.type ?? "candidate"} from ${fromId} without a peer — dropped`);
+      return;
+    }
+    // Оффер на МЁРТВОЕ соединение (та сторона пересобрала своё после
+    // failed) — отвечаем свежим peer'ом, а не пытаемся оживить труп.
+    const dead = existing && (existing.iceConnectionState as string) === "failed";
+    if (!existing || (dead && signal?.type === "offer")) this._createPeer(fromId, false);
+    void this._enqueue(fromId, signal);
+  };
+
+  /** Сигналы одного собеседника — строго по очереди (см. chains). */
+  private _enqueue(uid: number, signal: unknown): Promise<void> {
+    const prev = this.chains.get(uid) ?? Promise.resolve();
+    const next = prev.then(() => this._applySignal(uid, signal)).catch(() => undefined);
+    this.chains.set(uid, next);
+    return next;
+  }
+
+  // --- экран с десктопа -----------------------------------------------------
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _onScreenSignal(uid: number, data: any) {
+    // role=receiver — это ответ ЧУЖОМУ приёмному peer'у (мы не шарим), не наше
+    if (data.role === "receiver") return;
+    const signal = data.signal;
+    if (!signal) return;
+    if (!this.localStream) {
+      const q = this.pendingScreen.get(uid) ?? [];
+      q.push({ chatId: Number(data.chat_id), signal });
+      this.pendingScreen.set(uid, q);
+      return;
+    }
+    void this._applyScreenSignal(uid, signal);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async _applyScreenSignal(uid: number, signal: any) {
+    let pc = this.screenPeers.get(uid);
+    if (!pc) {
+      // Соединение открывает только оффер; кандидаты раньше него — в очередь
+      if (!signal.sdp || signal.type !== "offer") {
+        if (signal.candidate) {
+          const q = this.screenEarly.get(uid) ?? [];
+          q.push(signal);
+          this.screenEarly.set(uid, q);
+        }
+        return;
+      }
+      pc = this._createScreenPeer(uid);
+    }
+    try {
+      if (signal.sdp) {
+        await pc.setRemoteDescription(new RTCSessionDescription({ type: signal.type, sdp: signal.sdp }));
+        if (signal.type === "offer") {
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          this._sendScreen(uid, { type: pc.localDescription?.type, sdp: pc.localDescription?.sdp });
+        }
+        const queued = this.screenEarly.get(uid);
+        if (queued && queued.length) {
+          this.screenEarly.delete(uid);
+          for (const c of queued) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate((c as { candidate: unknown }).candidate as never));
+            } catch (err) {
+              console.warn("[webrtc] screen: drained candidate failed", err);
+            }
+          }
+        }
+      } else if (signal.candidate) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (!(pc as any).remoteDescription) {
+          const q = this.screenEarly.get(uid) ?? [];
+          q.push(signal);
+          this.screenEarly.set(uid, q);
+          return;
+        }
+        await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+      }
+    } catch (err) {
+      console.warn("[webrtc] screen signal failed", err);
+    }
+  }
+
+  private _createScreenPeer(uid: number): RTCPeerConnection {
+    // Старое соединение закрываем, но очередь ранних кандидатов НЕ трогаем:
+    // они пришли вместе с этим же оффером и нужны новому peer'у
+    const old = this.screenPeers.get(uid);
+    if (old) {
+      try {
+        old.close();
+      } catch {
+        // ignore
+      }
+      this.screenPeers.delete(uid);
+      this.screenStreams.delete(uid);
+    }
+    const pc = new RTCPeerConnection(ICE_CONFIG);
+    this.screenPeers.set(uid, pc);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    pc.addEventListener("icecandidate", (e: any) => {
+      const c = e.candidate;
+      if (c) {
+        this._sendScreen(uid, {
+          type: "candidate",
+          candidate: { candidate: c.candidate, sdpMLineIndex: c.sdpMLineIndex, sdpMid: c.sdpMid },
+        });
+      }
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    pc.addEventListener("track", (e: any) => {
+      let stream: MediaStream | undefined = e.streams && e.streams[0];
+      if (!stream) {
+        stream = this.screenStreams.get(uid);
+        if (!stream) stream = new MediaStream(undefined as unknown as MediaStream);
+        try {
+          stream.addTrack(e.track);
+        } catch {
+          // дубликат
+        }
+      }
+      this.screenStreams.set(uid, stream);
+      this.onScreenStream?.(uid, stream);
+    });
+    // Шарящий (инициатор) сам рестартит ICE на disconnected; нам достаточно
+    // не выбрасывать плитку раньше времени — только на failed/closed.
+    pc.addEventListener("connectionstatechange", () => {
+      const st = (pc as unknown as { connectionState?: string }).connectionState;
+      if ((st === "failed" || st === "closed") && this.screenPeers.get(uid) === pc) this._dropScreen(uid, true);
+    });
+    return pc;
+  }
+
+  private _dropScreen(uid: number, notify: boolean) {
+    const pc = this.screenPeers.get(uid);
+    if (pc) {
+      try {
+        pc.close();
+      } catch {
+        // ignore
+      }
+    }
+    const had = this.screenPeers.delete(uid);
+    this.screenEarly.delete(uid);
+    this.screenStreams.delete(uid);
+    if (had && notify) this.onScreenEnded?.(uid);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _onScreenStatus = (data: any) => {
+    if (data.sharing) return;
+    const uid = data.user_id as number;
+    this.pendingScreen.delete(uid);
+    this._dropScreen(uid, true);
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -301,6 +695,22 @@ class WebRTCService {
     if (!pc || !signal) return;
     try {
       if (signal.sdp) {
+        // Глейр: чужой оффер пришёл, пока висит наш. Решает tie-break (меньший
+        // id — инициатор), а НЕ роль прозвона: позвонивший с телефона тоже
+        // «инициатор», но если вошедший позже десктоп с меньшим id офферит
+        // сам (наш оффер прозвона до него не долетел), его оффер надо принять
+        // — иначе обе стороны ждали бы друг друга вечно. Проигравший
+        // откатывает свой оффер и отвечает; выигравший чужой отбрасывает.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (signal.type === "offer" && (pc as any).signalingState === "have-local-offer") {
+          if (this.myId != null && this.myId < uid) return;
+          try {
+            await pc.setLocalDescription({ type: "rollback" } as never);
+          } catch {
+            // натив без rollback — пробуем применить как есть
+          }
+          this.initiators.set(uid, false);
+        }
         await pc.setRemoteDescription(new RTCSessionDescription({ type: signal.type, sdp: signal.sdp }));
         if (signal.type === "offer") {
           const answer = await pc.createAnswer();
@@ -357,21 +767,47 @@ class WebRTCService {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private _onCallActive = (data: any) => {
     const chatId = data.chat_id as number;
+    const participants: number[] = Array.isArray(data.participants) ? data.participants : [];
+    // Звонок кончился (в т.ч. 60с-таймаут «не взяли» — нам приходит только
+    // пустой call_active, без call_end) — его накопленные сигналы больше не
+    // нужны, иначе протухший оффер всплыл бы при следующем joinOngoing.
+    if (participants.length === 0) this.discardPending(chatId);
     // Only consider broadcasts for the call we're currently in.
     if (chatId !== this.chatId) return;
     // Not in the call yet (pre-accept) — don't open extra peers.
     if (!this.localStream || this.myId == null) return;
-    const participants: number[] = Array.isArray(data.participants) ? data.participants : [];
+    const myId = this.myId;
     for (const uid of participants) {
-      if (uid === this.myId) continue;
-      if (this.peers.has(uid)) continue;
-      // Tie-breaker: the participant with the LOWER user_id initiates the
-      // offer. The other side will receive that offer via call_signal and
-      // create the responder peer in _onSignal. Without this both sides
-      // could offer at the same time ("glare") and one of the offers would
-      // be discarded.
-      const initiator = this.myId < uid;
-      this._createPeer(uid, initiator);
+      if (uid === myId) continue;
+      const existing = this.peers.get(uid);
+      if (!existing) {
+        // Tie-breaker: the participant with the LOWER user_id initiates the
+        // offer. The other side will receive that offer via call_signal and
+        // create the responder peer in _onSignal. Without this both sides
+        // could offer at the same time ("glare") and one of the offers would
+        // be discarded.
+        const initiator = myId < uid;
+        this._createPeer(uid, initiator);
+        continue;
+      }
+      // Peer есть, но той стороны в нём нет (наш оффер прозвона без ансвера:
+      // собеседник был оффлайн / перезапустил приложение и вошёл теперь через
+      // call_join). При обычном приёме ансвер приходит сразу за этим
+      // call_active — даём 5с; не пришёл — пересобираем по tie-break'у.
+      // Только для СВОИХ офферов: респондер без SDP просто ждёт, оффер —
+      // забота той стороны.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const hasRemote = () => Boolean((existing as any).remoteDescription);
+      if (!this.initiators.get(uid) || hasRemote() || this.staleTimers.has(uid)) continue;
+      this.staleTimers.set(
+        uid,
+        setTimeout(() => {
+          this.staleTimers.delete(uid);
+          if (this.peers.get(uid) !== existing || !this.localStream || hasRemote()) return;
+          console.log(`[webrtc] offer to ${uid} was never answered — rebuilding by tie-break`);
+          this._createPeer(uid, myId < uid);
+        }, 5000),
+      );
     }
   };
 
@@ -383,7 +819,9 @@ class WebRTCService {
     // чтобы протухшие сигналы отменённого звонка не всплыли в следующем.
     if (!this.localStream) {
       this.pending.delete(fromId);
+      this.pendingScreen.delete(fromId);
       this.earlyCandidates.delete(fromId);
+      this.screenEarly.delete(fromId);
       return;
     }
     if (data.timeout) {
@@ -393,20 +831,15 @@ class WebRTCService {
       return;
     }
     this.pending.delete(fromId);
-    this.earlyCandidates.delete(fromId);
-    this.remoteStreams.delete(fromId);
-    this.videoSenders.delete(fromId);
-    const pc = this.peers.get(fromId);
-    if (pc) {
-      try {
-        pc.close();
-      } catch {
-        // ignore
-      }
-      this.peers.delete(fromId);
+    this.pendingScreen.delete(fromId);
+    this._dropScreen(fromId, true);
+    if (this.peers.has(fromId)) {
+      this._dropPeer(fromId); // сам зовёт onPeerLeft и _teardown, если никого не осталось
+    } else {
+      this.earlyCandidates.delete(fromId);
+      this.onPeerLeft?.(fromId);
+      if (this.peers.size === 0) this._teardown();
     }
-    this.onPeerLeft?.(fromId);
-    if (this.peers.size === 0) this._teardown();
   };
 
   setMuted(muted: boolean) {
@@ -584,6 +1017,11 @@ class WebRTCService {
   }
 
   private _teardown() {
+    // Поток обнуляем ПЕРВЫМ: close() может синхронно дёрнуть
+    // connectionstatechange → _dropPeer, и тот не должен запускать второй
+    // teardown поверх этого.
+    const ls = this.localStream;
+    this.localStream = null;
     this.peers.forEach((pc) => {
       try {
         pc.close();
@@ -592,12 +1030,20 @@ class WebRTCService {
       }
     });
     this.peers.clear();
+    for (const uid of Array.from(this.restartTimers.keys())) this._clearTimers(uid);
+    for (const uid of Array.from(this.failTimers.keys())) this._clearTimers(uid);
+    for (const uid of Array.from(this.staleTimers.keys())) this._clearTimers(uid);
+    this.initiators.clear();
+    this.chains.clear();
+    this.outbox = [];
+    for (const uid of Array.from(this.screenPeers.keys())) this._dropScreen(uid, true);
+    this.pendingScreen.clear();
+    this.screenEarly.clear();
     this.pending.clear();
     this.earlyCandidates.clear();
     this.remoteStreams.clear();
     this.videoSenders.clear();
-    this.localStream?.getTracks().forEach((t) => t.stop());
-    this.localStream = null;
+    ls?.getTracks().forEach((t) => t.stop());
     this.chatId = null;
     this.facing = "user";
     this.onCallEnded?.();

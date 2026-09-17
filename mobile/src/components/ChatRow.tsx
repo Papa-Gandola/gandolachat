@@ -30,9 +30,11 @@ export interface ChatRowData {
 interface Props {
   chat: ChatRowData;
   onPress?: () => void;
+  /** Открытый сейчас чат — подсветка в боковой колонке широкого экрана */
+  active?: boolean;
 }
 
-export function ChatRow({ chat, onPress }: Props) {
+export function ChatRow({ chat, onPress, active }: Props) {
   const theme = useTheme();
   return (
     <Pressable
@@ -45,7 +47,9 @@ export function ChatRow({ chat, onPress }: Props) {
         paddingVertical: 11,
         borderBottomWidth: 1,
         borderBottomColor: theme.colors.border,
-        backgroundColor: pressed ? theme.colors.bgElev : theme.colors.bg,
+        borderLeftWidth: 3,
+        borderLeftColor: active ? theme.colors.accent : "transparent",
+        backgroundColor: pressed || active ? theme.colors.bgElev : theme.colors.bg,
       })}
     >
       <Avatar

@@ -232,8 +232,8 @@ async def chat_stats(
         raise HTTPException(403, "Not a member")
 
     from sqlalchemy import func, or_, and_
-    # Media: image files (anything in /uploads/files with image extension)
-    media_re = r"\.(png|jpg|jpeg|gif|webp|bmp|svg)$"
+    # Media: image + video files (anything in /uploads/files with a media extension)
+    media_re = r"\.(png|jpg|jpeg|gif|webp|bmp|svg|mp4|mov|m4v|webm|mkv|3gp)$"
     media_rows = await db.execute(
         select(func.count()).select_from(Message).where(
             Message.chat_id == chat_id,
@@ -567,6 +567,11 @@ async def get_messages(
     return [_message_out(m) for m in reversed(messages)]
 
 
+# Расширения, которые клиенты играют инлайн-плеером (десктоп — <video>,
+# мобилка — expo-av). Для них лимит размера выше — см. upload_file.
+VIDEO_EXTS = {"mp4", "mov", "m4v", "webm", "mkv", "3gp"}
+
+
 @router.post("/{chat_id}/files", response_model=MessageOut)
 async def upload_file(
     chat_id: int,
@@ -589,19 +594,36 @@ async def upload_file(
     upload_dir = Path(settings.UPLOAD_DIR) / "files"
     upload_dir.mkdir(parents=True, exist_ok=True)
 
-    ext = file.filename.rsplit(".", 1)[-1] if "." in file.filename else "bin"
+    # Имя может не прийти (multipart без filename) — не падать в 500.
+    original_name = file.filename or "file.bin"
+    ext = original_name.rsplit(".", 1)[-1] if "." in original_name else "bin"
     filename = f"{uuid.uuid4()}.{ext}"
     path = upload_dir / filename
 
-    # Per-file cap is 10 MB for multi-pack uploads; single-file legacy uploads still respect
-    # the global MAX_FILE_SIZE_MB setting, whichever is smaller.
-    per_file_cap = min(10, settings.MAX_FILE_SIZE_MB) * 1024 * 1024
+    # Лимит на файл: видео — до MAX_FILE_SIZE_MB (50; ролик с телефона в
+    # 10 МБ не влезает — клиенты играют его инлайн), всё остальное — 10 МБ,
+    # как и раньше (фото и документы влезают). nginx на VPS должен пускать
+    # столько же (client_max_body_size) — иначе 413 прилетит от него.
+    is_video = ext.lower() in VIDEO_EXTS or (file.content_type or "").startswith("video/")
+    cap_mb = settings.MAX_FILE_SIZE_MB if is_video else min(10, settings.MAX_FILE_SIZE_MB)
+    per_file_cap = cap_mb * 1024 * 1024
 
-    content = await file.read()
-    if len(content) > per_file_cap:
-        raise HTTPException(400, f"File too large (max {per_file_cap // (1024 * 1024)}MB per file)")
-    async with aiofiles.open(path, "wb") as f:
-        await f.write(content)
+    # Пишем кусками и рвём по лимиту — не держим 50 МБ в памяти.
+    size = 0
+    try:
+        async with aiofiles.open(path, "wb") as f:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > per_file_cap:
+                    raise HTTPException(400, f"Файл больше {cap_mb} МБ")
+                await f.write(chunk)
+    except BaseException:
+        # Перебор лимита ИЛИ оборвавшаяся загрузка — огрызок на диске не нужен
+        path.unlink(missing_ok=True)
+        raise
 
     # Карточки компендиума создаёт только поллер — /quest_card в подписи файла
     # отрисовался бы как настоящая ачивка (тот же щит, что в WS-обработчике).
@@ -613,7 +635,7 @@ async def upload_file(
         chat_id=chat_id,
         sender_id=current_user.id,
         file_url=f"/uploads/files/{filename}",
-        file_name=file.filename,
+        file_name=original_name,
         content=clean_caption or None,
         media_group_id=(media_group_id[:40] if media_group_id else None),
     )
