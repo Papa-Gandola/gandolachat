@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from pathlib import Path
 
 import httpx
@@ -166,11 +167,26 @@ async def apk_info():
         meta = json.loads(_meta_path().read_text())
     except Exception:
         meta = {}
+    # Версия и номер сборки — из имени релиза «GandolaChat Android 0.8.0
+    # (сборка 8)» (так его называет Actions). По build мобилка сравнивает
+    # себя с зеркалом и просит обновиться (UpdateNagModal); нет имени —
+    # null, мобилка молчит.
+    version, build = _parse_release_name(meta.get("release_name"))
     return {
         "release_name": meta.get("release_name"),
         "updated_at": meta.get("updated_at"),
         "size": meta.get("size") or _apk_path().stat().st_size,
+        "version": version,
+        "build": build,
     }
+
+
+def _parse_release_name(name: str | None) -> tuple[str | None, int | None]:
+    if not name:
+        return None, None
+    m_ver = re.search(r"(\d+\.\d+\.\d+)", name)
+    m_build = re.search(r"\((?:сборка|build)\s*(\d+)\)", name, re.IGNORECASE)
+    return (m_ver.group(1) if m_ver else None), (int(m_build.group(1)) if m_build else None)
 
 
 # FastAPI не добавляет HEAD к GET-ручкам сам — а HEAD шлют curl -I и
