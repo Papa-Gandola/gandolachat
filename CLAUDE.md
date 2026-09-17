@@ -77,8 +77,14 @@ print-логи видны в `docker compose logs` с опозданием (не
 - `app/api/chats.py` — список (последнее сообщение, unread), dm/group
   (группы ≤7), members add/kick, PATCH чата (создатель: name/description/
   admin_ids/compendium_enabled → `chat_updated` без last_message!), leave/
-  delete, messages (limit/before_id), search, файлы ≤50MB (+caption,
-  media_group_id для мозаики), read-status, unread counts, online,
+  delete, messages (limit/before_id), search, файлы (+caption,
+  media_group_id для мозаики): **лимит на файл — видео (`VIDEO_EXTS`
+  mp4/mov/m4v/webm/mkv/3gp или content-type video/*) до MAX_FILE_SIZE_MB=50,
+  остальное 10 МБ**; запись потоком кусками по 1 МБ, перебор → 400 «Файл
+  больше N МБ» и файл удаляется. nginx на VPS должен пускать столько же
+  (`client_max_body_size` ≥ 50m) — конфига в репо нет, при 413 смотреть
+  туда. Пуша на файловые сообщения НЕТ (только WS) — так было всегда.
+  read-status, unread counts, online,
   stats, админ-чистка сообщений до даты. Caption с `/quest_card` режется.
 - Пуш-данные message/call несут chat_name; для ЛС (chat.name=NULL) —
   имя отправителя/звонящего, иначе тап по пушу открывал чат «Чат».
@@ -474,7 +480,12 @@ print-логи видны в `docker compose logs` с опозданием (не
   `VoicePlayer.tsx`: play/pause, перемотка, 1×/1,5×/2×, одно играет разом,
   цвета через currentColor пузыря (обе темы, свой/чужой без своей
   палитры), duration=Infinity у стримящегося m4a → «–:––» до честного
-  значения. Тайные ачивки (`cat==="secret"` у items) — золотые: рамка,
+  значения. **Видео** (mp4/mov/m4v/webm/mkv/3gp, `isVideo`) —
+  `VideoPlayer.tsx`: штатный `<video controls preload=metadata>` в пузыре,
+  ≤420×320 по реальному соотношению сторон (вертикальные — по высоте),
+  одно играет разом, ошибка → ссылка «открыть»; у ожидающего вложения
+  превью — первый кадр `<video muted>`; клиентский лимит 50 МБ видео /
+  10 МБ прочее (как на сервере). Тайные ачивки (`cat==="secret"` у items) — золотые: рамка,
   🔓, заголовок «ТАЙНОЕ ОТКРЫТО», когда все пункты тайные; в полках
   Гандолиума (трофеи + чипы чужих) — золотые целиком (фон/рамка/свечение/
   метка «ТАЙНОЕ»), на мобилке то же.
@@ -690,6 +701,14 @@ useChats/getChatName, иначе показывался бы сам юзер.
 объектом Recording (упавший prepare портит объект навсегда — ловили
 «одно голосовое за запуск»), busy-флаг со сторожком 6с. Кнопка 📝
 Заметок показывает ошибку вместо молчания (404 = «сервер не обновлён»).
+**Видео** (17.09): `components/VideoMessage.tsx` — плашка ▶ с именем, по
+тапу монтируется expo-av `Video` (ExoPlayer / `<video>` в PWA) с нативными
+контролами, `shouldPlay`, ширина 240, высота по naturalSize (вертикальные
+≤320), ошибка → плашка «ещё раз»; НЕ монтировать все ролики ленты сразу
+(декодеры + трафик). «Фото/видео» в скрепке = ImagePicker
+`MediaTypeOptions.All`, ролики >50 МБ отсеиваются до отправки по
+`fileSize`; превью последнего сообщения в списке чатов 🎤/🖼/🎬 —
+`filePreview` в useChats (как markers.ts на десктопе).
 Версия своя (0.7.x, app.json+package.json).
 
 ## Локальная проверка (как я гоняю без окружения хозяина)

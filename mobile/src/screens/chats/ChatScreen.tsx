@@ -24,6 +24,7 @@ import { ChevronLeftIcon, PhoneIcon, SearchIcon, SendIcon } from "../../componen
 import { IconBtn } from "../../components/IconBtn";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import { SwipeableMessage } from "../../components/SwipeableMessage";
+import { VideoMessage } from "../../components/VideoMessage";
 import { VoiceMessage, unloadAllVoicePlayers } from "../../components/VoiceMessage";
 import { ChatsStackParamList } from "../../navigation/types";
 import { apiErrorMessage, chatApi, ChatOut, MessageOut, notesApi, userApi , pollsApi, pinsApi, PollOut, PinOut } from "../../services/api";
@@ -39,6 +40,11 @@ import { useTheme } from "../../theme";
 
 const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp|heic)$/i;
 const AUDIO_EXT = /\.(m4a|mp3|aac|wav|ogg|opus|caf)$/i;
+// Видео играем инлайн (VideoMessage); список — как VIDEO_EXTS на сервере.
+const VIDEO_EXT = /\.(mp4|mov|m4v|webm|mkv|3gp)$/i;
+// Лимит сервера на видео (MAX_FILE_SIZE_MB); проверяем до отправки, чтобы
+// не гонять 200 МБ ради «Файл больше 50 МБ».
+const VIDEO_MAX_MB = 50;
 
 function isImage(url: string | null | undefined): boolean {
   return !!url && IMAGE_EXT.test(url);
@@ -46,6 +52,10 @@ function isImage(url: string | null | undefined): boolean {
 
 function isAudio(url: string | null | undefined): boolean {
   return !!url && AUDIO_EXT.test(url);
+}
+
+function isVideo(url: string | null | undefined): boolean {
+  return !!url && VIDEO_EXT.test(url);
 }
 
 function fileUrl(url: string | null | undefined): string | null {
@@ -506,18 +516,26 @@ export function ChatScreen({ navigation, route }: Props) {
     try {
       // No permission gate here — the system photo picker doesn't need
       // READ_MEDIA on Android 13+, and requesting it can silently deny.
+      // Фото И видео из одной галереи: ролики уходят как обычный файл и
+      // играются инлайн (VideoMessage) у всех.
       const res = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ImagePicker.MediaTypeOptions.All,
         quality: 0.8,
         allowsMultipleSelection: true,
         selectionLimit: 10,
       });
       if (res.canceled || res.assets.length === 0) return;
-      const files = res.assets.map((a, i) => ({
-        uri: a.uri,
-        name: a.fileName ?? `photo_${Date.now()}_${i}.jpg`,
-        type: a.mimeType ?? "image/jpeg",
-      }));
+      const tooBig: string[] = [];
+      const files = res.assets.flatMap((a, i) => {
+        const isVid = a.type === "video";
+        const name = a.fileName ?? (isVid ? `video_${Date.now()}_${i}.mp4` : `photo_${Date.now()}_${i}.jpg`);
+        if (isVid && a.fileSize && a.fileSize > VIDEO_MAX_MB * 1024 * 1024) {
+          tooBig.push(name);
+          return [];
+        }
+        return [{ uri: a.uri, name, type: a.mimeType ?? (isVid ? "video/mp4" : "image/jpeg") }];
+      });
+      if (tooBig.length) Alert.alert("Слишком большое видео", `Лимит ${VIDEO_MAX_MB} МБ: ${tooBig.join(", ")}`);
       await doUploadPack(files);
     } catch (err) {
       Alert.alert("Галерея недоступна", apiErrorMessage(err));
@@ -932,8 +950,9 @@ export function ChatScreen({ navigation, route }: Props) {
             }
           }
           const audio = isAudio(m.file_url) ? fileUrl(m.file_url) : null;
-          const img = !audio && isImage(m.file_url) ? fileUrl(m.file_url) : null;
-          const text = m.content ?? (m.file_url && !img && !audio ? `📎 ${m.file_name ?? "файл"}` : "");
+          const video = !audio && isVideo(m.file_url) ? fileUrl(m.file_url) : null;
+          const img = !audio && !video && isImage(m.file_url) ? fileUrl(m.file_url) : null;
+          const text = m.content ?? (m.file_url && !img && !audio && !video ? `📎 ${m.file_name ?? "файл"}` : "");
           const isHighlighted = highlightMsgId === m.id;
           return (
             <SwipeableMessage key={m.id} onReply={() => beginReply(m)}>
@@ -967,7 +986,11 @@ export function ChatScreen({ navigation, route }: Props) {
                 senderName={showSender ? m.sender_username : undefined}
                 text={text}
                 imageUri={img}
-                media={audio ? <VoiceMessage uri={audio} mine={mine} /> : undefined}
+                media={
+                  audio ? <VoiceMessage uri={audio} mine={mine} />
+                    : video ? <VideoMessage uri={video} name={m.file_name} mine={mine} />
+                      : undefined
+                }
                 onPressImage={() => img && navigation.navigate("MediaViewer", { url: img })}
                 ts={formatTs(m.created_at)}
                 edited={m.is_edited}
@@ -1118,7 +1141,7 @@ export function ChatScreen({ navigation, route }: Props) {
               backgroundColor: theme.colors.bgElev,
             }}
           >
-            <AttachOption label="Фото" onPress={pickPhoto} theme={theme} />
+            <AttachOption label="Фото/видео" onPress={pickPhoto} theme={theme} />
             <AttachOption label="Камера" onPress={takePhoto} theme={theme} />
             <AttachOption label="Файл" onPress={pickFile} theme={theme} />
             {!isNotes ? (

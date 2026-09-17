@@ -8,6 +8,7 @@ import { CompBadge } from "./cosmetics";
 import { filePreview, markerPreview } from "../services/markers";
 import { useTheme } from "../services/theme";
 import { VoicePlayer } from "./VoicePlayer";
+import { VideoPlayer } from "./VideoPlayer";
 import Icon, { Gas } from "./Icon";
 import { Emoji, PreviewText } from "./Emoji";
 
@@ -76,7 +77,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
   const [showFormatBar, setShowFormatBar] = useState(() => localStorage.getItem("showFormatBar") !== "false");
   const [sendFlash, setSendFlash] = useState(false);
   const [highlightMsgId, setHighlightMsgId] = useState<number | null>(null);
-  const [pendingAttachments, setPendingAttachments] = useState<Array<{ file: File; caption: string; preview: string | null }>>([]);
+  const [pendingAttachments, setPendingAttachments] = useState<Array<{ file: File; caption: string; preview: string | null; video?: boolean }>>([]);
   const [uploadingPack, setUploadingPack] = useState(false);
   const [otherLastSeenAt, setOtherLastSeenAt] = useState<string | null | undefined>(undefined);
   const [, setTimeTick] = useState(0);
@@ -772,11 +773,16 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
     if (files.length === 0) return;
     // Cap at 10 per pack; if user dropped 12 we keep the first 10
     const toAdd = files.slice(0, 10 - pendingAttachments.length);
-    const enriched = toAdd.map((file) => ({
-      file,
-      caption: "",
-      preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
-    }));
+    const enriched = toAdd.map((file) => {
+      const video = isVideoFile(file);
+      return {
+        file,
+        caption: "",
+        // Картинке и видео — превью (у видео в <video> покажется первый кадр)
+        preview: file.type.startsWith("image/") || video ? URL.createObjectURL(file) : null,
+        video,
+      };
+    });
     setPendingAttachments((prev) => [...prev, ...enriched].slice(0, 10));
   }
 
@@ -802,8 +808,10 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
     try {
       // Upload sequentially so the server-side broadcast order matches the user's order
       for (const att of pendingAttachments) {
-        if (att.file.size > 10 * 1024 * 1024) {
-          alert(`Файл "${att.file.name}" больше 10 МБ`);
+        // Лимиты сервера: видео до 50 МБ (играется инлайн), остальное — 10 МБ
+        const limitMb = isVideoFile(att.file) ? 50 : 10;
+        if (att.file.size > limitMb * 1024 * 1024) {
+          alert(`Файл "${att.file.name}" больше ${limitMb} МБ`);
           continue;
         }
         await chatApi.uploadFile(chat.id, att.file, att.caption, groupId);
@@ -899,6 +907,13 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
   }
   function isVoiceName(name: string | null | undefined) {
     return !!name && /^voice_\d+\./i.test(name);
+  }
+  // Видео — инлайн-плеер (VideoPlayer); список тот же, что VIDEO_EXTS на сервере.
+  function isVideo(url: string) {
+    return /\.(mp4|mov|m4v|webm|mkv|3gp)$/i.test(url);
+  }
+  function isVideoFile(file: File) {
+    return file.type.startsWith("video/") || isVideo(file.name);
   }
 
   function formatLastSeen(iso: string | null | undefined): string | null {
@@ -1411,6 +1426,12 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
                           voice={isVoiceName(msg.file_name)}
                           isNeo={isNeo}
                         />
+                      ) : isVideo(msg.file_url) ? (
+                        <VideoPlayer
+                          src={`${BASE_URL}${msg.file_url}`}
+                          name={msg.file_name}
+                          isNeo={isNeo}
+                        />
                       ) : (
                         <a href={`${BASE_URL}${msg.file_url}`} target="_blank" rel="noreferrer" style={s.fileLink}>
                           <Icon name="clip" size={14} />{msg.file_name}
@@ -1769,7 +1790,9 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
                 borderRadius: isNeo ? 0 : 4,
                 border: isNeo ? "1px solid var(--border)" : undefined,
               }}>
-                {att.preview ? (
+                {att.preview && att.video ? (
+                  <video src={att.preview} muted preload="metadata" style={{ width: 48, height: 48, objectFit: "cover", borderRadius: isNeo ? 0 : 4, flexShrink: 0, background: "#000" }} />
+                ) : att.preview ? (
                   <img src={att.preview} style={{ width: 48, height: 48, objectFit: "cover", borderRadius: isNeo ? 0 : 4, flexShrink: 0 }} />
                 ) : (
                   <div style={{ width: 48, height: 48, background: "var(--bg-input)", borderRadius: isNeo ? 0 : 4, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", flexShrink: 0 }}><Icon name="clip" size={22} /></div>
