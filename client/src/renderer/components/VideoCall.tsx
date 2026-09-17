@@ -76,6 +76,14 @@ export default function VideoCall({ chat, currentUser, initiator, initiatorUserI
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
   const [outputDevices, setOutputDevices] = useState<MediaDeviceInfo[]>([]);
   const [micGain, setMicGain] = useState(100);
+  // "" = системный микрофон по умолчанию (как при входе в звонок).
+  const [micDeviceId, setMicDeviceId] = useState<string>("");
+  // Растёт при каждой смене микрофона — перезапускает анализатор «говорю»:
+  // MediaStreamSource привязан к дорожке на момент создания, после
+  // replaceTrack он читал остановленную старую и ободок гас навсегда.
+  const [micEpoch, setMicEpoch] = useState(0);
+  const [micError, setMicError] = useState<string | null>(null);
+  const [defaultMicLabel, setDefaultMicLabel] = useState<string>("");
   const [outputDeviceId, setOutputDeviceId] = useState<string>("");
   const [usingRelay, setUsingRelay] = useState(false);
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -163,15 +171,26 @@ export default function VideoCall({ chat, currentUser, initiator, initiatorUserI
       setSelfSpeaking(avg > 15);
     }, 100);
     return () => { clearInterval(interval); ac.close(); };
-  }, [remoteVideos.length]); // re-run when call connects
+  }, [remoteVideos.length, micEpoch]); // re-run when call connects / mic switched
 
-  // Load available devices
+  // Load available devices (+ пересчитать, когда посреди звонка воткнули
+  // гарнитуру — иначе её нет в списке до перезахода).
   useEffect(() => {
-    navigator.mediaDevices.enumerateDevices().then((devices) => {
-      setAudioDevices(devices.filter((d) => d.kind === "audioinput"));
+    const load = () => navigator.mediaDevices.enumerateDevices().then((devices) => {
+      const inputs = devices.filter((d) => d.kind === "audioinput");
+      // Виртуальные «default»/«communications» Chromium'а в список не кладём —
+      // им соответствует пункт «По умолчанию» (audio: true); по их id после
+      // смены устройства Windows отдавал немой трек. Подпись «Default - X»
+      // используем, чтобы показать, какой это микрофон.
+      const def = inputs.find((d) => d.deviceId === "default");
+      setDefaultMicLabel(def?.label ? def.label.replace(/^default\s*-\s*/i, "") : "");
+      setAudioDevices(inputs.filter((d) => d.deviceId !== "default" && d.deviceId !== "communications"));
       setVideoDevices(devices.filter((d) => d.kind === "videoinput"));
       setOutputDevices(devices.filter((d) => d.kind === "audiooutput"));
-    });
+    }).catch(() => {});
+    load();
+    navigator.mediaDevices.addEventListener?.("devicechange", load);
+    return () => navigator.mediaDevices.removeEventListener?.("devicechange", load);
   }, []);
 
   // Poll WebRTC stats every 8 seconds to know whether any peer pair is going
@@ -789,26 +808,25 @@ export default function VideoCall({ chat, currentUser, initiator, initiatorUserI
         <div style={{ ...s.settingsPanel, ...(isNeo ? { borderRadius: 0, border: "1.5px solid var(--accent)", background: "#0a0a0a" } : {}) }}>
           <div style={s.settingRow}>
             <label style={{ ...s.settingLabel, ...mono, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.05em" } : {}) }}>{isNeo ? "// МИКРОФОН" : "Микрофон"}</label>
-            <select style={{ ...s.settingSelect, ...mono, ...(isNeo ? { borderRadius: 0 } : {}) }} onChange={async (e) => {
+            <select value={micDeviceId} style={{ ...s.settingSelect, ...mono, ...(isNeo ? { borderRadius: 0 } : {}) }} onChange={async (e) => {
+              const id = e.target.value;
+              setMicError(null);
               try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: e.target.value } }, video: false });
-                const newTrack = stream.getAudioTracks()[0];
-                const ls = webrtcService.getLocalStream();
-                if (ls) {
-                  const oldTrack = ls.getAudioTracks()[0];
-                  if (oldTrack) { ls.removeTrack(oldTrack); oldTrack.stop(); }
-                  ls.addTrack(newTrack);
-                }
-                // Push the new track into every active peer connection so listeners
-                // actually hear from the new mic, not the old one.
-                webrtcService.replaceAudioTrack(newTrack);
-                // Reset gain context to use new audio source
-                webrtcService.resetGainContext();
-                if (micGain !== 100) webrtcService.setMicGain(micGain);
-              } catch (err) { console.error("[mic] change failed", err); }
+                // Новая дорожка уходит во все peer'ы, gain-контекст пересобирается,
+                // мьют переносится; при неудаче остаёмся на прежнем микрофоне
+                // (select — контролируемый, откатится сам).
+                await webrtcService.switchMicrophone(id, { muted, gain: micGain });
+                setMicDeviceId(id);
+                setMicEpoch((n) => n + 1);
+              } catch (err) {
+                console.error("[mic] change failed", err);
+                setMicError("Микрофон не отвечает — оставил прежний");
+              }
             }}>
+              <option value="">{defaultMicLabel ? `По умолчанию (${defaultMicLabel})` : "По умолчанию"}</option>
               {audioDevices.map((d) => <option key={d.deviceId} value={d.deviceId}>{d.label || "Микрофон"}</option>)}
             </select>
+            {micError && <div style={{ ...mono, color: "#ed4245", fontSize: 12, marginTop: 4 }}>{micError}</div>}
           </div>
           <div style={s.settingRow}>
             <label style={{ ...s.settingLabel, ...mono, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.05em" } : {}) }}>{isNeo ? "// КАМЕРА" : "Камера"}</label>

@@ -82,6 +82,10 @@ class WebRTCService {
   // «failed» (20/30с — если никто не восстановил, пересобираем соединение).
   private restartTimers = new Map<number, ReturnType<typeof setTimeout>>();
   private failTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  // Висяк прозвона: наш оффер, на который так и не пришёл ансвер (та сторона
+  // была оффлайн / перезапустила приложение и вошла через call_join) — через
+  // 5с после call_active с ней пересобираем соединение по tie-break'у.
+  private staleTimers = new Map<number, ReturnType<typeof setTimeout>>();
   // Сигналы, не ушедшие из-за закрытого сокета (сеть моргнула): без очереди
   // оффер/кандидаты терялись, и соединение висло навсегда. Доотправляем на
   // _ws_open, потом просим ICE перепроверить пути.
@@ -398,6 +402,9 @@ class WebRTCService {
     const f = this.failTimers.get(uid);
     if (f) clearTimeout(f);
     this.failTimers.delete(uid);
+    const s = this.staleTimers.get(uid);
+    if (s) clearTimeout(s);
+    this.staleTimers.delete(uid);
   }
 
   private _scheduleRestart(uid: number, pc: RTCPeerConnection, delay: number, reason: string) {
@@ -493,6 +500,15 @@ class WebRTCService {
       return;
     }
     const existing = this.peers.get(fromId);
+    if (!existing && signal?.type !== "offer") {
+      // Ансвер/кандидат без peer'а — хвост соединения, которого у нас уже
+      // нет. Peer, созданный под ансвер, тут же падал бы на
+      // setRemoteDescription, а созданный под кандидаты — блокировал бы
+      // tie-break в _onCallActive («peer уже есть»). Свежий оффер той
+      // стороны создаст peer как обычно.
+      console.log(`[webrtc] ${signal?.type ?? "candidate"} from ${fromId} without a peer — dropped`);
+      return;
+    }
     // Оффер на МЁРТВОЕ соединение (та сторона пересобрала своё после
     // failed) — отвечаем свежим peer'ом, а не пытаемся оживить труп.
     const dead = existing && (existing.iceConnectionState as string) === "failed";
@@ -652,17 +668,21 @@ class WebRTCService {
     if (!pc || !signal) return;
     try {
       if (signal.sdp) {
-        // Глейр: чужой оффер пришёл, пока висит наш. Респондер (по tie-break)
-        // вежливо откатывает свой и принимает чужой; инициатор чужой
-        // отбрасывает — та сторона откатится сама.
+        // Глейр: чужой оффер пришёл, пока висит наш. Решает tie-break (меньший
+        // id — инициатор), а НЕ роль прозвона: позвонивший с телефона тоже
+        // «инициатор», но если вошедший позже десктоп с меньшим id офферит
+        // сам (наш оффер прозвона до него не долетел), его оффер надо принять
+        // — иначе обе стороны ждали бы друг друга вечно. Проигравший
+        // откатывает свой оффер и отвечает; выигравший чужой отбрасывает.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         if (signal.type === "offer" && (pc as any).signalingState === "have-local-offer") {
-          if (this.initiators.get(uid)) return;
+          if (this.myId != null && this.myId < uid) return;
           try {
             await pc.setLocalDescription({ type: "rollback" } as never);
           } catch {
             // натив без rollback — пробуем применить как есть
           }
+          this.initiators.set(uid, false);
         }
         await pc.setRemoteDescription(new RTCSessionDescription({ type: signal.type, sdp: signal.sdp }));
         if (signal.type === "offer") {
@@ -725,16 +745,38 @@ class WebRTCService {
     // Not in the call yet (pre-accept) — don't open extra peers.
     if (!this.localStream || this.myId == null) return;
     const participants: number[] = Array.isArray(data.participants) ? data.participants : [];
+    const myId = this.myId;
     for (const uid of participants) {
-      if (uid === this.myId) continue;
-      if (this.peers.has(uid)) continue;
-      // Tie-breaker: the participant with the LOWER user_id initiates the
-      // offer. The other side will receive that offer via call_signal and
-      // create the responder peer in _onSignal. Without this both sides
-      // could offer at the same time ("glare") and one of the offers would
-      // be discarded.
-      const initiator = this.myId < uid;
-      this._createPeer(uid, initiator);
+      if (uid === myId) continue;
+      const existing = this.peers.get(uid);
+      if (!existing) {
+        // Tie-breaker: the participant with the LOWER user_id initiates the
+        // offer. The other side will receive that offer via call_signal and
+        // create the responder peer in _onSignal. Without this both sides
+        // could offer at the same time ("glare") and one of the offers would
+        // be discarded.
+        const initiator = myId < uid;
+        this._createPeer(uid, initiator);
+        continue;
+      }
+      // Peer есть, но той стороны в нём нет (наш оффер прозвона без ансвера:
+      // собеседник был оффлайн / перезапустил приложение и вошёл теперь через
+      // call_join). При обычном приёме ансвер приходит сразу за этим
+      // call_active — даём 5с; не пришёл — пересобираем по tie-break'у.
+      // Только для СВОИХ офферов: респондер без SDP просто ждёт, оффер —
+      // забота той стороны.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const hasRemote = () => Boolean((existing as any).remoteDescription);
+      if (!this.initiators.get(uid) || hasRemote() || this.staleTimers.has(uid)) continue;
+      this.staleTimers.set(
+        uid,
+        setTimeout(() => {
+          this.staleTimers.delete(uid);
+          if (this.peers.get(uid) !== existing || !this.localStream || hasRemote()) return;
+          console.log(`[webrtc] offer to ${uid} was never answered — rebuilding by tie-break`);
+          this._createPeer(uid, myId < uid);
+        }, 5000),
+      );
     }
   };
 
@@ -959,6 +1001,7 @@ class WebRTCService {
     this.peers.clear();
     for (const uid of Array.from(this.restartTimers.keys())) this._clearTimers(uid);
     for (const uid of Array.from(this.failTimers.keys())) this._clearTimers(uid);
+    for (const uid of Array.from(this.staleTimers.keys())) this._clearTimers(uid);
     this.initiators.clear();
     this.chains.clear();
     this.outbox = [];

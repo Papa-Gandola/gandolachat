@@ -23,8 +23,21 @@ class WebRTCService {
   private localScreenStream: MediaStream | null = null;
   private currentChatId: number | null = null;
   private myUserId: number | null = null;
-  private pendingSignals: Map<string, any[]> = new Map(); // key = `${userId}:${purpose}`
+  // Сигналы, пришедшие ДО того, как у нас есть локальный поток (входящий
+  // ещё не принят). Ключ `${userId}:${purpose}:${role}`; у записи — chat_id,
+  // чтобы по концу звонка (пустой call_active) выкинуть именно его хвосты.
+  private pendingSignals: Map<string, { chatId: number; signal: any }[]> = new Map();
   private _videoSenders = new Map<number, RTCRtpSender>(); // userId -> video sender (for disable/enable)
+  // Метаданные webcam-peer'ов: наша роль и «видели ли SDP той стороны».
+  // Инициаторский peer, так и не получивший ансвера, — «висяк» прозвона
+  // (оффер до собеседника не долетел: он был оффлайн/перезапустил
+  // приложение); когда он входит через call_join, висяк пересобираем по
+  // tie-break'у — см. _handleCallActive/_handleSignal.
+  private peerMeta = new Map<number, { initiator: boolean; remoteSdp: boolean }>();
+  // Peer'ы, которые сносим САМИ (пересборка): их close — не «участник вышел».
+  private silentPeers = new WeakSet<SimplePeer.Instance>();
+  private staleTimers = new Map<number, number>();
+  private lastParticipants: number[] = [];
 
   onStream: OnStreamCallback | null = null;
   onScreenStream: OnStreamCallback | null = null;
@@ -87,7 +100,7 @@ class WebRTCService {
   // Flush queued signals (webcam AND screen) that arrived before we got our
   // stream. Key format: `${userId}:${purpose}:${role}`
   private _flushPendingSignals() {
-    for (const [key, signals] of Array.from(this.pendingSignals.entries())) {
+    for (const [key, entries] of Array.from(this.pendingSignals.entries())) {
       const [uidStr, purpose, role] = key.split(":");
       const userId = Number(uidStr);
       let targetMap: Map<number, SimplePeer.Instance>;
@@ -96,15 +109,46 @@ class WebRTCService {
       } else {
         targetMap = this.peers;
       }
+      const signals = entries.map((e) => e.signal);
+      // Хвост без оффера (кандидаты соединения, оффер которого мы не видели —
+      // например, после перезапуска приложения) бесполезен, а responder-peer,
+      // созданный под него, заблокировал бы tie-break в _handleCallActive
+      // («peer уже есть» — и никто не офферит).
+      if (purpose === "webcam" && !signals.some((s) => s?.type === "offer")) continue;
       // For receiver-role screens, the sendingPeer should already exist. For others, create non-initiator.
       if (!targetMap.has(userId) && !(purpose === "screen" && role === "receiver")) {
         this._createPeer(userId, false, purpose === "screen" ? "screen" : "webcam");
       }
       for (const sig of signals) {
+        if (purpose === "webcam") this._noteRemoteSdp(userId, sig);
         try { targetMap.get(userId)?.signal(sig); } catch {}
       }
     }
     this.pendingSignals.clear();
+  }
+
+  private _noteRemoteSdp(userId: number, sig: any) {
+    if (sig?.type !== "offer" && sig?.type !== "answer") return;
+    const meta = this.peerMeta.get(userId);
+    if (meta) meta.remoteSdp = true;
+  }
+
+  private _clearStaleTimer(uid: number) {
+    const t = this.staleTimers.get(uid);
+    if (t != null) window.clearTimeout(t);
+    this.staleTimers.delete(uid);
+  }
+
+  // Выкинуть сигналы, накопленные до входа (чата или все). После «Отклонить»
+  // оффер звонящего протухает: свой peer к нам он снёс по нашему call_end, и
+  // ответ на тот оффер при позднем «Присоединиться» ушёл бы в никуда — обе
+  // стороны ждали бы друг друга.
+  discardPending(chatId?: number) {
+    if (chatId == null) { this.pendingSignals.clear(); return; }
+    for (const [key, entries] of Array.from(this.pendingSignals.entries())) {
+      const rest = entries.filter((e) => e.chatId !== chatId);
+      if (rest.length) this.pendingSignals.set(key, rest); else this.pendingSignals.delete(key);
+    }
   }
 
   // Присоединение к УЖЕ идущему звонку (плашка «в созвоне»). Серверу шлём
@@ -148,8 +192,16 @@ class WebRTCService {
     // Destroy existing peer in this same slot if any (reconnect case)
     const existing = map.get(targetUserId);
     if (existing) {
+      // Свой же снос — не «участник вышел». Без метки close старого peer'а
+      // (simple-peer шлёт его микротаской, т.е. ПОСЛЕ map.set нового) удалял
+      // бы из карты уже НОВЫЙ peer и играл звук отбоя.
+      this.silentPeers.add(existing);
       existing.destroy();
       map.delete(targetUserId);
+    }
+    if (purpose === "webcam") {
+      this.peerMeta.set(targetUserId, { initiator, remoteSdp: false });
+      this._clearStaleTimer(targetUserId);
     }
 
     const peerOpts: any = {
@@ -240,7 +292,10 @@ class WebRTCService {
     }
 
     peer.on("close", () => {
+      if (map.get(targetUserId) !== peer) return; // слот уже занят свежим peer'ом — это эхо старого
       map.delete(targetUserId);
+      if (purpose === "webcam") this.peerMeta.delete(targetUserId);
+      if (this.silentPeers.has(peer)) return;
       if (purpose === "screen") {
         // Only notify the UI when an INCOMING screen peer closes (remote stopped sharing).
         // Our own outgoing peer closing is just us stopping the share locally.
@@ -252,7 +307,10 @@ class WebRTCService {
 
     peer.on("error", (err) => {
       console.error(`[WebRTC] ${purpose} peer error with`, targetUserId, err);
+      if (map.get(targetUserId) !== peer) return;
       map.delete(targetUserId);
+      if (purpose === "webcam") this.peerMeta.delete(targetUserId);
+      if (this.silentPeers.has(peer)) return;
       if (purpose === "screen") {
         if (!initiator) this.onScreenEnded?.(targetUserId);
       } else {
@@ -286,14 +344,16 @@ class WebRTCService {
     const fromId = data.from_user_id;
     const purpose: "webcam" | "screen" = data.purpose === "screen" ? "screen" : "webcam";
     const remoteRole: "sender" | "receiver" | undefined = data.role;
-    console.log(`[WebRTC] signal IN ←`, fromId, `purpose=${data.purpose ?? "<missing>"} role=${remoteRole ?? "-"}`);
+    const sig = data.signal;
+    const sigType: string | undefined = sig?.type;
+    console.log(`[WebRTC] signal IN ←`, fromId, `purpose=${data.purpose ?? "<missing>"} role=${remoteRole ?? "-"} sig=${sigType ?? "candidate"}`);
 
     // Queue pre-join signals under a key that also distinguishes role, so
     // flush later routes them correctly.
     const queueKey = `${fromId}:${purpose}:${remoteRole ?? "?"}`;
     if (!this.localStream) {
       if (!this.pendingSignals.has(queueKey)) this.pendingSignals.set(queueKey, []);
-      this.pendingSignals.get(queueKey)!.push(data.signal);
+      this.pendingSignals.get(queueKey)!.push({ chatId: Number(data.chat_id), signal: sig });
       return;
     }
 
@@ -314,6 +374,24 @@ class WebRTCService {
     } else {
       map = this.peers;
       createIfMissing = true;
+      const meta = this.peerMeta.get(fromId);
+      if (sigType === "offer" && map.has(fromId) && meta?.initiator && !meta.remoteSdp) {
+        // Наш оффер прозвона так и висит без ответа, а собеседник вошёл через
+        // call_join и по tie-break'у офферит сам — уступаем: висяк долой,
+        // отвечаем свежим responder-peer'ом. Иначе simple-peer падал на
+        // setRemoteDescription(offer) в have-local-offer, оффер терялся, и
+        // обе стороны ждали друг друга вечно.
+        console.log(`[WebRTC] offer from ${fromId} hits my unanswered offer — yielding (responder)`);
+        this._createPeer(fromId, false, "webcam");
+      } else if (!map.has(fromId) && sigType !== "offer") {
+        // Ансвер/кандидат без peer'а — хвост соединения, которого у нас уже
+        // нет (снесли по call_end / пересобрали). Responder-peer, скормленный
+        // ансвером, тут же падал бы, а созданный под кандидаты — блокировал
+        // tie-break («peer есть»). Свежий оффер той стороны создаст peer как
+        // обычно.
+        console.warn(`[WebRTC] ${sigType ?? "candidate"} from ${fromId} without a peer — dropped`);
+        return;
+      }
     }
 
     if (!map.has(fromId)) {
@@ -323,36 +401,64 @@ class WebRTCService {
       }
       this._createPeer(fromId, false, purpose);
     }
+    if (purpose === "webcam") this._noteRemoteSdp(fromId, sig);
 
     try {
-      map.get(fromId)?.signal(data.signal);
+      map.get(fromId)?.signal(sig);
     } catch (err) {
       console.error(`[WebRTC] ${purpose} signal error`, fromId, err);
       if (createIfMissing) {
         this._createPeer(fromId, false, purpose);
-        try { map.get(fromId)?.signal(data.signal); } catch {}
+        if (purpose === "webcam") this._noteRemoteSdp(fromId, sig);
+        try { map.get(fromId)?.signal(sig); } catch {}
       }
     }
   };
 
   private _handleCallActive = (data: any) => {
     const chatId = data.chat_id as number;
+    const participants: number[] = Array.isArray(data.participants) ? data.participants : [];
+    // Звонок кончился — его сигналы, накопленные до входа, больше не нужны
+    // (иначе протухший оффер всплыл бы при joinOngoing в СЛЕДУЮЩИЙ звонок).
+    if (participants.length === 0) this.discardPending(chatId);
     // Only act on broadcasts for the call we're currently in.
     if (chatId !== this.currentChatId) return;
     // Not in the call yet (haven't accepted) — skip; joinCall handles
     // the initial peer for us.
     if (!this.localStream || this.myUserId == null) return;
     const myId = this.myUserId;
-    const participants: number[] = Array.isArray(data.participants) ? data.participants : [];
+    this.lastParticipants = participants;
     for (const uid of participants) {
       if (uid === myId) continue;
-      if (this.peers.has(uid)) continue;
-      // Tie-breaker: the participant with the LOWER user_id initiates the
-      // offer. The other side will receive that offer via call_signal and
-      // become responder in _handleSignal. Without this both sides would
-      // try to offer at the same time ("glare").
-      const initiator = myId < uid;
-      this._createPeer(uid, initiator, "webcam");
+      if (!this.peers.has(uid)) {
+        // Tie-breaker: the participant with the LOWER user_id initiates the
+        // offer. The other side will receive that offer via call_signal and
+        // become responder in _handleSignal. Without this both sides would
+        // try to offer at the same time ("glare").
+        const initiator = myId < uid;
+        this._createPeer(uid, initiator, "webcam");
+        continue;
+      }
+      // Peer есть, но SDP той стороны мы не видели, а инициатор — мы. При
+      // обычном ответе на звонок ансвер приходит СРАЗУ за этим call_active
+      // (сервер рассылает состав до пересылки сигнала) — даём 5с. Не пришёл
+      // — это висяк прозвона: собеседник наш оффер не получал (был оффлайн,
+      // перезапустил приложение) и вошёл через call_join. Пересобираем по
+      // tie-break'у — меньший id офферит; раньше «peer уже есть → skip»
+      // оставлял обе стороны ждать друг друга вечно («не получается
+      // зайти через Присоединиться»). Responder без SDP не трогаем —
+      // оффер там забота той стороны.
+      const meta = this.peerMeta.get(uid);
+      if (!meta || !meta.initiator || meta.remoteSdp || this.staleTimers.has(uid)) continue;
+      const stalePeer = this.peers.get(uid)!;
+      this.staleTimers.set(uid, window.setTimeout(() => {
+        this.staleTimers.delete(uid);
+        const m = this.peerMeta.get(uid);
+        if (!this.localStream || this.peers.get(uid) !== stalePeer || !m || m.remoteSdp) return;
+        if (!this.lastParticipants.includes(uid)) return;
+        console.log(`[WebRTC] my offer to ${uid} was never answered — rebuilding by tie-break`);
+        this._createPeer(uid, myId < uid, "webcam");
+      }, 5000));
     }
   };
 
@@ -378,6 +484,8 @@ class WebRTCService {
       this.screenReceivingPeers.clear();
       this.pendingSignals.clear();
       this._videoSenders.clear();
+      this.peerMeta.clear();
+      for (const uid of Array.from(this.staleTimers.keys())) this._clearStaleTimer(uid);
       this.localStream?.getTracks().forEach((t) => t.stop());
       this.localStream = null;
       this.localScreenStream?.getTracks().forEach((t) => t.stop());
@@ -388,6 +496,8 @@ class WebRTCService {
     }
     this.peers.get(fromId)?.destroy();
     this.peers.delete(fromId);
+    this.peerMeta.delete(fromId);
+    this._clearStaleTimer(fromId);
     this.screenSendingPeers.get(fromId)?.destroy();
     this.screenSendingPeers.delete(fromId);
     this.screenReceivingPeers.get(fromId)?.destroy();
@@ -426,6 +536,9 @@ class WebRTCService {
     this.currentChatId = null;
     this.pendingSignals.clear();
     this._videoSenders.clear();
+    this.peerMeta.clear();
+    for (const uid of Array.from(this.staleTimers.keys())) this._clearStaleTimer(uid);
+    this.lastParticipants = [];
     if (this.gainContext) {
       this.gainContext.close().catch(() => {});
       this.gainContext = null;
@@ -538,6 +651,53 @@ class WebRTCService {
           console.error("[WebRTC] replaceTrack(audio) failed", err);
         });
       }
+    });
+  }
+
+  // Смена микрофона посреди звонка. deviceId "" = системный по умолчанию
+  // (audio: true — ровно как при входе в звонок). Виртуальные id Chromium'а
+  // «default»/«communications» НЕ запрашиваем: на Windows выбор «default»
+  // после смены устройства давал немой трек (все переставали слышать), а
+  // тот же микрофон по физическому id работал. Новый трек сперва проверяем
+  // на живость и только потом гасим старый — при неудаче звонок остаётся на
+  // прежнем микрофоне, а не без звука. Мьют переносится на новый трек.
+  async switchMicrophone(deviceId: string, opts: { muted: boolean; gain: number }): Promise<MediaStreamTrack> {
+    const ls = this.localStream;
+    if (!ls) throw new Error("not in a call");
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+      video: false,
+    });
+    const newTrack = stream.getAudioTracks()[0];
+    if (!newTrack) throw new Error("no audio track");
+    if (!(await this._waitTrackLive(newTrack, 4000))) {
+      newTrack.stop();
+      throw new Error("microphone produced no audio (muted track)");
+    }
+    newTrack.enabled = !opts.muted;
+    const old = ls.getAudioTracks();
+    // Сначала добавить, потом убрать: анализатор «говорю» и gain-контекст
+    // берут ПЕРВУЮ аудиодорожку потока.
+    ls.addTrack(newTrack);
+    old.forEach((t) => { ls.removeTrack(t); t.stop(); });
+    this.replaceAudioTrack(newTrack);
+    // Gain-контекст привязан к старой дорожке — пересобрать под новую.
+    this.resetGainContext();
+    if (opts.gain !== 100) this.setMicGain(opts.gain);
+    return newTrack;
+  }
+
+  // Дорожка «живая», когда readyState=live и не muted (muted у только что
+  // открытого устройства = данных нет; Bluetooth-гарнитура может
+  // раскачиваться пару секунд — ждём unmute до таймаута).
+  private _waitTrackLive(track: MediaStreamTrack, timeoutMs: number): Promise<boolean> {
+    if (track.readyState !== "live") return Promise.resolve(false);
+    if (!track.muted) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const done = (ok: boolean) => { window.clearTimeout(timer); track.removeEventListener("unmute", onUnmute); resolve(ok); };
+      const onUnmute = () => done(true);
+      const timer = window.setTimeout(() => done(track.readyState === "live" && !track.muted), timeoutMs);
+      track.addEventListener("unmute", onUnmute);
     });
   }
 

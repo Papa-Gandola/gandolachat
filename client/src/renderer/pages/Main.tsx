@@ -415,6 +415,9 @@ export default function Main({ token, user, onLogout }: Props) {
     setIncomingCalls((prev) => prev.filter((c) => c.chatId !== chatId));
     // Tell the server this was an explicit decline — recorded as "Отклонён" in chat history
     wsService.send({ type: "call_end", chat_id: chatId, declined: true });
+    // Оффер звонящего протух: по нашему call_end он снесёт свой peer к нам,
+    // и ответ на этот оффер при позднем «Присоединиться» ушёл бы в никуда.
+    webrtcService.discardPending(chatId);
   }
 
   function endCall() {
