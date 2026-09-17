@@ -1,0 +1,171 @@
+import { useState } from "react";
+import { ActivityIndicator, Alert, Platform, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
+
+import { AppBar } from "../../components/AppBar";
+import { ChatRow } from "../../components/ChatRow";
+import { Chip } from "../../components/Chip";
+import { IconBtn } from "../../components/IconBtn";
+import { PlusIcon, SearchIcon, SettingsIcon } from "../../components/icons";
+import { ScreenContainer } from "../../components/ScreenContainer";
+import { ChatsStackParamList } from "../../navigation/types";
+import { apiErrorMessage, notesApi } from "../../services/api";
+import { useChats } from "../../services/useChats";
+import { useTheme, useThemeControls } from "../../theme";
+
+// Список чатов как самостоятельная панель: на телефоне это экран ChatsList,
+// на широком экране (PWA в браузере, планшет) — постоянная левая колонка
+// (navigation/ChatsSidebar), а куда открывать чат, решает вызывающий.
+
+export type ChatTarget = "Chat" | "GroupChat";
+export type ChatOpenParams = ChatsStackParamList["Chat"];
+
+type Filter = "all" | "groups" | "dms";
+
+interface Props {
+  onOpenChat: (screen: ChatTarget, params: ChatOpenParams) => void;
+  onOpenSearch: () => void;
+  onOpenNewChat: () => void;
+  /** Подсветить открытый чат (боковая колонка) */
+  activeChatId?: string | null;
+}
+
+export function ChatsListPane({ onOpenChat, onOpenSearch, onOpenNewChat, activeChatId }: Props) {
+  const theme = useTheme();
+  const { themeId, setThemeId } = useThemeControls();
+  const { chats, loading, error, refresh } = useChats();
+  const [filter, setFilter] = useState<Filter>("all");
+
+  const visible = chats.filter((c) => {
+    if (filter === "groups") return c.group;
+    if (filter === "dms") return !c.group;
+    return true;
+  });
+
+  // Count online friends (DMs only — groups don't have a single online state).
+  const dms = chats.filter((c) => !c.group);
+  const onlineFriends = dms.filter((c) => c.online).length;
+
+  const toggleTheme = () => setThemeId(themeId === "neo" ? "discord" : "neo");
+
+  const openNotes = () => {
+    // «Заметки»: get-or-create личного чата и сразу в него.
+    notesApi
+      .open()
+      .then((res: { data: { id: number } }) =>
+        onOpenChat("Chat", { chatId: String(res.data.id), name: "Заметки", isNotes: true }),
+      )
+      .catch((e: unknown) => {
+        // Молчаливый catch прятал «нажимаю и ничего»: 404 = сервер ещё без
+        // Заметок (нужен деплой), остальное — сеть
+        const status = (e as { response?: { status?: number } })?.response?.status;
+        const msg =
+          status === 404 || status === 405 ? "Сервер ещё не обновлён до Заметок — нужен деплой сервера" : apiErrorMessage(e);
+        if (Platform.OS === "web") window.alert(`Заметки: ${msg}`);
+        else Alert.alert("Заметки", msg);
+      });
+  };
+
+  return (
+    <ScreenContainer>
+      <AppBar
+        title="GandolaChat"
+        sub={chats.length ? `${onlineFriends} / ${dms.length} онлайн` : theme.decorate ? "загрузка..." : "Загрузка..."}
+        right={
+          <View style={{ flexDirection: "row" }}>
+            <IconBtn onPress={openNotes}>
+              <Text style={{ fontSize: 17 }}>📝</Text>
+            </IconBtn>
+            <IconBtn onPress={onOpenSearch}>
+              <SearchIcon color={theme.colors.ink} />
+            </IconBtn>
+            {/* The "sun" toggles between Neo and Discord themes */}
+            <IconBtn onPress={toggleTheme}>
+              <SettingsIcon color={theme.colors.accent} />
+            </IconBtn>
+          </View>
+        }
+      />
+
+      <View style={{ height: 44 }}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6, gap: 6, alignItems: "center" }}
+        >
+          <FilterChip label={theme.decorate ? "● ВСЕ" : "Все"} active={filter === "all"} onPress={() => setFilter("all")} />
+          <FilterChip label={theme.decorate ? "ГРУППЫ" : "Группы"} active={filter === "groups"} onPress={() => setFilter("groups")} />
+          <FilterChip label={theme.decorate ? "ЛИЧНЫЕ" : "Личные"} active={filter === "dms"} onPress={() => setFilter("dms")} />
+        </ScrollView>
+      </View>
+
+      <ScrollView
+        style={{ flex: 1 }}
+        refreshControl={<RefreshControl refreshing={loading && chats.length > 0} onRefresh={refresh} tintColor={theme.colors.accent} />}
+      >
+        {error ? (
+          <View style={{ padding: 24, alignItems: "center" }}>
+            <Text style={{ fontFamily: theme.fonts.mono, color: theme.colors.danger, fontSize: 12, textAlign: "center" }}>
+              {theme.decorate ? `! ${error}` : error}
+            </Text>
+          </View>
+        ) : null}
+        {chats.length === 0 && loading ? (
+          <View style={{ paddingVertical: 40, alignItems: "center" }}>
+            <ActivityIndicator color={theme.colors.accent} />
+          </View>
+        ) : null}
+        {visible.length === 0 && !loading && !error ? (
+          <View style={{ padding: 40, alignItems: "center" }}>
+            <Text style={{ fontFamily: theme.fonts.mono, color: theme.colors.inkMuted, fontSize: 12, textAlign: "center" }}>
+              {theme.decorate ? "// пусто" : "Пусто"}
+            </Text>
+          </View>
+        ) : null}
+        {visible.map((c) => (
+          <ChatRow
+            key={c.id}
+            chat={c}
+            active={activeChatId != null && activeChatId === c.id}
+            onPress={() =>
+              onOpenChat(c.group ? "GroupChat" : "Chat", {
+                chatId: c.id,
+                name: c.name,
+                userId: c.peerId,
+                avatarUrl: c.avatarUrl,
+                isGroup: c.group,
+                allowAllWrite: c.allowAllWrite,
+                createdBy: c.createdBy,
+                isNotes: c.isNotes,
+              })
+            }
+          />
+        ))}
+      </ScrollView>
+
+      <View style={{ position: "absolute", right: 18, bottom: 18 }}>
+        <IconBtn onPress={onOpenNewChat} size={54}>
+          <View
+            style={{
+              width: 54,
+              height: 54,
+              borderRadius: theme.id === "neo" ? 14 : 27,
+              backgroundColor: theme.colors.accent,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <PlusIcon color={theme.colors.accentText} />
+          </View>
+        </IconBtn>
+      </View>
+    </ScreenContainer>
+  );
+}
+
+function FilterChip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress}>
+      <Chip on={active}>{label}</Chip>
+    </Pressable>
+  );
+}
