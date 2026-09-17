@@ -40,7 +40,11 @@ export function IconText({ name, size = 14, gap = 5, ...rest }: {
   return <Icon name={name} size={size} {...rest} style={{ marginRight: gap, ...rest.style }} />;
 }
 
-/** ⛽ — фирменный значок газа Гандолиума, в UI везде линейный. */
+/** ⛽ — фирменный значок газа Гандолиума. Хозяин попросил вернуть ЭМОДЗИ
+ *  (линейная колонка никому не зашла): рисуется шрифтом Twemoji (класс
+ *  .emoji), так что у всех одинаковый. size — в px, как у иконок. */
 export function Gas({ size = 13, style }: { size?: number; style?: React.CSSProperties }) {
-  return <Icon name="fuel" size={size} style={{ verticalAlign: "-0.15em", ...style }} />;
+  return (
+    <span className="emoji" style={{ fontSize: size, lineHeight: 1, verticalAlign: "-0.1em", display: "inline-block", ...style }}>⛽</span>
+  );
 }

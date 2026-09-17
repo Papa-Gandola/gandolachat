@@ -233,7 +233,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
 
         {data && !data.linked && (
           <div style={{ ...s.panel(isNeo), textAlign: "center", padding: 32 }}>
-            <div style={{ marginBottom: 8, color: "var(--accent)" }}><Icon name="fuel" size={44} strokeWidth={1.25} /></div>
+            <div style={{ marginBottom: 8 }}><Gas size={40} /></div>
             <h3 style={{ ...mono, color: accentText, margin: "0 0 8px", letterSpacing: "0.05em" }}>
               Steam ещё не привязан
             </h3>
@@ -503,7 +503,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                         boxShadow: secret ? "0 0 12px rgba(255,210,74,0.18)" : undefined,
                       }}>
                         <span style={{ fontSize: 16, display: "inline-flex", color: secret ? GOLD : "var(--accent)" }}>
-                          {bad ? "💀" : secret ? <Icon name="unlock" size={17} /> : t.cat === "team" ? "🤝" : <Icon name="fuel" size={17} />}
+                          {bad ? "💀" : secret ? <Icon name="unlock" size={17} /> : t.cat === "team" ? "🤝" : <Gas size={16} />}
                         </span>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ ...mono, fontWeight: 700, fontSize: 13, color: bad ? BLOOD : secret ? GOLD : "var(--text-primary)" }}>

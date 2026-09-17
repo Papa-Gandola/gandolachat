@@ -9,7 +9,7 @@ import type { IconName } from "../components/icons";
  *  (💀 🤝 🚨 …) — остаётся эмодзи из шрифта Twemoji. */
 export const PREVIEW_ICONS: Record<string, IconName> = {
   "🎤": "mic", "🖼": "image", "🎬": "film", "🎵": "music", "📎": "clip", "📊": "poll", "⏰": "bell",
-  "🃏": "cards", "📞": "phone", "⚔️": "swords", "⛽": "fuel", "🏆": "trophy", "🎲": "dice", "📅": "calendar",
+  "🃏": "cards", "📞": "phone", "⚔️": "swords", "🏆": "trophy", "🎲": "dice", "📅": "calendar",
 };
 
 export function splitPreviewIcon(text: string): { icon: IconName | null; rest: string } {
