@@ -594,7 +594,9 @@ async def upload_file(
     upload_dir = Path(settings.UPLOAD_DIR) / "files"
     upload_dir.mkdir(parents=True, exist_ok=True)
 
-    ext = file.filename.rsplit(".", 1)[-1] if "." in file.filename else "bin"
+    # Имя может не прийти (multipart без filename) — не падать в 500.
+    original_name = file.filename or "file.bin"
+    ext = original_name.rsplit(".", 1)[-1] if "." in original_name else "bin"
     filename = f"{uuid.uuid4()}.{ext}"
     path = upload_dir / filename
 
@@ -633,7 +635,7 @@ async def upload_file(
         chat_id=chat_id,
         sender_id=current_user.id,
         file_url=f"/uploads/files/{filename}",
-        file_name=file.filename,
+        file_name=original_name,
         content=clean_caption or None,
         media_group_id=(media_group_id[:40] if media_group_id else None),
     )

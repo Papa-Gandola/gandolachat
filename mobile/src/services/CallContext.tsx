@@ -490,6 +490,9 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const reject = () => {
     if (!incoming) return;
     wsService.send({ type: "call_end", chat_id: incoming.chatId, declined: true });
+    // Оффер звонящего протух: по нашему call_end он снесёт свой peer к нам,
+    // и ответ на этот оффер при позднем «Присоединиться» ушёл бы в никуда.
+    webrtcService.discardPending(incoming.chatId);
     setIncoming(null);
   };
 

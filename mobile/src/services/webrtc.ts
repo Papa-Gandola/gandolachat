@@ -59,7 +59,12 @@ class WebRTCService {
   private peers = new Map<number, RTCPeerConnection>();
   // Signals that arrive before we've acquired a local stream (i.e. before the
   // user accepts) are queued per remote user and flushed on joinCall().
-  private pending = new Map<number, unknown[]>();
+  // У записи — chat_id: по концу звонка (пустой call_active) и по
+  // «Отклонить» хвосты ЭТОГО чата выкидываются (discardPending), а флаш
+  // применяет только сигналы чата, в который входим — иначе протухший
+  // оффер отклонённого звонка отвечался при позднем «Присоединиться» в
+  // никуда и блокировал tie-break, а чужой чат получал фантомный peer.
+  private pending = new Map<number, { chatId: number; signal: unknown }[]>();
   // ICE candidates that arrived before setRemoteDescription completed for that
   // peer. Held here until the SDP lands, then drained.
   private earlyCandidates = new Map<number, unknown[]>();
@@ -103,7 +108,7 @@ class WebRTCService {
   // (нужен MediaProjection — нативная работа, см. CLAUDE.md).
   private screenPeers = new Map<number, RTCPeerConnection>();
   private screenEarly = new Map<number, unknown[]>();
-  private pendingScreen = new Map<number, unknown[]>();
+  private pendingScreen = new Map<number, { chatId: number; signal: unknown }[]>();
   private screenStreams = new Map<number, MediaStream>();
 
   onStream: StreamCb | null = null;
@@ -173,26 +178,48 @@ class WebRTCService {
   // "waiting for participant". Sort SDP-first and await each apply to keep
   // them strictly sequential.
   private async _flushPending() {
-    for (const [uid, sigs] of Array.from(this.pending.entries())) {
+    const bySdpFirst = (a: unknown, b: unknown) => {
+      const aSdp = (a as { sdp?: string } | null)?.sdp ? 0 : 1;
+      const bSdp = (b as { sdp?: string } | null)?.sdp ? 0 : 1;
+      return aSdp - bSdp;
+    };
+    for (const [uid, entries] of Array.from(this.pending.entries())) {
+      // Только сигналы ТОГО чата, в который входим (звонок в ЛС, пока мы
+      // входили в групповой созвон, — не наш peer).
+      const sigs = entries.filter((e) => e.chatId === this.chatId).map((e) => e.signal);
+      // Хвост без оффера (кандидаты соединения, оффер которого мы не видели)
+      // бесполезен, а responder-peer под него блокировал бы tie-break в
+      // _onCallActive («peer уже есть» — и никто не офферит).
+      if (!sigs.some((s) => (s as { type?: string } | null)?.type === "offer")) continue;
       if (!this.peers.has(uid)) this._createPeer(uid, false);
-      const ordered = [...sigs].sort((a, b) => {
-        const aSdp = (a as { sdp?: string } | null)?.sdp ? 0 : 1;
-        const bSdp = (b as { sdp?: string } | null)?.sdp ? 0 : 1;
-        return aSdp - bSdp;
-      });
-      for (const s of ordered) await this._enqueue(uid, s);
+      for (const s of [...sigs].sort(bySdpFirst)) await this._enqueue(uid, s);
     }
     this.pending.clear();
     // Экран, который начали шарить, пока мы ещё «звонили» (не приняли)
-    for (const [uid, sigs] of Array.from(this.pendingScreen.entries())) {
-      const ordered = [...sigs].sort((a, b) => {
-        const aSdp = (a as { sdp?: string } | null)?.sdp ? 0 : 1;
-        const bSdp = (b as { sdp?: string } | null)?.sdp ? 0 : 1;
-        return aSdp - bSdp;
-      });
-      for (const s of ordered) await this._applyScreenSignal(uid, s);
+    for (const [uid, entries] of Array.from(this.pendingScreen.entries())) {
+      const sigs = entries.filter((e) => e.chatId === this.chatId).map((e) => e.signal);
+      for (const s of [...sigs].sort(bySdpFirst)) await this._applyScreenSignal(uid, s);
     }
     this.pendingScreen.clear();
+  }
+
+  /** Выкинуть сигналы, накопленные до входа (чата или все): после
+   *  «Отклонить» и по концу звонка оффер звонившего протух — та сторона
+   *  снесла свой peer к нам, ответ ушёл бы в никуда. */
+  discardPending(chatId?: number) {
+    const prune = (map: Map<number, { chatId: number; signal: unknown }[]>) => {
+      if (chatId == null) {
+        map.clear();
+        return;
+      }
+      for (const [uid, entries] of Array.from(map.entries())) {
+        const rest = entries.filter((e) => e.chatId !== chatId);
+        if (rest.length) map.set(uid, rest);
+        else map.delete(uid);
+      }
+    };
+    prune(this.pending);
+    prune(this.pendingScreen);
   }
 
   /** Присоединение к УЖЕ идущему звонку (плашка «в созвоне» / кнопка при
@@ -495,7 +522,7 @@ class WebRTCService {
     if (!this.localStream) {
       // Not in a call yet (incoming, awaiting accept) — queue.
       const q = this.pending.get(fromId) ?? [];
-      q.push(signal);
+      q.push({ chatId: Number(data.chat_id), signal });
       this.pending.set(fromId, q);
       return;
     }
@@ -534,7 +561,7 @@ class WebRTCService {
     if (!signal) return;
     if (!this.localStream) {
       const q = this.pendingScreen.get(uid) ?? [];
-      q.push(signal);
+      q.push({ chatId: Number(data.chat_id), signal });
       this.pendingScreen.set(uid, q);
       return;
     }
@@ -740,11 +767,15 @@ class WebRTCService {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private _onCallActive = (data: any) => {
     const chatId = data.chat_id as number;
+    const participants: number[] = Array.isArray(data.participants) ? data.participants : [];
+    // Звонок кончился (в т.ч. 60с-таймаут «не взяли» — нам приходит только
+    // пустой call_active, без call_end) — его накопленные сигналы больше не
+    // нужны, иначе протухший оффер всплыл бы при следующем joinOngoing.
+    if (participants.length === 0) this.discardPending(chatId);
     // Only consider broadcasts for the call we're currently in.
     if (chatId !== this.chatId) return;
     // Not in the call yet (pre-accept) — don't open extra peers.
     if (!this.localStream || this.myId == null) return;
-    const participants: number[] = Array.isArray(data.participants) ? data.participants : [];
     const myId = this.myId;
     for (const uid of participants) {
       if (uid === myId) continue;

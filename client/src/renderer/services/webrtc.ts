@@ -109,7 +109,11 @@ class WebRTCService {
       } else {
         targetMap = this.peers;
       }
-      const signals = entries.map((e) => e.signal);
+      // Только сигналы ТОГО чата, в который входим: звонок в ЛС, пока мы
+      // входили в групповой созвон, — не наш peer (ответ ушёл бы с чужим
+      // chat_id, а у звонившего всплыл бы фантомный вход).
+      const signals = entries.filter((e) => e.chatId === this.currentChatId).map((e) => e.signal);
+      if (signals.length === 0) continue;
       // Хвост без оффера (кандидаты соединения, оффер которого мы не видели —
       // например, после перезапуска приложения) бесполезен, а responder-peer,
       // созданный под него, заблокировал бы tie-break в _handleCallActive
@@ -198,6 +202,18 @@ class WebRTCService {
       this.silentPeers.add(existing);
       existing.destroy();
       map.delete(targetUserId);
+      // Пересобираем webcam-peer — старый screen-peer к этому же юзеру
+      // (если шарим экран) тоже мёртв: собеседник перезапустился. Сносим,
+      // иначе гард ниже («screen-peer уже есть») не открыл бы ему свежий,
+      // и опоздавший экрана не видел бы до стоп/старт шаринга.
+      if (purpose === "webcam") {
+        const scr = this.screenSendingPeers.get(targetUserId);
+        if (scr) {
+          this.silentPeers.add(scr);
+          scr.destroy();
+          this.screenSendingPeers.delete(targetUserId);
+        }
+      }
     }
     if (purpose === "webcam") {
       this.peerMeta.set(targetUserId, { initiator, remoteSdp: false });

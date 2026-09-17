@@ -535,7 +535,12 @@ export function ChatScreen({ navigation, route }: Props) {
         }
         return [{ uri: a.uri, name, type: a.mimeType ?? (isVid ? "video/mp4" : "image/jpeg") }];
       });
-      if (tooBig.length) Alert.alert("Слишком большое видео", `Лимит ${VIDEO_MAX_MB} МБ: ${tooBig.join(", ")}`);
+      if (tooBig.length) {
+        const msg = `Лимит ${VIDEO_MAX_MB} МБ: ${tooBig.join(", ")}`;
+        // RN-web: Alert.alert — no-op, ролик выпал бы из пакета молча
+        if (Platform.OS === "web") window.alert(`Слишком большое видео. ${msg}`);
+        else Alert.alert("Слишком большое видео", msg);
+      }
       await doUploadPack(files);
     } catch (err) {
       Alert.alert("Галерея недоступна", apiErrorMessage(err));

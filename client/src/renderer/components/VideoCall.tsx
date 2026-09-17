@@ -173,6 +173,14 @@ export default function VideoCall({ chat, currentUser, initiator, initiatorUserI
     return () => { clearInterval(interval); ac.close(); };
   }, [remoteVideos.length, micEpoch]); // re-run when call connects / mic switched
 
+  // Рефы для эффекта устройств ниже: его замыкание живёт от первого рендера.
+  const micDeviceIdRef = useRef(micDeviceId);
+  micDeviceIdRef.current = micDeviceId;
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
+  const micGainRef = useRef(micGain);
+  micGainRef.current = micGain;
+
   // Load available devices (+ пересчитать, когда посреди звонка воткнули
   // гарнитуру — иначе её нет в списке до перезахода).
   useEffect(() => {
@@ -187,6 +195,20 @@ export default function VideoCall({ chat, currentUser, initiator, initiatorUserI
       setAudioDevices(inputs.filter((d) => d.deviceId !== "default" && d.deviceId !== "communications"));
       setVideoDevices(devices.filter((d) => d.kind === "videoinput"));
       setOutputDevices(devices.filter((d) => d.kind === "audiooutput"));
+      // Выбранный микрофон выдернули: его дорожка мертва (ended), а
+      // контролируемый select визуально падал на «По умолчанию» — повторный
+      // выбор того же пункта onChange не даёт, и все молчали бы до выбора
+      // другого физического микрофона. Переходим на системный сами.
+      const cur = micDeviceIdRef.current;
+      if (cur && !inputs.some((d) => d.deviceId === cur)) {
+        webrtcService.switchMicrophone("", { muted: mutedRef.current, gain: micGainRef.current })
+          .then(() => {
+            setMicDeviceId("");
+            setMicEpoch((n) => n + 1);
+            setMicError("Микрофон отключился — переключил на «По умолчанию»");
+          })
+          .catch(() => setMicError("Микрофон отключился, а запасной не отвечает — выбери другой"));
+      }
     }).catch(() => {});
     load();
     navigator.mediaDevices.addEventListener?.("devicechange", load);
