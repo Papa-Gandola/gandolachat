@@ -527,6 +527,8 @@ export const dotaApi = {
 
 export const pokerApi = {
   list: (chatId: number) => api.get<PokerTableOut[]>(`/api/poker?chat_id=${chatId}`),
+  // Где есть живые столы: {chat_id: "lobby" | "playing"} — значок в сайдбаре
+  active: () => api.get<Record<string, "lobby" | "playing">>("/api/poker/active"),
   create: (chatId: number, settings: PokerTableSettings = { max_seats: 6 }) =>
     api.post<PokerTableOut>("/api/poker", { chat_id: chatId, ...settings }),
   settings: (tableId: number, patch: PokerTableSettings) =>

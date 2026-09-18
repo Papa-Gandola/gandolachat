@@ -652,7 +652,57 @@ async def upload_file(
         "type": "message",
         **out.model_dump(mode="json"),
     })
+
+    # Пуш — как у текстовых сообщений в WS-обработчике: всем участникам,
+    # кроме отправителя, с тем же троттлингом 15с/чат (пачка из 5 фото —
+    # один пуш). Раньше файловые сообщения пуш не слали вовсе: кинул фото в
+    # конфу — телефоны молчали. Best-effort, отправку не ломает.
+    try:
+        from app.push import send_push, should_throttle_message_push
+        chat_full = (
+            await db.execute(select(Chat).options(selectinload(Chat.members)).where(Chat.id == chat_id))
+        ).scalar_one_or_none()
+        if chat_full and not should_throttle_message_push(chat_id):
+            recipients = [m.id for m in chat_full.members if m.id != current_user.id]
+            preview = _file_preview(original_name)
+            if clean_caption:
+                preview = f"{preview} · {clean_caption[:100]}"
+            title = chat_full.name if chat_full.is_group else current_user.username
+            sub_body = f"{current_user.username}: {preview}" if chat_full.is_group else preview
+            peer_user_id = None if chat_full.is_group else next(
+                (m.id for m in chat_full.members if m.id != current_user.id), None
+            )
+            await send_push(
+                db,
+                recipients,
+                title=title,
+                body=sub_body,
+                data={
+                    "type": "message",
+                    "chat_id": chat_id,
+                    "message_id": msg.id,
+                    "is_group": chat_full.is_group,
+                    "peer_user_id": peer_user_id,
+                    "chat_name": chat_full.name or current_user.username,
+                    "notification_tag": f"chat-{chat_id}",
+                },
+                channel_id="messages",
+            )
+    except Exception as _push_err:
+        print(f"[push][file] failed: {type(_push_err).__name__}: {_push_err}")
     return out
+
+
+def _file_preview(name: str) -> str:
+    """Подпись файлового сообщения для пуша — как markers.ts/useChats у клиентов."""
+    low = name.lower()
+    if _re_mod.match(r"^voice_\d+\.", low):
+        return "🎤 Голосовое"
+    if _re_mod.search(r"\.(jpe?g|png|gif|webp|bmp|heic)$", low):
+        return "🖼 Фото"
+    if _re_mod.search(r"\.(mp4|mov|m4v|webm|mkv|3gp)$", low):
+        return "🎬 Видео"
+    return f"📎 {name}"
 
 
 @router.get("/{chat_id}/search", response_model=list[MessageOut])
