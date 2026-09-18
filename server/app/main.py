@@ -73,9 +73,16 @@ async def lifespan(app: FastAPI):
         backups_mod.run_backup, "cron", hour=1, minute=0,
         misfire_grace_time=12 * 3600, coalesce=True, max_instances=1,
     )
+    # Вложения (фото/голосовые/видео) — на тот же WebDAV инкрементально,
+    # через 20 минут после дампа (04:20 МСК); без BACKUP_WEBDAV_URL — no-op.
+    scheduler.add_job(
+        backups_mod.run_uploads_backup, "cron", hour=1, minute=20,
+        misfire_grace_time=12 * 3600, coalesce=True, max_instances=1,
+    )
     # Возраст свежего дампа — в лог при старте: молчаливо сломанный
     # pg_dump иначе замечаешь только когда бэкап реально понадобился.
     backups_mod.log_health()
+    backups_mod.log_uploads_health()
     # Диск под uploads: видео до 50 МБ на файл на маленьком VPS — «место
     # кончается» лучше увидеть в логе деплоя, чем услышать от людей.
     from app import disk as disk_mod

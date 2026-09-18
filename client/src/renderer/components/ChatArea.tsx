@@ -28,6 +28,9 @@ interface Props {
   onOpenChatInfo?: (chat: ChatOut) => void;
   // Открыть столы этого чата (покер — часть чата, не режим; см. Main.tsx)
   onOpenPoker?: () => void;
+  // Узкая колонка рядом с покерным столом: только имя чата в шапке, без
+  // кнопок (Столы/уведомления/поиск/звонок — они на широком экране чата).
+  compact?: boolean;
   // External requests routed back into ChatArea (from GroupInfoPage action buttons)
   pendingOpenSearch?: boolean;
   pendingAddMember?: boolean;
@@ -36,7 +39,7 @@ interface Props {
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-export default function ChatArea({ chat, currentUser, onStartCall, activeCallUsers, onJoinCall, inCallHere, allChats = [], onOpenProfile, onOpenChatInfo, onOpenPoker, pendingOpenSearch, pendingAddMember, onPendingHandled }: Props) {
+export default function ChatArea({ chat, currentUser, onStartCall, activeCallUsers, onJoinCall, inCallHere, allChats = [], onOpenProfile, onOpenChatInfo, onOpenPoker, compact = false, pendingOpenSearch, pendingAddMember, onPendingHandled }: Props) {
   const theme = useTheme();
   const isNeo = theme === "neo";
   const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
@@ -1036,7 +1039,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
             <span style={s.memberCount}>{chat.members.length} участников</span>
           )}
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        {!compact && <div style={{ display: "flex", gap: 8 }}>
           {!chat.is_notes && onOpenPoker && (
             <button
               style={{ ...s.headerBtn, gap: 6, ...(isNeo ? { ...mono, letterSpacing: "0.05em" } : {}) }}
@@ -1064,7 +1067,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
           <button style={{ ...s.headerBtn, ...(chat.is_notes ? { display: "none" } : {}) }} title="Звонок" onClick={onStartCall}>
             <Icon name="phone" size={18} />
           </button>
-        </div>
+        </div>}
       </div>
 
       {/* Плашка идущего созвона: имена участников + вход одной кнопкой */}

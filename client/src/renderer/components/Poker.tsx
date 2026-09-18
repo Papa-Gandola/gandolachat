@@ -13,9 +13,12 @@ interface Props {
   currentUser: UserOut;
   // Столы — часть чата (Main.tsx): кнопка «В чат» возвращает в переписку
   onBackToChat?: () => void;
+  // Колонка переписки рядом со столом: показана? + тумблер
+  chatColumn?: boolean;
+  onToggleChatColumn?: () => void;
 }
 
-export default function Poker({ chat, currentUser, onBackToChat }: Props) {
+export default function Poker({ chat, currentUser, onBackToChat, chatColumn, onToggleChatColumn }: Props) {
   const theme = useTheme();
   const isNeo = theme === "neo";
   const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
@@ -393,17 +396,28 @@ export default function Poker({ chat, currentUser, onBackToChat }: Props) {
               {isNeo ? `// ПОКЕР · ${chat.is_group ? chat.name : "DM"}` : `Покер · ${chat.is_group ? chat.name : "DM"}`}
             </span>
           </div>
-          <button
-            onClick={() => setShowCreate(true)}
-            disabled={busy}
-            style={{
-              ...s.primaryBtn,
-              ...mono,
-              ...(isNeo ? { borderRadius: 0, letterSpacing: "0.05em" } : {}),
-            }}
-          >
-            {isNeo ? "[+ НОВЫЙ СТОЛ]" : "+ Новый стол"}
-          </button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {onToggleChatColumn && (
+              <button
+                onClick={onToggleChatColumn}
+                title={chatColumn ? "Скрыть переписку" : "Показать переписку рядом"}
+                style={{ ...s.secondaryBtn, ...mono, display: "inline-flex", alignItems: "center", gap: 6, ...(isNeo ? { borderRadius: 0 } : {}), ...(chatColumn ? { color: "var(--accent)" } : {}) }}
+              >
+                <Icon name="chat" size={14} />{isNeo ? "ПЕРЕПИСКА" : "Переписка"}
+              </button>
+            )}
+            <button
+              onClick={() => setShowCreate(true)}
+              disabled={busy}
+              style={{
+                ...s.primaryBtn,
+                ...mono,
+                ...(isNeo ? { borderRadius: 0, letterSpacing: "0.05em" } : {}),
+              }}
+            >
+              {isNeo ? "[+ НОВЫЙ СТОЛ]" : "+ Новый стол"}
+            </button>
+          </div>
         </div>
         {error && <div style={{ ...s.error, ...mono }}>{error}</div>}
         {showCreate && (
@@ -534,6 +548,15 @@ export default function Poker({ chat, currentUser, onBackToChat }: Props) {
           )}
         </span>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          {onToggleChatColumn && (
+            <button
+              onClick={onToggleChatColumn}
+              title={chatColumn ? "Скрыть переписку" : "Показать переписку рядом"}
+              style={{ ...s.secondaryBtn, ...mono, display: "inline-flex", alignItems: "center", gap: 6, ...(isNeo ? { borderRadius: 0 } : {}), ...(chatColumn ? { color: "var(--accent)" } : {}) }}
+            >
+              <Icon name="chat" size={14} />{isNeo ? "ПЕРЕПИСКА" : "Переписка"}
+            </button>
+          )}
           {t.status === "lobby" && t.created_by === currentUser.id && (
             <button
               onClick={() => setShowSettings(true)}
@@ -1330,7 +1353,9 @@ const s: Record<string, React.CSSProperties> = {
   tableTitle: { color: "var(--text-header)", fontWeight: 700, fontSize: 15 },
   tableMeta: { color: "var(--text-muted)", fontSize: 12, marginTop: 4 },
   tableArea: { flex: 1, padding: 16, overflow: "hidden" as const, display: "flex", alignItems: "center", justifyContent: "center" },
-  primaryBtn: { background: "var(--accent)", color: "var(--accent-text)", border: "none", padding: "8px 14px", borderRadius: 4, cursor: "pointer", fontSize: 13, fontWeight: 600 },
-  secondaryBtn: { background: "var(--bg-tertiary)", color: "var(--text-primary)", border: "none", padding: "8px 14px", borderRadius: 4, cursor: "pointer", fontSize: 13 },
+  // whiteSpace: рядом с колонкой переписки шапка стола уже, кнопки
+  // переносились в две строки («← К / списку»)
+  primaryBtn: { background: "var(--accent)", color: "var(--accent-text)", border: "none", padding: "8px 14px", borderRadius: 4, cursor: "pointer", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" as const },
+  secondaryBtn: { background: "var(--bg-tertiary)", color: "var(--text-primary)", border: "none", padding: "8px 14px", borderRadius: 4, cursor: "pointer", fontSize: 13, whiteSpace: "nowrap" as const },
   error: { padding: "8px 16px", color: "var(--danger)", fontSize: 12 },
 };

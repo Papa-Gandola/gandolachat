@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import FormattedText from "./FormattedText";
-import { ChatOut, UserOut, chatApi, userApi, authApi, getFileUrl } from "../services/api";
+import { ChatOut, UserOut, chatApi, userApi, authApi, getFileUrl, pokerApi } from "../services/api";
 import { wsService } from "../services/ws";
 import { filePreview, markerPreview } from "../services/markers";
 import { applyTheme, getTheme, Theme, useTheme, getNeoColors, saveNeoColors, resetNeoColors, DEFAULT_NEO_COLORS } from "../services/theme";
@@ -51,6 +51,8 @@ export default function Sidebar({
   const [onlineUsers, setOnlineUsers] = useState<Set<number>>(new Set());
   const [unread, setUnread] = useState<Map<number, number>>(new Map());
   const [activeCalls, setActiveCalls] = useState<Set<number>>(new Set());
+  // Чаты с живыми столами (GET /api/poker/active + рефетч по poker_table_*)
+  const [pokerChats, setPokerChats] = useState<Map<number, "lobby" | "playing">>(new Map());
 
   useEffect(() => {
     const electron = (window as any).electron;
@@ -114,6 +116,24 @@ export default function Sidebar({
     };
     const onCallEnd = (data: any) => setActiveCalls((prev) => { const n = new Set(prev); n.delete(data.chat_id); return n; });
 
+    // Значок стола у чата: снимок при коннекте + рефетч на любое событие
+    // столов (их единицы в день — дешевле, чем считать «остались ли ещё
+    // столы» по каждому updated/removed).
+    const refetchPoker = () => {
+      pokerApi.active()
+        .then((res) => {
+          const m = new Map<number, "lobby" | "playing">();
+          Object.entries(res.data || {}).forEach(([id, st]) => m.set(Number(id), st));
+          setPokerChats(m);
+        })
+        .catch(() => {});
+    };
+    refetchPoker();
+    wsService.on("_ws_open", refetchPoker);
+    wsService.on("poker_table_created", refetchPoker);
+    wsService.on("poker_table_updated", refetchPoker);
+    wsService.on("poker_table_removed", refetchPoker);
+
     // Прочитал на ДРУГОМ своём устройстве (телефон) — сервер бродкастит
     // message_read и нашим сокетам; гасим бейдж, иначе «непрочитанное» висит
     const onReadSync = (m: any) => {
@@ -139,6 +159,10 @@ export default function Sidebar({
       wsService.off("message", onMsg);
       wsService.off("call_active", onCallActive);
       wsService.off("call_end", onCallEnd);
+      wsService.off("_ws_open", refetchPoker);
+      wsService.off("poker_table_created", refetchPoker);
+      wsService.off("poker_table_updated", refetchPoker);
+      wsService.off("poker_table_removed", refetchPoker);
       if (isAdmin) wsService.off("new_pending_user", onPending);
     };
   }, [activeChatId, currentUser.id]);
@@ -321,6 +345,7 @@ export default function Sidebar({
     const online = isOtherOnline(chat);
     const unreadCount = unread.get(chat.id) || 0;
     const hasActiveCall = activeCalls.has(chat.id);
+    const poker = pokerChats.get(chat.id);
     return (
       <div
         key={chat.id}
@@ -343,7 +368,17 @@ export default function Sidebar({
           {online && <div className="online-dot" style={s.onlineDot} />}
         </div>
         <div style={s.chatInfo}>
-          <span style={{ ...s.chatName, ...(isNeo ? mono : {}) }}>{name}</span>
+          <span style={{ ...s.chatName, ...(isNeo ? mono : {}), display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
+            {poker && (
+              <Icon
+                name="cards"
+                size={13}
+                title={poker === "playing" ? "Идёт покер" : "Собирается покерный стол"}
+                style={{ flexShrink: 0, color: poker === "playing" ? "#faa61a" : "var(--accent)" }}
+              />
+            )}
+          </span>
           {hasActiveCall ? (
             <span style={{ ...s.callIndicator, ...(isNeo ? mono : {}) }}>
               {isNeo ? "● LIVE" : <><Icon name="phone" size={12} style={{ marginRight: 4 }} />Звонок...</>}

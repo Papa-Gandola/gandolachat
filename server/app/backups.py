@@ -170,3 +170,137 @@ async def run_backup() -> None:
         await asyncio.to_thread(_run_backup_sync)
     except Exception as e:
         print(f"[backup] FAILED: {type(e).__name__}: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Вложения (uploads) — офсайт инкрементально
+# ---------------------------------------------------------------------------
+# Дампы — только БД; фото/голосовые/видео жили в одном экземпляре на VPS.
+# Раз в сутки (после дампа) докладываем на тот же WebDAV всё, чего там ещё
+# нет или что отличается размером: uploads/<каталог>/<файл> →
+# <BACKUP_WEBDAV_URL>/uploads/<каталог>/<файл>. Удалённое НЕ удаляем
+# (это архив); apk (зеркало GitHub) и compendium (из репо) не копируем.
+# Файл читаем целиком (≤50 МБ): chunked PUT не все WebDAV принимают.
+# Восстановить: скачать /uploads/* с WebDAV обратно в том uploads.
+UPLOADS_SKIP_DIRS = {"apk", "compendium"}
+UPLOADS_SYNC_STATE = BACKUP_DIR / "uploads-sync.json"
+
+
+def _mkcol(client, url: str) -> None:
+    try:
+        client.request("MKCOL", url)  # 405 = уже есть, это нормально
+    except Exception:
+        pass
+
+
+def _propfind_sizes(client, url: str) -> dict[str, int]:
+    """Имя → размер файлов каталога (Depth 1). Пусто при ошибке — тогда
+    просто перезальём всё (PUT идемпотентен)."""
+    import xml.etree.ElementTree as ET
+    from urllib.parse import unquote
+    sizes: dict[str, int] = {}
+    try:
+        r = client.request("PROPFIND", url, headers={"Depth": "1"})
+        if r.status_code not in (207, 200):
+            return sizes
+        for resp in ET.fromstring(r.content).iter():
+            if not (resp.tag.endswith("}response") or resp.tag == "response"):
+                continue
+            href = None
+            size = None
+            for el in resp.iter():
+                if el.tag.endswith("}href") or el.tag == "href":
+                    href = unquote((el.text or "").rstrip("/").rsplit("/", 1)[-1])
+                elif el.tag.endswith("}getcontentlength"):
+                    try:
+                        size = int(el.text or "")
+                    except ValueError:
+                        size = None
+            if href and size is not None:
+                sizes[href] = size
+    except Exception as e:
+        print(f"[backup] uploads PROPFIND failed: {type(e).__name__}: {e}")
+    return sizes
+
+
+def _uploads_sync_impl() -> dict:
+    import json
+    from urllib.parse import quote
+    url = (settings.BACKUP_WEBDAV_URL or "").rstrip("/")
+    root = Path(settings.UPLOAD_DIR)
+    stats: dict = {"uploaded": 0, "skipped": 0, "bytes": 0, "failed": 0}
+    if not url or not root.is_dir():
+        return stats
+    base = f"{url}/uploads"
+    with _webdav_client() as client:
+        _mkcol(client, base)
+        subdirs = sorted(p for p in root.iterdir() if p.is_dir() and p.name not in UPLOADS_SKIP_DIRS)
+        for sub in subdirs:
+            remote_dir = f"{base}/{quote(sub.name)}"
+            _mkcol(client, remote_dir)
+            existing = _propfind_sizes(client, remote_dir)
+            for f in sorted(p for p in sub.rglob("*") if p.is_file()):
+                rel = f.relative_to(sub).as_posix()
+                size = f.stat().st_size
+                # Сверка по размеру — только для плоского уровня (все наши
+                # каталоги плоские); вложенное перезальётся, но его нет.
+                if "/" not in rel and existing.get(rel) == size:
+                    stats["skipped"] += 1
+                    continue
+                parts = rel.split("/")
+                for i in range(1, len(parts)):
+                    _mkcol(client, f"{remote_dir}/{'/'.join(quote(p) for p in parts[:i])}")
+                try:
+                    r = client.put(f"{remote_dir}/{'/'.join(quote(p) for p in parts)}", content=f.read_bytes())
+                    if r.status_code not in (200, 201, 204):
+                        raise RuntimeError(f"PUT {r.status_code}: {r.text[:120]}")
+                    stats["uploaded"] += 1
+                    stats["bytes"] += size
+                except Exception as e:
+                    stats["failed"] += 1
+                    print(f"[backup] uploads PUT failed {sub.name}/{rel}: {type(e).__name__}: {e}")
+                    if stats["failed"] >= 5:
+                        raise RuntimeError("слишком много ошибок — прекращаю синк вложений")
+    stats["at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    try:
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        UPLOADS_SYNC_STATE.write_text(json.dumps(stats))
+    except Exception:
+        pass
+    print(
+        f"[backup] uploads offsite: +{stats['uploaded']} файлов ({stats['bytes'] / 1e6:.1f} MB), "
+        f"уже были {stats['skipped']}, ошибок {stats['failed']}"
+    )
+    return stats
+
+
+async def run_uploads_backup() -> None:
+    """Джоба: инкрементальная выгрузка uploads на WebDAV (в тредпуле).
+    Без BACKUP_WEBDAV_URL — тихий no-op."""
+    if not (settings.BACKUP_WEBDAV_URL or "").strip():
+        return
+    try:
+        await asyncio.to_thread(_uploads_sync_impl)
+    except Exception as e:
+        print(f"[backup] uploads offsite FAILED: {type(e).__name__}: {e}")
+
+
+def log_uploads_health() -> None:
+    """Строка о последнем синке вложений — рядом с log_health при старте."""
+    if not (settings.BACKUP_WEBDAV_URL or "").strip():
+        return
+    try:
+        import json
+        if not UPLOADS_SYNC_STATE.is_file():
+            print("[backup] вложения на офсайт ещё ни разу не синкались (джоба в 04:20 МСК)")
+            return
+        st = json.loads(UPLOADS_SYNC_STATE.read_text())
+        at = datetime.fromisoformat(st.get("at"))
+        age_h = (datetime.now(timezone.utc) - at).total_seconds() / 3600
+        mark = "" if age_h < 48 else "  ← СТАРЫЙ, синк вложений не отрабатывает!"
+        print(
+            f"[backup] вложения на офсайте: последний синк {age_h:.0f} ч назад "
+            f"(+{st.get('uploaded', 0)}, ошибок {st.get('failed', 0)}){mark}"
+        )
+    except Exception as e:
+        print(f"[backup] uploads health check failed: {type(e).__name__}: {e}")

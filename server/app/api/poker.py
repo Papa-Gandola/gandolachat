@@ -209,6 +209,36 @@ async def _broadcast_game_state(table_id: int):
 
 
 # === Endpoints ===
+@router.get("/active")
+async def active_chats(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, str]:
+    """Где сейчас есть живые столы: {chat_id: "lobby" | "playing"} по чатам
+    юзера. Десктопный сайдбар рисует по этому значок у чата (иначе о столе
+    узнаёшь только по карточке в ленте, которая быстро уезжает вверх);
+    дальше держит актуальность по WS poker_table_* (рефетч)."""
+    chat_ids = (
+        await db.execute(select(Chat.id).join(Chat.members).where(User.id == current_user.id))
+    ).scalars().all()
+    if not chat_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(PokerTable.chat_id, PokerTable.status).where(
+                PokerTable.chat_id.in_(chat_ids), PokerTable.status != "finished"
+            )
+        )
+    ).all()
+    out: dict[str, str] = {}
+    for chat_id, status in rows:
+        key = str(chat_id)
+        # Играют — важнее, чем собираются
+        if status == "playing" or key not in out:
+            out[key] = "playing" if status == "playing" else "lobby"
+    return out
+
+
 @router.get("", response_model=list[PokerTableOut])
 async def list_tables(
     chat_id: int,

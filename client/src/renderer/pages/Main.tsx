@@ -78,6 +78,10 @@ export default function Main({ token, user, onLogout }: Props) {
   // persisted: ушёл из чата посреди раздачи и вернулся — стол на месте, а
   // после перезапуска все чаты открываются перепиской.
   const [pokerChats, setPokerChats] = useState<Set<number>>(() => new Set());
+  // Колонка переписки рядом со столом (вкл по умолчанию, запоминается).
+  const [pokerChatColumn, setPokerChatColumn] = useState<boolean>(
+    () => localStorage.getItem("gandola-poker-chat-column") !== "false",
+  );
   const setPokerOpen = (chatId: number, open: boolean) =>
     setPokerChats((prev) => {
       if (prev.has(chatId) === open) return prev;
@@ -645,14 +649,41 @@ export default function Main({ token, user, onLogout }: Props) {
             />
           </div>
         ) : activeChat && pokerChats.has(activeChat.id) ? (
-          <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
-            <Poker
-              key={`poker-${activeChat.id}`}
-              chat={activeChat}
-              currentUser={currentUser}
-              onBackToChat={() => setPokerOpen(activeChat.id, false)}
-            />
-          </div>
+          <>
+            <div style={{ flex: 1, position: "relative", overflow: "hidden", minWidth: 0 }}>
+              <Poker
+                key={`poker-${activeChat.id}`}
+                chat={activeChat}
+                currentUser={currentUser}
+                onBackToChat={() => setPokerOpen(activeChat.id, false)}
+                chatColumn={pokerChatColumn}
+                onToggleChatColumn={() => {
+                  const next = !pokerChatColumn;
+                  localStorage.setItem("gandola-poker-chat-column", String(next));
+                  setPokerChatColumn(next);
+                }}
+              />
+            </div>
+            {/* Переписка узкой колонкой рядом со столом — переговариваться во
+                время раздачи, не прыгая между столом и чатом. */}
+            {pokerChatColumn && (
+              <div style={{ width: 380, flexShrink: 0, borderLeft: "1px solid var(--border)", position: "relative", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+                <ChatArea
+                  key={`chat-side-${activeChat.id}`}
+                  compact
+                  chat={activeChat}
+                  currentUser={currentUser}
+                  onStartCall={() => startCall(activeChat)}
+                  activeCallUsers={activeCalls.get(activeChat.id) ?? []}
+                  onJoinCall={() => joinOngoingCall(activeChat)}
+                  inCallHere={callChat?.id === activeChat.id}
+                  allChats={chats}
+                  onOpenProfile={(u) => setViewingProfile(u)}
+                  onOpenChatInfo={(c) => setViewingGroupInfo(c)}
+                />
+              </div>
+            )}
+          </>
         ) : activeChat ? (
           <>
             <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
