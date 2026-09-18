@@ -63,11 +63,29 @@ export default function Main({ token, user, onLogout }: Props) {
   const [connQuality, setConnQuality] = useState<string>("good");
   const [connPing, setConnPing] = useState(0);
   const [showCloseDialog, setShowCloseDialog] = useState(false);
-  const [appMode, setAppMode] = useState<"chat" | "poker" | "compendium">(() => {
+  // Режимов два: чат и Гандолиум. Покер режимом БЫЛ (до 2.3.13) — липкий,
+  // в localStorage, с тем же сайдбаром: люди не понимали, что «в покере»,
+  // кликали чаты в надежде попасть в переписку и получали столы. Теперь
+  // столы — часть чата: открываются кнопкой «Столы» в шапке переписки или
+  // карточкой стола, а клик по чату ВСЕГДА открывает переписку.
+  // Сохранённый «poker» старых версий читаем как «chat».
+  const [appMode, setAppMode] = useState<"chat" | "compendium">(() => {
     const saved = localStorage.getItem("gandola-mode");
-    return saved === "poker" || saved === "compendium" ? saved : "chat";
+    return saved === "compendium" ? "compendium" : "chat";
   });
   const [showModeMenu, setShowModeMenu] = useState(false);
+  // Чаты, в которых сейчас открыты столы вместо переписки. На сессию, НЕ
+  // persisted: ушёл из чата посреди раздачи и вернулся — стол на месте, а
+  // после перезапуска все чаты открываются перепиской.
+  const [pokerChats, setPokerChats] = useState<Set<number>>(() => new Set());
+  const setPokerOpen = (chatId: number, open: boolean) =>
+    setPokerChats((prev) => {
+      if (prev.has(chatId) === open) return prev;
+      const next = new Set(prev);
+      if (open) next.add(chatId);
+      else next.delete(chatId);
+      return next;
+    });
   // «Что нового»: один раз после обновления версии (см. changelog.ts).
   const [showWhatsNew, setShowWhatsNew] = useState(false);
   useEffect(() => {
@@ -286,23 +304,31 @@ export default function Main({ token, user, onLogout }: Props) {
     return () => window.removeEventListener("chat-last-message-changed", handler as EventListener);
   }, []);
 
-  // Allow other components (e.g. PokerInviteCard) to switch app mode
+  // Карточки в переписке просят сменить режим (Гандолиум); «poker» из
+  // старых карточек = открыть столы текущего чата.
   useEffect(() => {
     const handler = (e: Event) => {
-      const mode = (e as CustomEvent<{ mode: "chat" | "poker" | "compendium" }>).detail?.mode;
-      if (mode === "chat" || mode === "poker" || mode === "compendium") setAppMode(mode);
+      const mode = (e as CustomEvent<{ mode: string }>).detail?.mode;
+      if (mode === "chat" || mode === "compendium") setAppMode(mode);
+      else if (mode === "poker" && activeChat) setPokerOpen(activeChat.id, true);
     };
     window.addEventListener("set-app-mode", handler as EventListener);
     return () => window.removeEventListener("set-app-mode", handler as EventListener);
-  }, []);
+  }, [activeChat]);
 
-  // When invite card asks to open a specific poker table, switch to that chat first
+  // Карточка стола: открыть ЭТОТ чат и его столы (Poker сам выберет стол
+  // по tableId и посадит, если есть место).
   useEffect(() => {
     const handler = (e: Event) => {
       const chatId = (e as CustomEvent<{ chatId: number; tableId: number }>).detail?.chatId;
       if (!chatId) return;
       const target = chats.find((c) => c.id === chatId);
-      if (target) setActiveChat(target);
+      if (!target) return;
+      setActiveChat(target);
+      setViewingProfile(null);
+      setViewingGroupInfo(null);
+      leaveCompendiumForChat();
+      setPokerOpen(target.id, true);
     };
     window.addEventListener("open-poker-table", handler as EventListener);
     return () => window.removeEventListener("open-poker-table", handler as EventListener);
@@ -317,12 +343,17 @@ export default function Main({ token, user, onLogout }: Props) {
         localStorage.setItem("gandola-mode", "chat");
         return;
       }
+      // Открыты столы — Escape возвращает в переписку, чат не сбрасывает
+      if (activeChat && pokerChats.has(activeChat.id)) {
+        setPokerOpen(activeChat.id, false);
+        return;
+      }
       setActiveChat(null);
       setViewingProfile(null);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [appMode]);
+  }, [appMode, activeChat, pokerChats]);
 
   useEffect(() => {
     if (!resizing) return;
@@ -472,7 +503,7 @@ export default function Main({ token, user, onLogout }: Props) {
             <span>
               {appMode === "compendium"
                 ? (isNeo ? <span style={{ color: "var(--accent)" }}>Гандолиум</span> : "Гандолиум")
-                : <>Gandola{isNeo ? <span style={{ color: "var(--accent)" }}>{appMode === "chat" ? "Chat" : "Poker"}</span> : (appMode === "chat" ? "Chat" : "Poker")}</>}
+                : <>Gandola{isNeo ? <span style={{ color: "var(--accent)" }}>Chat</span> : "Chat"}</>}
             </span>
             <span style={{ fontSize: 10, opacity: 0.7 }}>▾</span>
           </button>
@@ -492,7 +523,7 @@ export default function Main({ token, user, onLogout }: Props) {
                 padding: 4,
                 fontFamily: isNeo ? "var(--font-mono)" : undefined,
               }}>
-                {(["chat", "poker", "compendium"] as const).map((m) => (
+                {(["chat", "compendium"] as const).map((m) => (
                   <button
                     key={m}
                     onClick={() => { setAppMode(m); localStorage.setItem("gandola-mode", m); setShowModeMenu(false); }}
@@ -510,7 +541,7 @@ export default function Main({ token, user, onLogout }: Props) {
                       fontFamily: "inherit",
                     }}
                   >
-                    {m === "compendium" ? <>Гандолиум <Gas size={12} /></> : `Gandola${m === "chat" ? "Chat" : "Poker"}`}
+                    {m === "compendium" ? <>Гандолиум <Gas size={12} /></> : "GandolaChat"}
                   </button>
                 ))}
               </div>
@@ -613,15 +644,20 @@ export default function Main({ token, user, onLogout }: Props) {
               onOpenProfile={() => setViewingProfile(currentUser)}
             />
           </div>
-        ) : activeChat && appMode === "poker" ? (
+        ) : activeChat && pokerChats.has(activeChat.id) ? (
           <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
-            <Poker key={`poker-${activeChat.id}`} chat={activeChat} currentUser={currentUser} />
+            <Poker
+              key={`poker-${activeChat.id}`}
+              chat={activeChat}
+              currentUser={currentUser}
+              onBackToChat={() => setPokerOpen(activeChat.id, false)}
+            />
           </div>
         ) : activeChat ? (
           <>
             <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
               <ChatArea
-                key={`chat-${activeChat.id}-${appMode}`}
+                key={`chat-${activeChat.id}`}
                 chat={activeChat}
                 currentUser={currentUser}
                 onStartCall={() => startCall(activeChat)}
@@ -631,6 +667,7 @@ export default function Main({ token, user, onLogout }: Props) {
                 allChats={chats}
                 onOpenProfile={(u) => setViewingProfile(u)}
                 onOpenChatInfo={(c) => setViewingGroupInfo(c)}
+                onOpenPoker={() => setPokerOpen(activeChat.id, true)}
                 pendingOpenSearch={pendingChatSearch === activeChat.id}
                 pendingAddMember={pendingAddMember === activeChat.id}
                 onPendingHandled={() => { setPendingChatSearch(null); setPendingAddMember(null); }}

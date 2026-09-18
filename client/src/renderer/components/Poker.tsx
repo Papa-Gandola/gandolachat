@@ -11,9 +11,11 @@ const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 interface Props {
   chat: ChatOut;
   currentUser: UserOut;
+  // Столы — часть чата (Main.tsx): кнопка «В чат» возвращает в переписку
+  onBackToChat?: () => void;
 }
 
-export default function Poker({ chat, currentUser }: Props) {
+export default function Poker({ chat, currentUser, onBackToChat }: Props) {
   const theme = useTheme();
   const isNeo = theme === "neo";
   const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
@@ -381,9 +383,16 @@ export default function Poker({ chat, currentUser }: Props) {
     return (
       <div style={s.root}>
         <div style={{ ...s.header, ...mono }}>
-          <span style={{ ...s.title, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.1em" } : {}) }}>
-            {isNeo ? `// ПОКЕР · ${chat.is_group ? chat.name : "DM"}` : `Покер · ${chat.is_group ? chat.name : "DM"}`}
-          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+            {onBackToChat && (
+              <button onClick={onBackToChat} title="Вернуться в переписку (Esc)" style={{ ...s.secondaryBtn, ...mono, ...(isNeo ? { borderRadius: 0 } : {}) }}>
+                {isNeo ? "[← ЧАТ]" : "← В чат"}
+              </button>
+            )}
+            <span style={{ ...s.title, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.1em" } : {}) }}>
+              {isNeo ? `// ПОКЕР · ${chat.is_group ? chat.name : "DM"}` : `Покер · ${chat.is_group ? chat.name : "DM"}`}
+            </span>
+          </div>
           <button
             onClick={() => setShowCreate(true)}
             disabled={busy}
@@ -505,6 +514,11 @@ export default function Poker({ chat, currentUser }: Props) {
         >
           {isNeo ? "[← К СПИСКУ]" : "← К списку"}
         </button>
+        {onBackToChat && (
+          <button onClick={onBackToChat} title="Вернуться в переписку (Esc)" style={{ ...s.secondaryBtn, ...mono, ...(isNeo ? { borderRadius: 0 } : {}) }}>
+            {isNeo ? "[ЧАТ]" : "В чат"}
+          </button>
+        )}
         <span style={{ ...s.title, ...(isNeo ? { color: "var(--accent)", letterSpacing: "0.1em" } : {}) }}>
           {isNeo ? `// СТОЛ #${t.id}` : `Стол #${t.id}`}
           {liveGame && (
