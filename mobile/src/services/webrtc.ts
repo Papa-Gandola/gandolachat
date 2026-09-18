@@ -224,6 +224,17 @@ class WebRTCService {
     this.pendingScreen.clear();
   }
 
+  /** Лежит ли в очереди НЕОТВЕЧЕННЫЙ оффер от этого собеседника по этому
+   *  чату. По нему решаем, как принимать входящий: обычным ответом
+   *  (joinCall) или входом в идущий звонок (joinOngoing) — когда телефон
+   *  спал и оффер до него не долетел, отвечать нечему. */
+  hasPendingOffer(chatId: number, fromUserId: number): boolean {
+    const entries = this.pending.get(fromUserId) ?? [];
+    return entries.some(
+      (e) => e.chatId === chatId && (e.signal as { type?: string } | null)?.type === "offer",
+    );
+  }
+
   /** Выкинуть сигналы, накопленные до входа (чата или все): после
    *  «Отклонить» и по концу звонка оффер звонившего протух — та сторона
    *  снесла свой peer к нам, ответ ушёл бы в никуда. */
@@ -253,7 +264,10 @@ class WebRTCService {
     this.chatId = chatId;
     this.localStream = await this._getMedia(false);
     await this._flushPending();
-    wsService.send({ type: "call_join", chat_id: chatId });
+    // Через очередь: вход из пуша случается сразу после пробуждения
+    // телефона, когда сокет ещё переподключается — прямой send потерял бы
+    // call_join, и сторожок через 12с убил бы звонок «Звоним…».
+    this._emit({ type: "call_join", chat_id: chatId });
     return this.localStream;
   }
 
@@ -285,6 +299,23 @@ class WebRTCService {
       for (const track of this.localStream.getTracks()) {
         const sender = pc.addTrack(track, this.localStream);
         if (track.kind === "video") this.videoSenders.set(uid, sender);
+      }
+      // Камера выключена (обычный старт звонка) — всё равно СРАЗУ заводим
+      // видео-линию, как это делает десктоп. Без неё в согласованном SDP
+      // видео нет вообще, и включённая позже камера ЛЮБОЙ из сторон
+      // требует ренегосиации, которую отвечающая сторона начать не может
+      // (m-line добавляет только офферящий): «позвонил с компа без видео,
+      // телефон вошёл, включил видео на компе — ничего не видно».
+      // sendrecv без дорожки ничего не шлёт, но слот согласован: дальше
+      // хватает replaceTrack в любую сторону.
+      if (!this.localStream.getVideoTracks().length) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const tr = (pc as any).addTransceiver("video", { direction: "sendrecv" });
+          if (tr?.sender) this.videoSenders.set(uid, tr.sender);
+        } catch (err) {
+          console.warn("[webrtc] addTransceiver(video) failed", err);
+        }
       }
     }
 
@@ -1121,6 +1152,14 @@ class WebRTCService {
         try {
           if (sender) {
             await sender.replaceTrack(track);
+            // Слот мог быть заведён, но ни разу не согласован (та сторона
+            // не прислала ответа на эту m-line) — тогда replaceTrack уходит
+            // в никуда. Дожимаем ренегосиацией.
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const trans = (pc as any).getTransceivers?.() ?? [];
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const tr = trans.find((t: any) => t?.sender === sender);
+            if (tr && tr.currentDirection == null) await this._renegotiate(uid, pc);
           } else {
             this.videoSenders.set(uid, pc.addTrack(track, ls));
             // negotiationneeded дошлёт свежий оффер сам

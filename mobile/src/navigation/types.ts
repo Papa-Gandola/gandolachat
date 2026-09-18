@@ -40,7 +40,7 @@ export type ChatsStackParamList = {
   ChatInfo: { chatId: string };
   MessageSearch: { chatId: string; chatName: string };
   OtherProfile: { userId: number };
-  MediaViewer: { url: string };
+  MediaViewer: { url: string; video?: boolean };
   Camera: { chatId: string };
   Poker: { chatId: string; chatName: string };
 };

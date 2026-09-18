@@ -24,6 +24,7 @@ import {
   volumeLabel,
 } from "./callAudio";
 import { startCallForegroundService, stopCallForegroundService } from "./callForegroundService";
+import { setCallInviteHandler } from "./notificationTapHandler";
 import { webrtcService } from "./webrtc";
 import { wsService } from "./ws";
 
@@ -476,11 +477,33 @@ export function CallProvider({ children }: { children: ReactNode }) {
     setMinimized(false);
     setCallChatId(inc.chatId);
     try {
-      afterMedia(await webrtcService.joinCall(inc.chatId, inc.fromUserId, false));
+      // Обычный входящий: у нас лежит оффер звонящего — отвечаем на него.
+      // Плашка, поднятая тапом по ПУШУ (телефон спал, оффер не долетел),
+      // оффера не имеет: отвечать нечему, входим в идущий звонок через
+      // call_join — сервер объявит состав, и mesh соберётся tie-break'ом.
+      if (webrtcService.hasPendingOffer(inc.chatId, inc.fromUserId)) {
+        afterMedia(await webrtcService.joinCall(inc.chatId, inc.fromUserId, false));
+      } else {
+        afterMedia(await webrtcService.joinOngoing(inc.chatId));
+        armJoinWatchdog(inc.chatId);
+      }
     } catch {
       activeRef.current = false;
     }
   };
+
+  // Плашка «Входящий», поднятая тапом по звонковому пушу (см.
+  // notificationTapHandler): по WS оффер уже не придёт — телефон спал.
+  useEffect(() => {
+    setCallInviteHandler((inv) => {
+      if (activeRef.current || webrtcService.isInCall()) return;
+      const me = userIdRef.current;
+      // Уже в этом звонке с другого устройства — не зовём второй раз.
+      if (me != null && (activeCallsRef.current.get(inv.chatId) ?? []).includes(me)) return;
+      setIncoming((prev) => prev ?? inv);
+    });
+    return () => setCallInviteHandler(null);
+  }, []);
 
   // Подключение к уже идущему созвону (плашка/кнопка в чате).
   const joinOngoing = async (chatId: number, name: string) => {
@@ -497,20 +520,24 @@ export function CallProvider({ children }: { children: ReactNode }) {
     setCallChatId(chatId);
     try {
       afterMedia(await webrtcService.joinOngoing(chatId));
-      // Сторожок мёртвого входа: call_join в звонок, который успел
-      // кончиться, сервер тихо игнорирует. Если за 12с нас так и не
-      // зарегистрировали в составе — кладём пустой звонок сами, а не сидим
-      // «Звоним…» с захваченным микрофоном.
-      setTimeout(() => {
-        const me = userIdRef.current;
-        const inRoster = me != null && (activeCallsRef.current.get(chatId) ?? []).includes(me);
-        if (!inRoster && webrtcService.getChatId() === chatId) {
-          webrtcService.endCall();
-        }
-      }, 12000);
+      armJoinWatchdog(chatId);
     } catch {
       activeRef.current = false;
     }
+  };
+
+  /** Сторожок мёртвого входа: call_join в звонок, который успел кончиться,
+   *  сервер тихо игнорирует. Если за 12с нас так и не зарегистрировали в
+   *  составе — кладём пустой звонок сами, а не сидим «Звоним…» с
+   *  захваченным микрофоном. */
+  const armJoinWatchdog = (chatId: number) => {
+    setTimeout(() => {
+      const me = userIdRef.current;
+      const inRoster = me != null && (activeCallsRef.current.get(chatId) ?? []).includes(me);
+      if (!inRoster && webrtcService.getChatId() === chatId) {
+        webrtcService.endCall();
+      }
+    }, 12000);
   };
 
   const expand = () => setMinimized(false);
@@ -1074,25 +1101,28 @@ function RemoteTile({
       onPress={volumeSupported ? () => onToggleOpen(userId) : undefined}
       style={{ flex: 1, backgroundColor: "#111", overflow: "hidden" }}
     >
-      {/* RTCView рендерим ВСЕГДА: в вебе (PWA) это <video>, через который
-          играет и ЗВУК. Если рендерить его только при включённой камере,
-          собеседник без камеры в PWA был бы НЕМЫМ (главная причина «плохих
-          звонков с веб-формы»). При выключенном видео поверх — аватарка.
+      {/* В ВЕБЕ (PWA) RTCView — это <video>, через который играет ЗВУК:
+          там он нужен ВСЕГДА, иначе собеседник без камеры молчит.
+          На НАТИВЕ звук идёт мимо вьюхи, и держать её при выключенном
+          видео вредно: RTCView — SurfaceView, он рисуется ПОВЕРХ обычных
+          вьюх, и аватарка-оверлей не перекрывала застывший последний кадр
+          («выключил камеру на компе — на телефоне стоп-кадр»).
           key по видеодорожке ОБЯЗАТЕЛЕН: нативный RTCView привязывает
-          дорожку один раз при установке streamURL; камера теперь всегда
-          приезжает ПОЗЖЕ (аудио-старт), и без ремаунта был бы вечный
-          чёрный экран вместо видео.
+          дорожку один раз при установке streamURL; камера всегда приезжает
+          ПОЗЖЕ (аудио-старт), и без ремаунта был бы чёрный экран.
           pointerEvents="none" на обёртке — как в LocalPip: нативный
-          RTCView (SurfaceView) съедает касание, и тап по плитке с
-          ВКЛЮЧЁННЫМ видео не открывал бы регулятор громкости. */}
-      <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-        <RTCView
-          key={stream.getVideoTracks()[0]?.id ?? "audio-only"}
-          streamURL={stream.toURL()}
-          objectFit="cover"
-          style={StyleSheet.absoluteFill}
-        />
-      </View>
+          RTCView съедает касание, и тап по плитке с ВКЛЮЧЁННЫМ видео не
+          открывал бы регулятор громкости. */}
+      {(showVideo || Platform.OS === "web") && (
+        <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+          <RTCView
+            key={stream.getVideoTracks()[0]?.id ?? "audio-only"}
+            streamURL={stream.toURL()}
+            objectFit="cover"
+            style={StyleSheet.absoluteFill}
+          />
+        </View>
+      )}
       {!showVideo && (
         <View
           style={{

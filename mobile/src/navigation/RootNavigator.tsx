@@ -6,7 +6,7 @@ import { initNotificationTapHandler } from "../services/notificationTapHandler";
 import { useTheme } from "../theme";
 import { AuthStack } from "./AuthStack";
 import { MainTabs } from "./MainTabs";
-import { navigationRef } from "./navigationRef";
+import { flushPendingLink, navigationRef } from "./navigationRef";
 import { RootStackParamList } from "./types";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -42,6 +42,9 @@ export function RootNavigator() {
         // Hook up notification tap → deeplink handler now that we have a
         // navigation ref ready to dispatch against.
         initNotificationTapHandler();
+        // Тап, прилетевший до готовности навигатора (холодный старт из
+        // пуша), ждал здесь — выполняем его теперь.
+        flushPendingLink();
       }}
     >
       <Stack.Navigator screenOptions={{ headerShown: false }}>

@@ -25,9 +25,17 @@ export async function createAssetAsync() {
   throw new Error("Сохранение в галерею недоступно в браузере");
 }
 
+// Класс-API SDK 57 (Asset.create вместо saveToLibraryAsync).
+export class Asset {
+  static async create() {
+    throw new Error("Сохранение в галерею недоступно в браузере");
+  }
+}
+
 export default {
   requestPermissionsAsync,
   getPermissionsAsync,
   saveToLibraryAsync,
   createAssetAsync,
+  Asset,
 };

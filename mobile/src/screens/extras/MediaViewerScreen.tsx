@@ -1,6 +1,7 @@
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { File, Paths } from "expo-file-system";
 import * as MediaLibrary from "expo-media-library";
+import { useVideoPlayer, VideoView } from "expo-video";
 import { useState } from "react";
 import { ActivityIndicator, Alert, Image, Platform, Pressable, Text, View } from "react-native";
 
@@ -13,7 +14,7 @@ type Props = NativeStackScreenProps<ChatsStackParamList, "MediaViewer">;
 
 export function MediaViewerScreen({ navigation, route }: Props) {
   const theme = useTheme();
-  const { url } = route.params;
+  const { url, video } = route.params;
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
@@ -33,13 +34,15 @@ export function MediaViewerScreen({ navigation, route }: Props) {
       }
       const name = url.split("/").pop() || `gandola_${Date.now()}.jpg`;
       // Новый API expo-file-system (SDK 54+): объект File вместо строк-путей.
-      // Повторное сохранение того же фото — downloadFileAsync не
+      // Повторное сохранение того же файла — downloadFileAsync не
       // перезаписывает, поэтому старую копию в кэше сносим.
       const dest = new File(Paths.cache, name);
       if (dest.exists) dest.delete();
       const dl = await File.downloadFileAsync(url, dest);
-      await MediaLibrary.saveToLibraryAsync(dl.uri);
-      Alert.alert("Сохранено", "Фото сохранено в галерею.");
+      // Asset.create — новый класс-API. Старый saveToLibraryAsync в SDK 57
+      // только ругается deprecation-ошибкой и ничего не сохраняет.
+      await MediaLibrary.Asset.create(dl.uri);
+      Alert.alert("Сохранено", video ? "Видео сохранено в галерею." : "Фото сохранено в галерею.");
     } catch (err) {
       Alert.alert("Не удалось сохранить", err instanceof Error ? err.message : "Ошибка");
     } finally {
@@ -50,7 +53,11 @@ export function MediaViewerScreen({ navigation, route }: Props) {
   return (
     <ScreenContainer edgeToEdge>
       <View style={{ flex: 1, backgroundColor: "#000", alignItems: "center", justifyContent: "center" }}>
-        <Image source={{ uri: url }} style={{ width: "100%", height: "100%" }} resizeMode="contain" />
+        {video ? (
+          <FullScreenVideo url={url} />
+        ) : (
+          <Image source={{ uri: url }} style={{ width: "100%", height: "100%" }} resizeMode="contain" />
+        )}
       </View>
       <Pressable
         onPress={() => navigation.goBack()}
@@ -83,5 +90,25 @@ export function MediaViewerScreen({ navigation, route }: Props) {
         )}
       </Pressable>
     </ScreenContainer>
+  );
+}
+
+// Полноэкранный плеер: НАТИВНЫЕ контролы (пауза, перемотка, громкость) и
+// кнопка «на весь экран» — здесь им никто не мешает, в отличие от ленты
+// сообщений с её жестами. Перемотка требует HTTP Range от сервера — его
+// отдаёт наша ручка /uploads.
+function FullScreenVideo({ url }: { url: string }) {
+  const player = useVideoPlayer({ uri: url }, (p) => {
+    p.play();
+  });
+  return (
+    <VideoView
+      player={player}
+      style={{ width: "100%", height: "100%" }}
+      contentFit="contain"
+      nativeControls
+      fullscreenOptions={{ enable: true }}
+      allowsPictureInPicture={false}
+    />
   );
 }

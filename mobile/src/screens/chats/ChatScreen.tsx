@@ -47,7 +47,8 @@ import { useTheme } from "../../theme";
 
 const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp|heic)$/i;
 const AUDIO_EXT = /\.(m4a|mp3|aac|wav|ogg|opus|caf)$/i;
-// Видео играем инлайн (VideoMessage); список — как VIDEO_EXTS на сервере.
+// Видео открываем во весь экран (VideoMessage → MediaViewer); список
+// расширений — как VIDEO_EXTS на сервере.
 const VIDEO_EXT = /\.(mp4|mov|m4v|webm|mkv|3gp)$/i;
 // Лимит сервера на видео (MAX_FILE_SIZE_MB); проверяем до отправки, чтобы
 // не гонять 200 МБ ради «Файл больше 50 МБ».
@@ -517,7 +518,7 @@ export function ChatScreen({ navigation, route }: Props) {
       // No permission gate here — the system photo picker doesn't need
       // READ_MEDIA on Android 13+, and requesting it can silently deny.
       // Фото И видео из одной галереи: ролики уходят как обычный файл и
-      // играются инлайн (VideoMessage) у всех.
+      // играются у всех (на телефоне — полноэкранный плеер по тапу).
       const res = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ["images", "videos"],
         quality: 0.8,
@@ -993,8 +994,13 @@ export function ChatScreen({ navigation, route }: Props) {
                 imageUri={img}
                 media={
                   audio ? <VoiceMessage uri={audio} mine={mine} />
-                    : video ? <VideoMessage uri={video} name={m.file_name} mine={mine} />
-                      : undefined
+                    : video ? (
+                      <VideoMessage
+                        name={m.file_name}
+                        mine={mine}
+                        onOpen={() => navigation.navigate("MediaViewer", { url: video, video: true })}
+                      />
+                    ) : undefined
                 }
                 onPressImage={() => img && navigation.navigate("MediaViewer", { url: img })}
                 ts={formatTs(m.created_at)}
