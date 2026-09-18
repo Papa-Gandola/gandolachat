@@ -1,5 +1,5 @@
-import { ResizeMode, Video, VideoReadyForDisplayEvent } from "expo-av";
-import { useState } from "react";
+import { useVideoPlayer, VideoView } from "expo-video";
+import { useEffect, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
 import { useTheme } from "../theme";
@@ -12,12 +12,13 @@ interface Props {
 
 // Инлайн-видео в пузыре — как голосовые (VoiceMessage), только с картинкой.
 //
-// Плеер (expo-av Video: ExoPlayer на андроиде, <video> в PWA) монтируется
+// Плеер (expo-video: ExoPlayer на андроиде, <video> в PWA) монтируется
 // ТОЛЬКО по тапу: десяток загруженных роликов в ленте — это десять
 // декодеров и трафик впустую. До тапа — тёмная плашка с ▶ и именем файла.
 // Ширина 240 (в 78% пузыря влезает даже на узком телефоне), высота — по
-// реальному соотношению сторон (onReadyForDisplay), пока не известно —
-// 16:9; вертикальные ролики с телефона ограничены 320 по высоте.
+// реальному соотношению сторон (размер дорожки из sourceLoad/videoTrack;
+// в вебе expo-video дорожки не отдаёт — остаётся 16:9 с contain), пока не
+// известно — 16:9; вертикальные ролики с телефона ограничены 320 по высоте.
 // Перемотка требует HTTP Range от сервера — его отдаёт наша ручка /uploads.
 const W = 240;
 const MAX_H = 320;
@@ -85,18 +86,56 @@ export function VideoMessage({ uri, name, mine }: Props) {
 
   return (
     <View style={{ width: w, height: h, borderRadius: 8, overflow: "hidden", backgroundColor: "#000", marginBottom: 6 }}>
-      <Video
-        source={{ uri }}
-        style={{ width: w, height: h }}
-        resizeMode={ResizeMode.CONTAIN}
-        useNativeControls
-        shouldPlay
-        onReadyForDisplay={(e: VideoReadyForDisplayEvent) => {
-          const ns = e.naturalSize;
-          if (ns?.width && ns?.height) setRatio(ns.width / ns.height);
-        }}
-        onError={() => setError(true)}
-      />
+      <InlinePlayer uri={uri} width={w} height={h} onRatio={setRatio} onError={() => setError(true)} />
     </View>
+  );
+}
+
+// Отдельный компонент: useVideoPlayer — хук, а плеер нужен только после
+// тапа. Плеер освобождается вместе с компонентом (useReleasingSharedObject).
+function InlinePlayer({
+  uri,
+  width,
+  height,
+  onRatio,
+  onError,
+}: {
+  uri: string;
+  width: number;
+  height: number;
+  onRatio: (r: number) => void;
+  onError: () => void;
+}) {
+  const player = useVideoPlayer({ uri }, (p) => {
+    p.play();
+  });
+
+  useEffect(() => {
+    const applySize = (size: { width: number; height: number } | undefined | null) => {
+      if (size?.width && size?.height) onRatio(size.width / size.height);
+    };
+    const subLoad = player.addListener("sourceLoad", (e) => {
+      applySize(e.availableVideoTracks?.[0]?.size);
+    });
+    const subStatus = player.addListener("statusChange", (e) => {
+      if (e.status === "error") onError();
+      if (e.status === "readyToPlay") applySize(player.videoTrack?.size);
+    });
+    return () => {
+      subLoad.remove();
+      subStatus.remove();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [player]);
+
+  return (
+    <VideoView
+      player={player}
+      style={{ width, height }}
+      contentFit="contain"
+      nativeControls
+      // TextureView: SurfaceView не режется скруглением пузыря на андроиде
+      surfaceType="textureView"
+    />
   );
 }

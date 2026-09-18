@@ -2,7 +2,7 @@
   "expo": {
     "name": "GandolaChat",
     "slug": "gandolachat",
-    "version": "0.8.0",
+    "version": "0.9.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "gandolachat",
@@ -14,7 +14,7 @@
     },
     "android": {
       "package": "com.gandola.chat",
-      "versionCode": 8,
+      "versionCode": 9,
       "usesCleartextTraffic": true,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
@@ -40,7 +40,8 @@
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_MICROPHONE",
-        "android.permission.FOREGROUND_SERVICE_CAMERA"
+        "android.permission.FOREGROUND_SERVICE_CAMERA",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"
       ]
     },
     "web": {
@@ -85,10 +86,12 @@
           "microphonePermission": "GandolaChat использует микрофон для звонков."
         }
       ],
+      "./plugins/withWebRTCMediaProjection",
       [
-        "expo-av",
+        "expo-audio",
         {
-          "microphonePermission": "GandolaChat использует микрофон для записи голосовых сообщений."
+          "microphonePermission": "GandolaChat использует микрофон для записи голосовых сообщений.",
+          "enableBackgroundPlayback": false
         }
       ],
       [
@@ -127,6 +130,6 @@
       "url": "https://u.expo.dev/40d53c62-406d-44e9-99ae-bb4c01a3dc28",
       "fallbackToCacheTimeout": 3000
     },
-    "runtimeVersion": "8"
+    "runtimeVersion": "9"
   }
 }

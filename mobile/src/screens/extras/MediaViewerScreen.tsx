@@ -1,8 +1,8 @@
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
-import * as FileSystem from "expo-file-system";
+import { File, Paths } from "expo-file-system";
 import * as MediaLibrary from "expo-media-library";
 import { useState } from "react";
-import { ActivityIndicator, Alert, Image, Pressable, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Image, Platform, Pressable, Text, View } from "react-native";
 
 import { CloseIcon } from "../../components/icons";
 import { ScreenContainer } from "../../components/ScreenContainer";
@@ -17,6 +17,13 @@ export function MediaViewerScreen({ navigation, route }: Props) {
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
+    // PWA: галереи и файловой системы нет (expo-media-library на вебе —
+    // стаб, см. metro.config.js) — открываем оригинал в новой вкладке,
+    // дальше «сохранить как» средствами браузера.
+    if (Platform.OS === "web") {
+      window.open(url, "_blank", "noopener");
+      return;
+    }
     setSaving(true);
     try {
       const perm = await MediaLibrary.requestPermissionsAsync();
@@ -25,8 +32,12 @@ export function MediaViewerScreen({ navigation, route }: Props) {
         return;
       }
       const name = url.split("/").pop() || `gandola_${Date.now()}.jpg`;
-      const dest = `${FileSystem.cacheDirectory}${name}`;
-      const dl = await FileSystem.downloadAsync(url, dest);
+      // Новый API expo-file-system (SDK 54+): объект File вместо строк-путей.
+      // Повторное сохранение того же фото — downloadFileAsync не
+      // перезаписывает, поэтому старую копию в кэше сносим.
+      const dest = new File(Paths.cache, name);
+      if (dest.exists) dest.delete();
+      const dl = await File.downloadFileAsync(url, dest);
       await MediaLibrary.saveToLibraryAsync(dl.uri);
       Alert.alert("Сохранено", "Фото сохранено в галерею.");
     } catch (err) {

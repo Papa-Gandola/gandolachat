@@ -1,5 +1,5 @@
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { Audio } from "expo-av";
+import type { AudioRecorder } from "expo-audio";
 import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
 import * as Haptics from "expo-haptics";
@@ -35,6 +35,13 @@ import { useCall } from "../../services/CallContext";
 import { clearDraft, getDraft, setDraft as persistDraft } from "../../services/drafts";
 import { useMessages } from "../../services/useMessages";
 import { markerPreview } from "../../services/useChats";
+import {
+  createVoiceRecorder,
+  ensureMicPermission,
+  releaseRecorder,
+  resetAudioSubsystem,
+  setRecordingMode,
+} from "../../services/voiceRecorder";
 import { wsService } from "../../services/ws";
 import { useTheme } from "../../theme";
 
@@ -64,25 +71,11 @@ function fileUrl(url: string | null | undefined): string | null {
   return `${API_URL}${url.startsWith("/") ? "" : "/"}${url}`;
 }
 
-// Module-level handle to the most recent recording. expo-av allows only one
-// prepared recording globally, so if one leaks (component re-render, fast
-// taps) we can force-unload it before starting the next.
-let lastRecording: Audio.Recording | null = null;
-
-// Some Android devices never release expo-av's single global recorder after
-// stopAndUnloadAsync(), so the next prepareToRecordAsync rejects with "Only one
-// Recording object can be prepared at a given time" (after a long native stall)
-// and stays wedged until the app process is killed. Toggling the whole audio
-// subsystem off→on force-releases the stuck native recorder without a restart.
-async function resetAudioSubsystem() {
-  try {
-    await Audio.setIsEnabledAsync(false);
-    await new Promise((r) => setTimeout(r, 250));
-    await Audio.setIsEnabledAsync(true);
-  } catch {
-    // best-effort — nothing more we can do from JS
-  }
-}
+// Module-level handle to the most recent recording: if one leaks (component
+// re-render, fast taps) we can force-stop it before starting the next —
+// two live recorders would fight for the mic. Сам рекордер — expo-audio,
+// см. services/voiceRecorder.ts (там же лечилка застрявшего натива).
+let lastRecording: AudioRecorder | null = null;
 
 const FWD_PALETTE = ["#ef5350", "#7c4dff", "#ffa726", "#26a69a", "#ec407a", "#5c6bc0", "#ff7043", "#3949ab", "#66bb6a"];
 const fwdColorFor = (id: number) => FWD_PALETTE[id % FWD_PALETTE.length];
@@ -136,9 +129,9 @@ export function ChatScreen({ navigation, route }: Props) {
   const [editing, setEditing] = useState<MessageOut | null>(null);
   const [forwardMsg, setForwardMsg] = useState<MessageOut | null>(null);
   const [forwardChats, setForwardChats] = useState<ChatOut[]>([]);
-  const recordingRef = useRef<Audio.Recording | null>(null);
-  // True while a recording is being created or torn down — expo-av allows only
-  // one prepared recording at a time, so block a new start until teardown ends.
+  const recordingRef = useRef<AudioRecorder | null>(null);
+  // True while a recording is being created or torn down — the mic is
+  // exclusive, so block a new start until teardown ends.
   const recBusyRef = useRef(false);
   const recBusySinceRef = useRef(0);
   const [recording, setRecording] = useState(false);
@@ -277,8 +270,15 @@ export function ChatScreen({ navigation, route }: Props) {
   // Discard any in-progress recording if the screen unmounts mid-record.
   useEffect(() => {
     return () => {
-      recordingRef.current?.stopAndUnloadAsync().catch(() => {});
+      const rec = recordingRef.current;
       recordingRef.current = null;
+      if (rec) {
+        rec
+          .stop()
+          .catch(() => {})
+          .finally(() => releaseRecorder(rec));
+        if (lastRecording === rec) lastRecording = null;
+      }
     };
   }, []);
 
@@ -519,7 +519,7 @@ export function ChatScreen({ navigation, route }: Props) {
       // Фото И видео из одной галереи: ролики уходят как обычный файл и
       // играются инлайн (VideoMessage) у всех.
       const res = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.All,
+        mediaTypes: ["images", "videos"],
         quality: 0.8,
         allowsMultipleSelection: true,
         selectionLimit: 10,
@@ -564,46 +564,46 @@ export function ChatScreen({ navigation, route }: Props) {
     recBusySinceRef.current = Date.now();
     setRecError(null);
     try {
-      const perm = await Audio.requestPermissionsAsync();
-      if (!perm.granted) {
+      if (!(await ensureMicPermission())) {
         setRecError("Нет доступа к микрофону — разреши его в настройках Android.");
         return;
       }
       // Force-release any recorder leaked from a previous attempt (ref cleared
-      // but native object not unloaded) — otherwise prepare throws "Only one
-      // recording object can be prepared at a given time".
+      // but native object not stopped) — two recorders would fight for the mic.
       if (lastRecording) {
+        const stale = lastRecording;
+        lastRecording = null;
         try {
-          await lastRecording.stopAndUnloadAsync();
+          await stale.stop();
         } catch {
           // already gone
         }
-        lastRecording = null;
+        releaseRecorder(stale);
       }
       // Живой плеер голосовых держит аудио-сессию на части андроидов —
-      // выгружаем ВСЕ перед записью, иначе prepare отдаёт «Only one
-      // Recording…» и микрофон клинит до перезапуска приложения.
+      // выгружаем ВСЕ перед записью, иначе prepare записи падает и
+      // микрофон клинит до перезапуска приложения.
       unloadAllVoicePlayers();
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      // Manual prepare → start (createAsync misbehaved on some devices). Hold
-      // the ref BEFORE start so the object can't be garbage-collected.
-      let rec = new Audio.Recording();
+      await setRecordingMode(true);
+      // Manual prepare → record. Hold the ref BEFORE record so the object
+      // can't be garbage-collected.
+      let rec = createVoiceRecorder();
       try {
-        await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+        await rec.prepareToRecordAsync();
       } catch {
-        // Previous recorder still held by the OS — force-release the whole audio
-        // subsystem (toggling the iOS audio-mode flag alone does nothing on
-        // Android) and retry once. ВАЖНО: со СВЕЖИМ объектом Recording —
-        // упавший prepare оставляет старый объект в состоянии, где повторный
+        // Previous recorder still held by the OS — force-release the whole
+        // audio subsystem and retry once. ВАЖНО: со СВЕЖИМ объектом —
+        // упавший prepare оставляет старый в состоянии, где повторный
         // prepare на нём падает всегда (ловили «одно голосовое за запуск»).
+        releaseRecorder(rec);
         await resetAudioSubsystem();
-        await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-        rec = new Audio.Recording();
-        await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+        await setRecordingMode(true);
+        rec = createVoiceRecorder();
+        await rec.prepareToRecordAsync();
       }
       lastRecording = rec;
       recordingRef.current = rec;
-      await rec.startAsync();
+      rec.record();
       recStartRef.current = Date.now();
       setRecording(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
@@ -619,26 +619,26 @@ export function ChatScreen({ navigation, route }: Props) {
   const stopRecording = async (send: boolean) => {
     const rec = recordingRef.current;
     if (!rec || recBusyRef.current) return;
-    // Block any new start until this recording is fully unloaded (expo-av only
-    // allows one prepared recording at a time).
+    // Block any new start until this recording is fully stopped and released
+    // (the mic is exclusive).
     recBusyRef.current = true;
     recordingRef.current = null;
     setRecording(false);
     let uri: string | null = null;
     let tooShort = true;
     try {
-      await rec.stopAndUnloadAsync();
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
-      uri = rec.getURI();
+      await rec.stop();
+      await setRecordingMode(false);
+      uri = rec.uri;
       tooShort = Date.now() - recStartRef.current < 800;
     } catch (err) {
       setRecError(err instanceof Error ? err.message : String(err));
     } finally {
       lastRecording = null;
-      // Proactively release the native recorder so the NEXT recording starts
-      // from a clean audio session — without this, some Android devices let you
-      // record exactly once per app launch.
-      await resetAudioSubsystem();
+      // Release the native recorder right away so the NEXT recording starts
+      // from a clean slate (expo-audio: рекордер одноразовый, новый — на
+      // каждую запись, см. voiceRecorder.ts).
+      releaseRecorder(rec);
       recBusyRef.current = false;
     }
     if (send && !tooShort && uri) {

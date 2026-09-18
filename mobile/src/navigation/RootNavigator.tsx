@@ -1,4 +1,4 @@
-import { NavigationContainer, Theme as NavTheme } from "@react-navigation/native";
+import { DarkTheme, NavigationContainer, Theme as NavTheme } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
 import { useAuth } from "../services/AuthContext";
@@ -19,9 +19,12 @@ export function RootNavigator() {
   // stack flashing for a moment when a saved token was about to log in.
   if (!ready) return null;
 
+  // react-navigation 7 требует в теме ещё и fonts — берём из DarkTheme.
   const navTheme: NavTheme = {
+    ...DarkTheme,
     dark: true,
     colors: {
+      ...DarkTheme.colors,
       primary: theme.colors.accent,
       background: theme.colors.bg,
       card: theme.colors.bg,

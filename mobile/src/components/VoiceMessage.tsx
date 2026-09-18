@@ -1,4 +1,4 @@
-import { Audio, AVPlaybackStatus } from "expo-av";
+import { AudioPlayer, AudioStatus, createAudioPlayer, setAudioModeAsync } from "expo-audio";
 import { useEffect, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
@@ -26,9 +26,17 @@ export function unloadAllVoicePlayers() {
 }
 
 // Voice-message player: play/pause + a progress bar + elapsed/total time.
+//
+// Плеер — expo-audio (SDK 57; раньше expo-av Sound). Создаём его
+// ИМПЕРАТИВНО (createAudioPlayer) и только по тапу: хук useAudioPlayer
+// грузил бы каждое голосовое ленты сразу при рендере.
 export function VoiceMessage({ uri, mine }: Props) {
   const theme = useTheme();
-  const soundRef = useRef<Audio.Sound | null>(null);
+  const playerRef = useRef<AudioPlayer | null>(null);
+  const subRef = useRef<{ remove: () => void } | null>(null);
+  // Дошли до конца: следующий play должен начать сначала (ExoPlayer после
+  // конца дорожки на play() сам не перематывает).
+  const finishedRef = useRef(false);
   const [playing, setPlaying] = useState(false);
   const [posMs, setPosMs] = useState(0);
   const [durMs, setDurMs] = useState(0);
@@ -36,19 +44,36 @@ export function VoiceMessage({ uri, mine }: Props) {
 
   // Stable pause handle (created once) this player registers as the active one.
   const pauseSelf = useRef(() => {
-    soundRef.current?.pauseAsync().catch(() => {});
+    try {
+      playerRef.current?.pause();
+    } catch {
+      // уже выгружен
+    }
     setPlaying(false);
   }).current;
 
   // Регистрируем и «полный сброс»: перед ЗАПИСЬЮ голосового загруженный
   // плеер надо не просто поставить на паузу, а выгрузить — на части
-  // андроидов живой Sound держит аудио-сессию и prepareToRecordAsync
-  // отдаёт «Only one Recording…» (после чего запись клинит навсегда).
+  // андроидов живой плеер держит аудио-сессию и prepare записи падает
+  // (после чего запись клинит навсегда).
   const unloadSelf = useRef(() => {
-    const snd = soundRef.current;
-    soundRef.current = null;
+    const p = playerRef.current;
+    playerRef.current = null;
+    subRef.current?.remove();
+    subRef.current = null;
     setPlaying(false);
-    snd?.unloadAsync().catch(() => {});
+    if (p) {
+      try {
+        p.pause();
+      } catch {
+        // ignore
+      }
+      try {
+        p.remove();
+      } catch {
+        // ignore
+      }
+    }
   }).current;
 
   useEffect(() => {
@@ -56,55 +81,56 @@ export function VoiceMessage({ uri, mine }: Props) {
     return () => {
       liveUnloads.delete(unloadSelf);
       if (activePause === pauseSelf) activePause = null;
-      soundRef.current?.unloadAsync().catch(() => {});
+      unloadSelf();
     };
   }, [pauseSelf, unloadSelf]);
 
-  const onStatus = (st: AVPlaybackStatus) => {
+  const onStatus = (st: AudioStatus) => {
     if (!st.isLoaded) return;
-    setPosMs(st.positionMillis);
-    if (st.durationMillis) setDurMs(st.durationMillis);
+    setPosMs(Math.max(0, Math.round(st.currentTime * 1000)));
+    if (st.duration && Number.isFinite(st.duration)) setDurMs(Math.round(st.duration * 1000));
     if (st.didJustFinish) {
       // Stop at the end — no auto-rewind (rewinding here used to restart
       // playback, making the clip loop forever). Tap play to listen again.
+      finishedRef.current = true;
       setPlaying(false);
       return;
     }
-    setPlaying(st.isPlaying);
+    setPlaying(st.playing);
   };
 
   const beginPlay = () => {
     // Pause any other voice message that's currently playing.
     if (activePause && activePause !== pauseSelf) activePause();
     activePause = pauseSelf;
+    finishedRef.current = false;
     setPlaying(true);
   };
 
   const toggle = async () => {
     try {
-      if (!soundRef.current) {
+      if (!playerRef.current) {
         setLoading(true);
-        await Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
-        const { sound } = await Audio.Sound.createAsync(
-          { uri },
-          { shouldPlay: true, isLooping: false },
-          onStatus,
-        );
-        soundRef.current = sound;
+        await setAudioModeAsync({ playsInSilentMode: true }).catch(() => {});
+        const p = createAudioPlayer({ uri }, { updateInterval: 250 });
+        playerRef.current = p;
+        subRef.current = p.addListener("playbackStatusUpdate", onStatus);
+        p.play();
         setLoading(false);
         beginPlay();
         return;
       }
+      const p = playerRef.current;
       if (playing) {
-        await soundRef.current.pauseAsync();
+        p.pause();
+        setPlaying(false);
         return;
       }
       // If we're at (or past) the end, replay from the start; otherwise resume.
-      if (durMs > 0 && posMs >= durMs - 50) {
-        await soundRef.current.replayAsync();
-      } else {
-        await soundRef.current.playAsync();
+      if (finishedRef.current || (durMs > 0 && posMs >= durMs - 50)) {
+        await p.seekTo(0);
       }
+      p.play();
       beginPlay();
     } catch {
       setLoading(false);

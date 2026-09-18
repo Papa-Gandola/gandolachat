@@ -30,7 +30,7 @@ export function MyProfileScreen({ navigation }: Props) {
   const pickAvatar = async () => {
     try {
       const res = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ["images"],
         quality: 0.8,
       });
       if (res.canceled || !res.assets[0]) return;

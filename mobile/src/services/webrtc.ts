@@ -31,6 +31,9 @@ async function ensurePermissions(video: boolean) {
   }
 }
 
+// Масштаб захвата экрана телефона (см. startScreenShare).
+const SCREEN_SCALE = 0.6;
+
 // Mirror the desktop ICE config so calls traverse the same STUN/TURN servers.
 const ICE_CONFIG = {
   iceServers: [
@@ -111,11 +114,29 @@ class WebRTCService {
   private pendingScreen = new Map<number, { chatId: number; signal: unknown }[]>();
   private screenStreams = new Map<number, MediaStream>();
 
+  // --- Шаринг СВОЕГО экрана (с телефона / из браузера) ---------------------
+  // Зеркало десктопного startScreenShare: отдельное соединение на КАЖДОГО
+  // участника (purpose=screen, role=sender; мы — инициатор), ответы приходят
+  // с role=receiver и маршрутизируются сюда, а не в приёмные screenPeers, —
+  // так один и тот же собеседник может одновременно и показывать нам экран,
+  // и смотреть наш. Натив: getDisplayMedia react-native-webrtc
+  // (MediaProjection; foreground-сервис библиотеки включает
+  // plugins/withWebRTCMediaProjection — без него Android 14+ бросает
+  // SecurityException). PWA: браузерный getDisplayMedia — есть только в
+  // десктопных браузерах, на телефонах кнопка скрыта (canShareScreen).
+  private localScreenStream: MediaStream | null = null;
+  private screenSendPeers = new Map<number, RTCPeerConnection>();
+  private screenSendEarly = new Map<number, unknown[]>();
+  private screenSendRestart = new Map<number, ReturnType<typeof setTimeout>>();
+
   onStream: StreamCb | null = null;
   onPeerLeft: LeftCb | null = null;
   onCallEnded: EndedCb | null = null;
   onScreenStream: StreamCb | null = null;
   onScreenEnded: LeftCb | null = null;
+  /** Наш шаринг остановила система/браузер (шторка «Остановить», «Stop
+   *  sharing») или кончился звонок — UI гасит кнопку. */
+  onScreenShareEnded: EndedCb | null = null;
 
   getFacing() {
     return this.facing;
@@ -353,6 +374,10 @@ class WebRTCService {
         }
       })();
     }
+    // Уже шарим экран, а это новый (или пересобранный после обрыва)
+    // участник — открываем ему и экранное соединение, иначе опоздавший в
+    // созвон экрана не увидит до стоп/старт шаринга (как на десктопе).
+    if (this.localScreenStream) this._createScreenSendPeer(uid);
     return pc;
   }
 
@@ -381,14 +406,17 @@ class WebRTCService {
     });
   }
 
-  private _sendScreen(uid: number, signal: unknown) {
+  /** Сигнал экранного соединения. role говорит той стороне, КАКОЙ из её
+   *  двух экранных peer'ов к нам адресат: receiver — мы принимаем её экран
+   *  (ответ уйдёт в её отправляющий peer), sender — мы шарим свой. */
+  private _sendScreen(uid: number, signal: unknown, role: "receiver" | "sender" = "receiver") {
     this._emit({
       type: "call_signal",
       chat_id: this.chatId,
       target_user_id: uid,
       signal,
       purpose: "screen",
-      role: "receiver",
+      role,
     });
   }
 
@@ -419,6 +447,10 @@ class WebRTCService {
     for (const [uid, pc] of this.peers) {
       const st = pc.iceConnectionState as string;
       if (st === "disconnected" || st === "failed") this._scheduleRestart(uid, pc, 0, reason);
+    }
+    for (const [uid, pc] of this.screenSendPeers) {
+      const st = pc.iceConnectionState as string;
+      if (st === "disconnected" || st === "failed") this._scheduleScreenRestart(uid, pc, 0);
     }
   }
 
@@ -506,6 +538,7 @@ class WebRTCService {
     this.remoteStreams.delete(uid);
     this.videoSenders.delete(uid);
     this.earlyCandidates.delete(uid);
+    this._dropScreenSend(uid);
     this.onPeerLeft?.(uid);
     // localStream уже null = teardown идёт прямо сейчас, второй не нужен
     if (this.peers.size === 0 && this.localStream) this._teardown();
@@ -555,10 +588,14 @@ class WebRTCService {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private _onScreenSignal(uid: number, data: any) {
-    // role=receiver — это ответ ЧУЖОМУ приёмному peer'у (мы не шарим), не наше
-    if (data.role === "receiver") return;
     const signal = data.signal;
     if (!signal) return;
+    // role=receiver — ответ НАШЕМУ отправляющему peer'у (мы шарим экран).
+    // Не шарим — это хвост уже закрытого шаринга, выбрасываем.
+    if (data.role === "receiver") {
+      if (this.localScreenStream) void this._applyScreenSendSignal(uid, signal);
+      return;
+    }
     if (!this.localStream) {
       const q = this.pendingScreen.get(uid) ?? [];
       q.push({ chatId: Number(data.chat_id), signal });
@@ -688,6 +725,201 @@ class WebRTCService {
     this.pendingScreen.delete(uid);
     this._dropScreen(uid, true);
   };
+
+  // --- свой экран -----------------------------------------------------------
+
+  /** Есть ли чем шарить: натив — Android (MediaProjection через
+   *  react-native-webrtc), веб — только браузеры с getDisplayMedia
+   *  (десктопные; мобильные Chrome/Safari его не дают). */
+  canShareScreen(): boolean {
+    if (Platform.OS === "web") {
+      return typeof (mediaDevices as unknown as { getDisplayMedia?: unknown })?.getDisplayMedia === "function";
+    }
+    return Platform.OS === "android";
+  }
+
+  isSharingScreen(): boolean {
+    return this.localScreenStream !== null;
+  }
+
+  /** Начать показ экрана всем участникам текущего звонка. false — отказ
+   *  (системный диалог отклонён, натив не дал захват, звонка нет). */
+  async startScreenShare(): Promise<boolean> {
+    if (!this.localStream || this.chatId == null) return false;
+    if (this.localScreenStream) return true;
+    let stream: MediaStream;
+    try {
+      // Натив читает только ветку android (масштаб: полный 1080×2400 на
+      // 30 fps в mesh из нескольких кодировщиков — перебор для телефона;
+      // текст при 0.6 на мониторе всё ещё читается). Браузеру — video:true.
+      const constraints: unknown =
+        Platform.OS === "web"
+          ? { video: true, audio: false }
+          : { video: true, android: { resolutionScale: SCREEN_SCALE } };
+      stream = await (mediaDevices as unknown as {
+        getDisplayMedia: (c: unknown) => Promise<MediaStream>;
+      }).getDisplayMedia(constraints);
+    } catch (err) {
+      console.warn("[webrtc] getDisplayMedia failed", err);
+      return false;
+    }
+    // Пока спрашивали разрешение, звонок мог кончиться
+    if (!this.localStream || this.chatId == null) {
+      stream.getTracks().forEach((t) => t.stop());
+      return false;
+    }
+    this.localScreenStream = stream;
+    // Стоп из системного UI (шторка «Остановить», кнопка Chrome «Stop
+    // sharing»): дорожка кончается сама — сворачиваем шаринг и говорим UI.
+    const track = stream.getVideoTracks()[0];
+    if (track) {
+      const onEnded = () => {
+        if (this.localScreenStream !== stream) return;
+        this.stopScreenShare();
+        this.onScreenShareEnded?.();
+      };
+      try {
+        track.addEventListener("ended", onEnded);
+      } catch {
+        (track as unknown as { onended: (() => void) | null }).onended = onEnded;
+      }
+    }
+    for (const uid of Array.from(this.peers.keys())) this._createScreenSendPeer(uid);
+    this._emit({ type: "screen_share_status", chat_id: this.chatId, sharing: true });
+    return true;
+  }
+
+  /** Остановить показ своего экрана (приёмные экраны других не трогаем). */
+  stopScreenShare(notify = true) {
+    const ls = this.localScreenStream;
+    if (!ls) return;
+    this.localScreenStream = null;
+    for (const uid of Array.from(this.screenSendPeers.keys())) this._dropScreenSend(uid);
+    this.screenSendEarly.clear();
+    ls.getTracks().forEach((t) => {
+      try {
+        t.stop();
+      } catch {
+        // уже остановлена
+      }
+    });
+    // Той стороне — «стоп» явно: плитка гаснет сразу, а не когда соединение
+    // развалится по таймауту (так же делает десктоп).
+    if (notify && this.chatId != null) {
+      this._emit({ type: "screen_share_status", chat_id: this.chatId, sharing: false });
+    }
+  }
+
+  private _createScreenSendPeer(uid: number) {
+    const ls = this.localScreenStream;
+    if (!ls) return;
+    this._dropScreenSend(uid);
+    const pc = new RTCPeerConnection(ICE_CONFIG);
+    this.screenSendPeers.set(uid, pc);
+    for (const track of ls.getTracks()) pc.addTrack(track, ls);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    pc.addEventListener("icecandidate", (e: any) => {
+      const c = e.candidate;
+      if (c) {
+        this._sendScreen(
+          uid,
+          { type: "candidate", candidate: { candidate: c.candidate, sdpMLineIndex: c.sdpMLineIndex, sdpMid: c.sdpMid } },
+          "sender",
+        );
+      }
+    });
+    // Мы инициатор — мы и рестартим ICE (респондер-приёмник ждёт наш оффер).
+    pc.addEventListener("iceconnectionstatechange", () => {
+      const st = pc.iceConnectionState as string;
+      if (st === "connected" || st === "completed") {
+        const t = this.screenSendRestart.get(uid);
+        if (t) clearTimeout(t);
+        this.screenSendRestart.delete(uid);
+        return;
+      }
+      if (st === "disconnected") this._scheduleScreenRestart(uid, pc, 2000);
+      if (st === "failed") this._scheduleScreenRestart(uid, pc, 0);
+    });
+    void this._offerScreen(uid, pc, false);
+  }
+
+  private async _offerScreen(uid: number, pc: RTCPeerConnection, iceRestart: boolean) {
+    try {
+      const offer = await pc.createOffer(iceRestart ? { iceRestart: true } : {});
+      await pc.setLocalDescription(offer);
+      this._sendScreen(uid, { type: pc.localDescription?.type, sdp: pc.localDescription?.sdp }, "sender");
+    } catch (err) {
+      console.warn("[webrtc] screen offer failed", err);
+    }
+  }
+
+  private _scheduleScreenRestart(uid: number, pc: RTCPeerConnection, delay: number) {
+    if (this.screenSendRestart.has(uid)) return;
+    this.screenSendRestart.set(
+      uid,
+      setTimeout(() => {
+        this.screenSendRestart.delete(uid);
+        if (this.screenSendPeers.get(uid) !== pc) return;
+        const st = pc.iceConnectionState as string;
+        if (st !== "disconnected" && st !== "failed") return; // само ожило
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if ((pc as any).signalingState !== "stable") return;
+        console.log(`[webrtc] screen ICE restart → ${uid} (${st})`);
+        void this._offerScreen(uid, pc, true);
+      }, delay),
+    );
+  }
+
+  private _dropScreenSend(uid: number) {
+    const t = this.screenSendRestart.get(uid);
+    if (t) clearTimeout(t);
+    this.screenSendRestart.delete(uid);
+    this.screenSendEarly.delete(uid);
+    const pc = this.screenSendPeers.get(uid);
+    if (pc) {
+      try {
+        pc.close();
+      } catch {
+        // ignore
+      }
+    }
+    this.screenSendPeers.delete(uid);
+  }
+
+  /** Ответ (answer + кандидаты) от приёмника нашего экрана. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async _applyScreenSendSignal(uid: number, signal: any) {
+    const pc = this.screenSendPeers.get(uid);
+    if (!pc) return;
+    try {
+      if (signal.sdp) {
+        if (signal.type !== "answer") return; // приёмник офферить не должен
+        await pc.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: signal.sdp }));
+        const queued = this.screenSendEarly.get(uid);
+        if (queued && queued.length) {
+          this.screenSendEarly.delete(uid);
+          for (const c of queued) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate((c as { candidate: unknown }).candidate as never));
+            } catch (err) {
+              console.warn("[webrtc] screen-send: drained candidate failed", err);
+            }
+          }
+        }
+      } else if (signal.candidate) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (!(pc as any).remoteDescription) {
+          const q = this.screenSendEarly.get(uid) ?? [];
+          q.push(signal);
+          this.screenSendEarly.set(uid, q);
+          return;
+        }
+        await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+      }
+    } catch (err) {
+      console.warn("[webrtc] screen-send signal failed", err);
+    }
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private async _applySignal(uid: number, signal: any) {
@@ -833,6 +1065,7 @@ class WebRTCService {
     this.pending.delete(fromId);
     this.pendingScreen.delete(fromId);
     this._dropScreen(fromId, true);
+    this._dropScreenSend(fromId);
     if (this.peers.has(fromId)) {
       this._dropPeer(fromId); // сам зовёт onPeerLeft и _teardown, если никого не осталось
     } else {
@@ -1022,6 +1255,9 @@ class WebRTCService {
     // teardown поверх этого.
     const ls = this.localStream;
     this.localStream = null;
+    // Свой экран гасим ПЕРВЫМ: остановка дорожки отпускает MediaProjection
+    // и foreground-сервис библиотеки; статус слать некому — звонок кончился.
+    this.stopScreenShare(false);
     this.peers.forEach((pc) => {
       try {
         pc.close();

@@ -37,13 +37,13 @@ export function navigateToChat(link: ChatDeeplink): void {
   // CommonActions.navigate handles nested navigators correctly: if the user
   // is already on a Chat screen, this just updates params (and ChatScreen's
   // route param change will pick it up). If they're elsewhere, it pushes.
+  // pop: true — в react-navigation 7 navigate иначе не возвращается к
+  // экрану чата, лежащему глубже в стеке (пуш поверх поиска по сообщениям
+  // плодил бы второй ChatScreen).
   navigationRef.dispatch(
-    CommonActions.navigate({
-      name: "Main",
-      params: {
-        screen: "Chats",
-        params: { screen, params },
-      },
+    CommonActions.navigate("Main", {
+      screen: "Chats",
+      params: { screen, params, pop: true },
     }),
   );
 }
