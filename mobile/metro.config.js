@@ -17,6 +17,9 @@ const WEB_ALIASES = {
   // Маршрут звука звонка (динамик/разговорный) — андроидный AudioManager,
   // в браузере такого рычага нет: стаб-пустышка, кнопка в вебе скрыта.
   "react-native-incall-manager": path.resolve(__dirname, "web-stubs/react-native-incall-manager.js"),
+  // SDK 57: индекс expo-media-library на вебе требует нативный модуль
+  // ExpoMediaLibraryNext прямо при импорте — PWA падала белым экраном.
+  "expo-media-library": path.resolve(__dirname, "web-stubs/expo-media-library.js"),
 };
 
 config.resolver.resolveRequest = (context, moduleName, platform) => {

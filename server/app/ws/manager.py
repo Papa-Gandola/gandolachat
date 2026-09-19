@@ -14,6 +14,14 @@ class ConnectionManager:
         self.chat_users: dict[int, set[int]] = defaultdict(set)
         # chat_id -> set of user_ids currently in a call
         self.active_calls: dict[int, set[int]] = defaultdict(set)
+        # chat_id -> user_id -> сокеты, С КОТОРЫХ юзер вошёл в этот звонок.
+        # Членство в звонке — по user_id (mesh ключуется им), но знать
+        # УСТРОЙСТВО обязательно: умерший сокет телефона должен вывести юзера
+        # из звонка, даже когда тот же юзер всё ещё подключён с компа. Без
+        # этого связка «позвонил с телефона → телефон отвалился» оставляла
+        # юзера в составе навсегда: на компе вечное «вы в звонке с другого
+        # устройства», и туда же уходило подавление входящих по этому чату.
+        self.call_sockets: dict[int, dict[int, set[WebSocket]]] = {}
         # chat_id -> metadata about the active call so we can produce a history record
         #   "started_at": epoch seconds when first participant joined,
         #   "initiator": user_id of caller,
@@ -57,6 +65,53 @@ class ConnectionManager:
 
     def join_chat(self, user_id: int, chat_id: int):
         self.chat_users[chat_id].add(user_id)
+
+    # --- состав звонка -----------------------------------------------------
+
+    def join_call(self, chat_id: int, user_id: int, websocket: WebSocket | None) -> bool:
+        """Зарегистрировать юзера (и устройство) в звонке чата.
+        Возвращает True, если в звонке его ещё не было."""
+        was_new = user_id not in self.active_calls[chat_id]
+        self.active_calls[chat_id].add(user_id)
+        if websocket is not None:
+            self.call_sockets.setdefault(chat_id, {}).setdefault(user_id, set()).add(websocket)
+        return was_new
+
+    def leave_call(self, chat_id: int, user_id: int) -> None:
+        """Выход юзера из звонка со ВСЕХ его устройств. Пустой звонок
+        удаляется целиком (и из active_calls, и из call_sockets)."""
+        self.active_calls.get(chat_id, set()).discard(user_id)
+        by_user = self.call_sockets.get(chat_id)
+        if by_user is not None:
+            by_user.pop(user_id, None)
+            if not by_user:
+                self.call_sockets.pop(chat_id, None)
+        if not self.active_calls.get(chat_id):
+            self.active_calls.pop(chat_id, None)
+            self.call_sockets.pop(chat_id, None)
+
+    def end_call(self, chat_id: int) -> None:
+        """Звонок закончился целиком (таймаут «не взяли»)."""
+        self.active_calls.pop(chat_id, None)
+        self.call_sockets.pop(chat_id, None)
+
+    def drop_call_socket(self, user_id: int, websocket: WebSocket | None) -> list[int]:
+        """Сокет умер: вывести его из всех звонков. Возвращает чаты, где у
+        юзера не осталось НИ ОДНОГО живого устройства в звонке, — из них он
+        действительно вышел (сам состав НЕ трогаем, это делает leave_call:
+        вызывающему ещё нужно разослать call_end/call_active)."""
+        if websocket is None:
+            return []
+        left: list[int] = []
+        for chat_id, by_user in list(self.call_sockets.items()):
+            socks = by_user.get(user_id)
+            if not socks or websocket not in socks:
+                continue
+            socks.discard(websocket)
+            if not socks:
+                by_user.pop(user_id, None)
+                left.append(chat_id)
+        return left
 
     async def _send(self, ws: WebSocket, message: dict, user_id: int | None = None):
         # Fast-path: skip if the socket is already known-dead. Without this we

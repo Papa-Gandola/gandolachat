@@ -117,7 +117,7 @@ export function ChatInfoScreen({ navigation, route }: Props) {
   const pickAvatar = async () => {
     if (!isOwner) return;
     try {
-      const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 });
+      const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.8 });
       if (res.canceled || !res.assets[0]) return;
       const a = res.assets[0];
       const updated = await chatApi.uploadGroupAvatar(numericId, {

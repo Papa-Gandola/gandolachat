@@ -356,8 +356,9 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                         active = manager.active_calls.get(chat_id, set())
                         if len(active) >= 2 and user_id not in active:
                             continue  # DM call full, reject
-                    is_new_to_call = user_id not in manager.active_calls[chat_id]
-                    manager.active_calls[chat_id].add(user_id)
+                    # Запоминаем и СОКЕТ: по нему звонок переживает смерть
+                    # одного устройства (см. manager.call_sockets).
+                    is_new_to_call = manager.join_call(chat_id, user_id, websocket)
                     # Track call meta for history
                     just_created_meta = chat_id not in manager.call_meta
                     if just_created_meta:
@@ -443,7 +444,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                                     "chat_id": _chat_id,
                                     "timeout": True,
                                 })
-                            manager.active_calls.pop(_chat_id, None)
+                            manager.end_call(_chat_id)
                             # Плашки «в созвоне» у всего чата должны погаснуть —
                             # иначе неотвеченный звонок «висит» в шапке вечно.
                             await manager.broadcast_to_chat(_chat_id, {
@@ -522,7 +523,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                     continue
                 if chat_obj and not chat_obj.is_group and len(active) >= 2:
                     continue  # ЛС-звонок полон
-                active.add(user_id)
+                manager.join_call(chat_id, user_id, websocket)
                 meta = manager.call_meta.get(chat_id)
                 if meta is None:
                     import time as _t
@@ -551,9 +552,8 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
             elif event == "call_end":
                 chat_id = data.get("chat_id")
                 declined = bool(data.get("declined"))
-                manager.active_calls.get(chat_id, set()).discard(user_id)
-                if not manager.active_calls.get(chat_id):
-                    manager.active_calls.pop(chat_id, None)
+                manager.leave_call(chat_id, user_id)
+                if chat_id not in manager.active_calls:
                     # Last person left → finalise the call and persist a history record
                     await _persist_call_record(chat_id, db, ended_by=user_id, declined=declined)
                 await manager.broadcast_to_chat(chat_id, {
@@ -590,25 +590,41 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
         # another device. fully_offline is True only when no sockets remain.
         fully_offline = manager.disconnect(user_id, chat_ids, websocket)
 
+        # Звонки чистим ПО СОКЕТУ, а не по «юзер ушёл совсем»: отвалившийся
+        # телефон обязан выйти из звонка, даже когда тот же юзер сидит с
+        # компа. Иначе он висел в составе до конца звонка — на компе вечное
+        # «вы в звонке с другого устройства», и входящие по этому чату там
+        # молчали (подавление «я уже в этом звонке» смотрит в тот же состав).
+        left_call_chats = manager.drop_call_socket(user_id, websocket)
         if fully_offline:
-            # Remove from any active calls + notify
-            active_call_chats = [cid for cid, users in manager.active_calls.items() if user_id in users]
-            for cid in active_call_chats:
-                manager.active_calls[cid].discard(user_id)
-                became_empty = not manager.active_calls.get(cid)
-                if became_empty:
-                    manager.active_calls.pop(cid, None)
-                    await _persist_call_record(cid, db, ended_by=user_id, declined=False)
-                await manager.broadcast_to_chat(cid, {
-                    "type": "call_end",
-                    "from_user_id": user_id,
-                    "chat_id": cid,
-                }, exclude_user=user_id)
-                await manager.broadcast_to_chat(cid, {
-                    "type": "call_active",
-                    "chat_id": cid,
-                    "participants": list(manager.active_calls.get(cid, set())),
-                })
+            # Подстраховка для звонков без известного сокета (старые записи).
+            left_call_chats += [
+                cid for cid, users in manager.active_calls.items()
+                if user_id in users and cid not in left_call_chats
+            ]
+        for cid in dict.fromkeys(left_call_chats):
+            manager.leave_call(cid, user_id)
+            if cid not in manager.active_calls:
+                await _persist_call_record(cid, db, ended_by=user_id, declined=False)
+            await manager.broadcast_to_chat(cid, {
+                "type": "call_end",
+                "from_user_id": user_id,
+                "chat_id": cid,
+            }, exclude_user=user_id)
+            # exclude_user выше режет ВСЕ сокеты юзера — а другим его
+            # устройствам знать об отвале тоже нужно (гасят входящий/плашку).
+            await manager.send_to_user(user_id, {
+                "type": "call_end",
+                "from_user_id": user_id,
+                "chat_id": cid,
+            })
+            await manager.broadcast_to_chat(cid, {
+                "type": "call_active",
+                "chat_id": cid,
+                "participants": list(manager.active_calls.get(cid, set())),
+            })
+
+        if fully_offline:
             # Broadcast offline status
             last_seen_iso = user_obj.last_seen.isoformat() if user_obj and user_obj.last_seen else None
             for cid in chat_ids:

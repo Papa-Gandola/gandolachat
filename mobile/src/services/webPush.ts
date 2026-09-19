@@ -26,10 +26,12 @@ function isWebPushCapable(): boolean {
   );
 }
 
-function b64ToUint8(base64: string): Uint8Array {
+function b64ToUint8(base64: string): Uint8Array<ArrayBuffer> {
   const padding = "=".repeat((4 - (base64.length % 4)) % 4);
   const raw = atob((base64 + padding).replace(/-/g, "+").replace(/_/g, "/"));
-  const out = new Uint8Array(raw.length);
+  // Явный ArrayBuffer: TS 5.9 не пускает Uint8Array<ArrayBufferLike> в
+  // BufferSource (applicationServerKey).
+  const out = new Uint8Array(new ArrayBuffer(raw.length));
   for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
   return out;
 }
