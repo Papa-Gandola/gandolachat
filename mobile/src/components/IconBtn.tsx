@@ -6,13 +6,17 @@ interface Props {
   onPress?: () => void;
   size?: number;
   disabled?: boolean;
+  /** Подпись для скринридера (в вебе — aria-label): кнопка без текста. */
+  label?: string;
 }
 
-export function IconBtn({ children, onPress, size = 36, disabled }: Props) {
+export function IconBtn({ children, onPress, size = 36, disabled, label }: Props) {
   return (
     <Pressable
       onPress={onPress}
       disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={label}
       style={({ pressed }) => ({
         width: size,
         height: size,

@@ -789,6 +789,7 @@ export function ChatScreen({ navigation, route }: Props) {
           </IconBtn>
         )}
         <IconBtn
+          label="Позвонить"
           disabled={isNotes || (userId == null && callParticipants.length === 0 && !inThisCall)}
           onPress={() => {
             // Живой созвон → мгновенно подключаемся (или разворачиваем свой);

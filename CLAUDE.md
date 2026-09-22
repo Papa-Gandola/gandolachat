@@ -938,6 +938,29 @@ WhatsNewModal, тот его переиспользует). `components/Settings
   манифест / MainApplication.kt / res, потом `rm -rf android
   google-services.json`. Плагины с чистой функцией (`applyServiceType`,
   `enableMediaProjectionService`) гоняются node-скриптом без prebuild.
+- **Сквозные звонки в браузере** (22.09; звонки PWA ↔ десктоп с камерой
+  проверяются БЕЗ телефона): десктопный рендерер собирается под локальный
+  сервер (`cd client && VITE_API_URL=http://127.0.0.1:8000
+  VITE_WS_URL=ws://127.0.0.1:8000 npx vite build`) и раздаётся статикой
+  (`python3 -m http.server 5174` из `client/dist/renderer`; в браузере всё
+  живёт через `window.electron?.`-гарды), PWA — на :8000 через симлинк;
+  Chromium с `--use-fake-device-for-media-stream
+  --use-fake-ui-for-media-stream` даёт фейковую камеру (зелёный «пакман» —
+  кадр нечёрный, проверяется через canvas). `scratchpad/pw/call_e2e.js`:
+  телефон (gandola) звонит, десктоп (Костян) принимает (сперва закрыть
+  «Понятно» у «Что нового» — оно накрывает баннер звонка), телефон
+  включает камеру → на десктопе `[data-tile-id="remote-<id>"] video` с
+  videoWidth>0, плюс msid в первом оффере (`setLocalDescription`
+  перехвачен через addInitScript); `call_e2e_reverse.js`: десктоп звонит
+  с выключенной камерой, телефон принимает, десктоп включает камеру →
+  `<video>` на телефоне живой (сценарий находки №1 партии 0.9.1).
+  Селекторы: на мобилке — `accessibilityLabel` кнопок звонка (Позвонить/
+  Принять/Отклонить/Микрофон/Камера/Показ экрана/Завершить → aria-label в
+  PWA), на десктопе — `title` кнопок («Звонок», «Включить камеру»,
+  «Завершить звонок»). `shot_video_viewer.js` — просмотр видео на 400×800:
+  кнопка СОХРАНИТЬ ниже `<video>`; сам ролик в headless Chromium серый —
+  там нет H.264, это не баг. Тестовое видео в чат — POST
+  `/api/chats/{id}/files` с `server/assets/compendium/intro.mp4`.
 
 ## Грабли (уже кусали — не наступать)
 

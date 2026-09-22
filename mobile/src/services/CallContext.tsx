@@ -783,13 +783,13 @@ export function CallProvider({ children }: { children: ReactNode }) {
           </Text>
           <View style={{ flexDirection: "row", gap: 56, marginTop: 52 }}>
             <View style={{ alignItems: "center" }}>
-              <CircleBtn bg={theme.colors.danger} onPress={reject}>
+              <CircleBtn bg={theme.colors.danger} onPress={reject} label="Отклонить">
                 <HangupIcon color="#fff" size={26} />
               </CircleBtn>
               <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkDim, marginTop: 8 }}>отклонить</Text>
             </View>
             <View style={{ alignItems: "center" }}>
-              <CircleBtn bg={theme.colors.online} onPress={accept}>
+              <CircleBtn bg={theme.colors.online} onPress={accept} label="Принять">
                 <PhoneIcon color="#fff" size={24} />
               </CircleBtn>
               <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkDim, marginTop: 8 }}>принять</Text>
@@ -886,7 +886,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
           {/* gap поджат и разрешён перенос: с кнопкой динамика их до пяти,
               на узком экране в один ряд по 20px уже не помещались */}
           <View style={{ position: "absolute", left: 0, right: 0, bottom: 44, flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 12 }}>
-            <CircleBtn bg={muted ? theme.colors.danger : "rgba(255,255,255,0.16)"} onPress={toggleMute}>
+            <CircleBtn bg={muted ? theme.colors.danger : "rgba(255,255,255,0.16)"} onPress={toggleMute} label="Микрофон">
               {muted ? <MicOffIcon color="#fff" size={24} /> : <MicIcon color="#fff" size={24} />}
             </CircleBtn>
             {/* Динамик ↔ разговорный. В вебе маршрутом звука рулит система —
@@ -896,7 +896,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
                 <Text style={{ fontSize: 22 }}>{speakerOn ? "🔊" : "🔈"}</Text>
               </CircleBtn>
             )}
-            <CircleBtn bg={videoOff ? theme.colors.danger : "rgba(255,255,255,0.16)"} onPress={toggleVideo}>
+            <CircleBtn bg={videoOff ? theme.colors.danger : "rgba(255,255,255,0.16)"} onPress={toggleVideo} label="Камера">
               {videoOff ? <VideoOffIcon color="#fff" size={24} /> : <VideoIcon color="#fff" size={24} />}
             </CircleBtn>
             {!videoOff && (
@@ -907,11 +907,11 @@ export function CallProvider({ children }: { children: ReactNode }) {
             {/* Показ своего экрана (Android / PWA на компе). Сверни звонок
                 кнопкой ⌄ — и показывай что угодно, звонок живёт. */}
             {canShareScreen && (
-              <CircleBtn bg={screenSharing ? theme.colors.online : "rgba(255,255,255,0.16)"} onPress={toggleScreen}>
+              <CircleBtn bg={screenSharing ? theme.colors.online : "rgba(255,255,255,0.16)"} onPress={toggleScreen} label="Показ экрана">
                 <ScreenIcon color={screenSharing ? "#0a0a0a" : "#fff"} size={24} />
               </CircleBtn>
             )}
-            <CircleBtn bg={theme.colors.danger} size={64} onPress={end}>
+            <CircleBtn bg={theme.colors.danger} size={64} onPress={end} label="Завершить">
               <HangupIcon color="#fff" size={26} />
             </CircleBtn>
           </View>
@@ -945,10 +945,25 @@ function fmtDur(sec: number): string {
   return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
-function CircleBtn({ children, onPress, bg, size = 56 }: { children: ReactNode; onPress: () => void; bg: string; size?: number }) {
+function CircleBtn({
+  children,
+  onPress,
+  bg,
+  size = 56,
+  label,
+}: {
+  children: ReactNode;
+  onPress: () => void;
+  bg: string;
+  size?: number;
+  /** Подпись для скринридера (в вебе — aria-label): кнопки тут без текста. */
+  label?: string;
+}) {
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
       style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: bg, alignItems: "center", justifyContent: "center" }}
     >
       {children}
