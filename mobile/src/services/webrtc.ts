@@ -308,10 +308,19 @@ class WebRTCService {
       // телефон вошёл, включил видео на компе — ничего не видно».
       // sendrecv без дорожки ничего не шлёт, но слот согласован: дальше
       // хватает replaceTrack в любую сторону.
+      // `streams: [localStream]` ОБЯЗАТЕЛЕН: он кладёт в SDP msid нашего
+      // потока. Без него видеодорожка у десктопа приезжает «сиротой»
+      // (event.streams пуст), а simple-peer на такие не реагирует вовсе —
+      // ни 'stream', ни 'track' — и при включении камеры на телефоне комп
+      // видел чёрный экран. С msid дорожка входит в тот же поток, что и
+      // звук, и десктоп получает её ещё при первом согласовании.
       if (!this.localStream.getVideoTracks().length) {
         try {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const tr = (pc as any).addTransceiver("video", { direction: "sendrecv" });
+          const tr = (pc as any).addTransceiver("video", {
+            direction: "sendrecv",
+            streams: [this.localStream],
+          });
           if (tr?.sender) this.videoSenders.set(uid, tr.sender);
         } catch (err) {
           console.warn("[webrtc] addTransceiver(video) failed", err);

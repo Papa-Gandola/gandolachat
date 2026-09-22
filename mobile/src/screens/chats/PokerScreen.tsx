@@ -45,6 +45,8 @@ export function PokerScreen({ navigation, route }: Props) {
   const [showCreate, setShowCreate] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  // Видимая высота области под столом (см. onLayout у ScrollView стола).
+  const [areaH, setAreaH] = useState(0);
   const [history, setHistory] = useState<PokerHistory | null>(null);
   const [graceLeft, setGraceLeft] = useState<number | null>(null);
   const prevMyTurn = useRef(false);
@@ -467,8 +469,15 @@ export function PokerScreen({ navigation, route }: Props) {
         </Text>
       ) : null}
 
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12 }}>
-        <PokerTable theme={theme} table={t} game={live} currentUserId={user?.id ?? -1} />
+      {/* Высоту видимой области меряем, чтобы стол помещался в неё ЦЕЛИКОМ:
+          иначе на телефоне своё место с картами уезжало под панель действий,
+          и во время раздачи приходилось скроллить между картами и кнопками. */}
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ padding: 12 }}
+        onLayout={(e) => setAreaH(e.nativeEvent.layout.height)}
+      >
+        <PokerTable theme={theme} table={t} game={live} currentUserId={user?.id ?? -1} maxHeight={areaH || undefined} />
         {live?.last_summary && live.hand?.street === "done" ? (
           <HandSummary theme={theme} summary={live.last_summary} players={live.players} />
         ) : null}
@@ -721,16 +730,25 @@ function TableBtn({
   );
 }
 
+// Коробка одного места за столом (см. геометрию в PokerTable): ширина под
+// имя/стек, высота — под самое высокое содержимое (две карты + имя + стек +
+// ставка + ALL-IN).
+const SEAT_W = 80;
+const SEAT_H = 104;
+
 function PokerTable({
   theme,
   table,
   game,
   currentUserId,
+  maxHeight,
 }: {
   theme: ThemeT;
   table: PokerTableOut;
   game: PokerGameView | null;
   currentUserId: number;
+  /** Видимая высота области под стол — стол ужимается, чтобы влезть в неё. */
+  maxHeight?: number;
 }) {
   const N = table.max_seats;
   const myPlayer = game?.players.find((p) => p.user_id === currentUserId);
@@ -738,13 +756,26 @@ function PokerTable({
   const playersBySeat = new Map((game?.players ?? []).map((p) => [p.seat_index, p]));
   const seatsBySeat = new Map(table.seats.map((s) => [s.seat_index, s]));
   const community = game?.hand?.community ?? [];
+  // Геометрия мест — от РЕАЛЬНОГО размера стола. Раньше радиус был
+  // фиксированным (40%/42%), а якорь места — «34px от верха»: на узком
+  // телефоне своё место с картами (~100px высотой) свисало за нижний край
+  // стола, а боковые заезжали за рамку. Теперь у каждого места коробка
+  // SEAT_W×SEAT_H, центр коробки на овале, радиус ужимается так, чтобы
+  // коробка целиком помещалась внутри стола; содержимое прижато к краю,
+  // дальнему от центра (верхние — вверх, нижние — вниз).
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  const rx = size.w > 0 ? Math.min(0.4, (size.w / 2 - SEAT_W / 2 - 4) / size.w) : 0.4;
+  const ry = size.h > 0 ? Math.min(0.42, (size.h / 2 - SEAT_H / 2 - 4) / size.h) : 0.42;
 
   return (
     <View
+      onLayout={(e) => setSize({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
       style={{
         width: "100%",
         aspectRatio: 0.72,
-        maxWidth: 460,
+        // Ширину капаем и по высоте области (aspectRatio 0.72 = w/h): на
+        // телефоне стол во всю ширину выше экрана над кнопками.
+        maxWidth: Math.min(460, maxHeight ? Math.max(240, (maxHeight - 24) * 0.72) : 460),
         alignSelf: "center",
         backgroundColor: theme.id === "neo" ? "#0a1410" : "#13402a",
         borderRadius: theme.id === "neo" ? 0 : 200,
@@ -773,8 +804,9 @@ function PokerTable({
       {/* Seats */}
       {Array.from({ length: N }).map((_, idx) => {
         const angle = ((idx - mySeatIndex) / N) * Math.PI * 2 + Math.PI / 2;
-        const x = 50 + 40 * Math.cos(angle);
-        const y = 50 + 42 * Math.sin(angle);
+        const x = 50 + rx * 100 * Math.cos(angle);
+        const y = 50 + ry * 100 * Math.sin(angle);
+        const sin = Math.sin(angle);
         const player = playersBySeat.get(idx);
         const seat = seatsBySeat.get(idx);
         const isToAct = game?.hand?.to_act_seat === idx;
@@ -786,9 +818,11 @@ function PokerTable({
               position: "absolute",
               left: `${x}%`,
               top: `${y}%`,
-              transform: [{ translateX: -40 }, { translateY: -34 }],
-              width: 80,
+              transform: [{ translateX: -SEAT_W / 2 }, { translateY: -SEAT_H / 2 }],
+              width: SEAT_W,
+              height: SEAT_H,
               alignItems: "center",
+              justifyContent: sin > 0.3 ? "flex-end" : sin < -0.3 ? "flex-start" : "center",
             }}
           >
             {player || seat ? (

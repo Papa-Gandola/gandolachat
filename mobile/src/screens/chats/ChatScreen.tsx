@@ -89,6 +89,35 @@ export function ChatScreen({ navigation, route }: Props) {
   const call = useCall();
   const { chatId, name, userId, avatarUrl, allowAllWrite, createdBy, isNotes } = route.params;
   const [showReminderSheet, setShowReminderSheet] = useState(false);
+  // Аватарка в шапке. При заходе из пуша параметров с ней нет (в payload
+  // только имя и id) — добираем сами: ЛС — профиль собеседника, группа —
+  // карточка чата из списка. Иначе после тапа по уведомлению шапка была
+  // с пустым кружком.
+  const [headerAvatar, setHeaderAvatar] = useState<string | null | undefined>(avatarUrl);
+  useEffect(() => {
+    if (avatarUrl || isNotes) return;
+    let cancelled = false;
+    if (userId != null) {
+      userApi
+        .getUser(userId)
+        .then((r) => {
+          if (!cancelled) setHeaderAvatar(r.data.avatar_url ?? null);
+        })
+        .catch(() => {});
+    } else {
+      chatApi
+        .list()
+        .then((r) => {
+          if (cancelled) return;
+          const c = r.data.find((x) => String(x.id) === String(chatId));
+          if (c?.avatar_url) setHeaderAvatar(c.avatar_url);
+        })
+        .catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [avatarUrl, userId, chatId, isNotes]);
   // Плашка «в созвоне»: кто сейчас в звонке этого чата (по call_active).
   const callParticipants = call.activeCalls.get(Number(chatId)) ?? [];
   const inThisCall = call.inCall && call.callChatId === Number(chatId);
@@ -706,7 +735,7 @@ export function ChatScreen({ navigation, route }: Props) {
             else if (userId != null) navigation.navigate("OtherProfile", { userId });
           }}
         >
-          <Avatar letter={(name[0] ?? "?").toUpperCase()} size={36} bg="#ef5350" uri={avatarUrl} />
+          <Avatar letter={(name[0] ?? "?").toUpperCase()} size={36} bg="#ef5350" uri={headerAvatar} />
           <View style={{ flex: 1 }}>
             <Text
               style={{
@@ -1085,7 +1114,13 @@ export function ChatScreen({ navigation, route }: Props) {
         );
       })()}
 
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      {/* padding И на Android: с SDK 57 edge-to-edge включён принудительно,
+          и на Android 15 окно под клавиатуру больше не ужимается
+          (adjustResize не работает) — без явного padding клавиатура
+          накрывала поле ввода целиком. На старых Android окно ещё
+          ужимается само, но KAV считает перекрытие по реальным рамкам и
+          лишнего отступа не добавляет. */}
+      <KeyboardAvoidingView behavior="padding">
         {isChannelLocked ? (
           <View
             style={{

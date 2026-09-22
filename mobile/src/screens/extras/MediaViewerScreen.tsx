@@ -4,6 +4,7 @@ import * as MediaLibrary from "expo-media-library";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { useState } from "react";
 import { ActivityIndicator, Alert, Image, Platform, Pressable, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { CloseIcon } from "../../components/icons";
 import { ScreenContainer } from "../../components/ScreenContainer";
@@ -14,6 +15,7 @@ type Props = NativeStackScreenProps<ChatsStackParamList, "MediaViewer">;
 
 export function MediaViewerScreen({ navigation, route }: Props) {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const { url, video } = route.params;
   const [saving, setSaving] = useState(false);
 
@@ -52,6 +54,10 @@ export function MediaViewerScreen({ navigation, route }: Props) {
 
   return (
     <ScreenContainer edgeToEdge>
+      {/* Контент занимает всё над футером, а кнопка «Сохранить» живёт В
+          ФУТЕРЕ, не оверлеем: абсолютная кнопка накрывала дорожку
+          перемотки у нативных контролов видео — на середину было не
+          перемотать. Футер с отступом под системную полосу (edge-to-edge). */}
       <View style={{ flex: 1, backgroundColor: "#000", alignItems: "center", justifyContent: "center" }}>
         {video ? (
           <FullScreenVideo url={url} />
@@ -59,35 +65,51 @@ export function MediaViewerScreen({ navigation, route }: Props) {
           <Image source={{ uri: url }} style={{ width: "100%", height: "100%" }} resizeMode="contain" />
         )}
       </View>
-      <Pressable
-        onPress={() => navigation.goBack()}
-        style={{ position: "absolute", top: 40, right: 16, padding: 8 }}
-      >
-        <CloseIcon color="#fff" />
-      </Pressable>
-      <Pressable
-        onPress={save}
-        disabled={saving}
+      <View
         style={{
-          position: "absolute",
-          bottom: 40,
-          alignSelf: "center",
-          paddingHorizontal: 20,
-          paddingVertical: 10,
-          borderRadius: theme.radius.md,
-          backgroundColor: theme.colors.accent,
-          flexDirection: "row",
+          backgroundColor: "#000",
+          paddingTop: 10,
+          paddingBottom: Math.max(insets.bottom, 12) + 4,
           alignItems: "center",
-          gap: 8,
         }}
       >
-        {saving ? (
-          <ActivityIndicator size="small" color={theme.colors.accentText} />
-        ) : (
-          <Text style={{ fontFamily: theme.fonts.mono, fontWeight: "700", color: theme.colors.accentText }}>
-            СОХРАНИТЬ
-          </Text>
-        )}
+        <Pressable
+          onPress={save}
+          disabled={saving}
+          style={{
+            paddingHorizontal: 20,
+            paddingVertical: 10,
+            borderRadius: theme.radius.md,
+            backgroundColor: theme.colors.accent,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 8,
+            minWidth: 160,
+            justifyContent: "center",
+          }}
+        >
+          {saving ? (
+            <ActivityIndicator size="small" color={theme.colors.accentText} />
+          ) : (
+            <Text style={{ fontFamily: theme.fonts.mono, fontWeight: "700", color: theme.colors.accentText }}>
+              СОХРАНИТЬ
+            </Text>
+          )}
+        </Pressable>
+      </View>
+      <Pressable
+        onPress={() => navigation.goBack()}
+        hitSlop={8}
+        style={{
+          position: "absolute",
+          top: Math.max(insets.top, 24) + 8,
+          right: 16,
+          padding: 8,
+          borderRadius: 20,
+          backgroundColor: "rgba(0,0,0,0.45)",
+        }}
+      >
+        <CloseIcon color="#fff" />
       </Pressable>
     </ScreenContainer>
   );
