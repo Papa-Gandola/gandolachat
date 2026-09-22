@@ -790,11 +790,20 @@ async def leave_table(
             return await _table_to_out(db, table)
         return None
     else:
-        # Mid-game leave: mark inactive (game logic in Phase 2 will treat as auto-fold/forfeit)
+        # Встал посреди турнира = сдался. Раньше сервер только помечал место
+        # неактивным, а движок держал игрока в раздачах и оба клиента
+        # рисовали его за столом — «встать не работает». Теперь движок
+        # складывает его карты, стек сгорает, в следующие раздачи он не
+        # попадает и докупиться не может (leave_game), а клиенты прячут
+        # неактивные места. Энтри «за газ» остаётся в котле, как при вылете.
+        from app.poker_game import game_store, leave_game
+        g = game_store.get(table_id)
+        live_hand = g is not None and not g.finished and g.hand is not None and g.hand.street != "done"
+        if g is not None and not g.finished:
+            leave_game(g, current_user.id)
         seat.is_active = False
+        seat.stack = 0
         await db.commit()
-        # is_active was set via attribute (identity map is fresh for it), but
-        # keep the reload consistent with the other paths anyway.
         result = await db.execute(
             select(PokerTable)
             .options(selectinload(PokerTable.seats))
@@ -803,4 +812,16 @@ async def leave_table(
         )
         table = result.scalar_one()
         await _broadcast_table(db, table, "poker_table_updated")
-        return await _table_to_out(db, table)
+        out = await _table_to_out(db, table)
+        if g is not None and not g.finished:
+            from app.ws.handler import broadcast_and_continue, _broadcast_state
+            if live_hand:
+                # Довести раздачу как после обычного действия: фаст-форвард,
+                # конец раздачи → стеки / следующая раздача / финал.
+                await broadcast_and_continue(table_id, g, db=db)
+            else:
+                # Между раздачами: таймер следующей раздачи сам увидит
+                # нулевой стек (start_hand сдаёт по stack > 0) и закроет
+                # турнир, если игроков не осталось.
+                await _broadcast_state(table_id, g)
+        return out

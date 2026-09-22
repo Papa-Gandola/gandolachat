@@ -28,7 +28,7 @@ Discord-подобный мессенджер для чата друзей. Ра
 |---|---|
 | `server/` | VPS: `git pull && docker compose build server && docker compose up -d server`. Миграции и синк ассетов — сами при старте. Релиз НЕ нужен |
 | `client/` | Бамп версии в **двух** местах: `client/package.json` + `APP_VERSION` в `client/src/renderer/changelog.ts` (+`npm i --package-lock-only`); ТАМ ЖЕ дописать пункты в CHANGELOG — окошко «Что нового» покажется каждому один раз после обновления (Main.tsx версию берёт отсюда). После мержа: `git tag v2.x.x && git push origin v2.x.x` → Actions собирает **черновик** релиза (Linux создаёт, Windows докладывает — последовательно, гонку уже чинили) → хозяин жмёт Publish release |
-| `mobile/` | PWA: на VPS `cd mobile && npm run build:web` → скопировать `mobile/dist/*` в `server/web/` (bind-mount, рестарт не нужен; Node 20 на VPS стоит). Скрипт `postbuild-web.js` префиксует пути `/app`. Нативный Android: изменение mobile/app.json\|package.json\|eas.json в main (или тег `mobile-v*`) → Actions ждёт сборку EAS и сам публикует APK в скользящий релиз **mobile-latest** — постоянная ссылка `releases/download/mobile-latest/gandolachat.apk` (на неё смотрит QR в профиле десктопа). При новом APK поднимать И version, И versionCode (appVersionSource: local). Версия mobile своя (0.7.x). При заметном батче правок поднять `CHANGELOG_ID` (дата) в `mobile/src/changelog.ts` + дописать пункты — мобильное «Что нового» (версия для OTA не годится, она не меняется) |
+| `mobile/` | PWA: на VPS `cd mobile && npm run build:web` → скопировать `mobile/dist/*` в `server/web/` (bind-mount, рестарт не нужен; Node 20 на VPS стоит). Скрипт `postbuild-web.js` префиксует пути `/app`. В `build:web` `--clear` ОБЯЗАТЕЛЕН: манифест (version, extra) инлайнится в expo-constants на этапе трансформации, а кэш Metro в /tmp его в ключ не включает — без сброса PWA после бампа показывала старую версию (0.9.0 при 0.9.2 в app.json). Нативный Android: изменение mobile/app.json\|package.json\|eas.json в main (или тег `mobile-v*`) → Actions ждёт сборку EAS и сам публикует APK в скользящий релиз **mobile-latest** — постоянная ссылка `releases/download/mobile-latest/gandolachat.apk` (на неё смотрит QR в профиле десктопа). При новом APK поднимать И version, И versionCode (appVersionSource: local), а при НАТИВНОМ изменении — ещё и runtimeVersion (грабля №11). Версия mobile своя (0.9.x). **Тестовая сборка с ветки БЕЗ публикации**: Actions → Mobile Release → Run workflow → ветка, publish=false → APK артефактом прогона + прямая ссылка EAS в сводке (QR — на странице сборки в expo.dev, кнопка Install); так хозяин проверяет натив на телефоне ДО мержа (merge в main = публикация в mobile-latest, куда смотрит «обнови меня» у всех). **JS-правки на тестовую сборку — без нового APK**: Actions → Mobile OTA Update → Run workflow → git-ветка PR, EAS branch `preview` → обновление получают ТОЛЬКО сборки с тем же runtimeVersion (тестовая), телефоны на старом runtime его не видят; ставится при следующем запуске приложения (открыть дважды). При заметном батче правок поднять `CHANGELOG_ID` (дата) в `mobile/src/changelog.ts` + дописать пункты — мобильное «Что нового» (версия для OTA не годится, она не меняется) |
 | только docs | ничего |
 
 Ошибся тегом: удалить И черновик релиза на GitHub, И тег
@@ -90,6 +90,11 @@ print-логи видны в `docker compose logs` с опозданием (не
   stats, админ-чистка сообщений до даты. Caption с `/quest_card` режется.
 - Пуш-данные message/call несут chat_name; для ЛС (chat.name=NULL) —
   имя отправителя/звонящего, иначе тап по пушу открывал чат «Чат».
+  `peer_user_id` в ЛС = ОТПРАВИТЕЛЬ/звонящий/зовущий (собеседник ДЛЯ
+  ПОЛУЧАТЕЛЯ пуша; chats.py файлы, ws/handler.py сообщения и звонки,
+  dota.py, polls.py). До 22.09 три из четырёх мест брали «не
+  отправителя» — то есть самого получателя, и деп-линк мобилки открывал
+  ЛС «с самим собой» (шапка без аватарки, звонок себе).
   `message_read` бродкастится ВСЕМ сокетам чата (БЕЗ exclude_user!),
   включая другие устройства читателя — клиенты гасят по нему свой unread
   (кросс-девайс прочитанность: Sidebar на десктопе, useChats на мобилке).
@@ -97,7 +102,18 @@ print-логи видны в `docker compose logs` с опозданием (не
   только приславший — с ним кросс-рид молча не работал (2.3.8→2.3.9).
 - `app/ws/manager.py` — ConnectionManager: мультисокеты на юзера,
   chat_users, active_calls + call_meta (для /call_record), broadcast_to_chat
-  (_eid дедуп), send_to_user, дроп мёртвых сокетов.
+  (_eid дедуп), send_to_user, дроп мёртвых сокетов. **Состав звонка — по
+  user_id, но с привязкой к СОКЕТУ** (`call_sockets: chat → user → сокеты`,
+  методы join_call/leave_call/end_call/drop_call_socket): mesh ключуется
+  юзером, а вот выходить из звонка обязано УСТРОЙСТВО. Раньше чистка жила
+  под `if fully_offline` — пока у юзера оставался хоть один сокет, умерший
+  телефон висел в составе до конца звонка: на компе вечное «вы в звонке с
+  другого устройства», и там же глохли входящие по этому чату (подавление
+  «я уже в этом звонке» смотрит в тот же реестр). Теперь дисконнект любого
+  сокета выводит юзера из звонков этого сокета и рассылает call_end +
+  call_active (плюс адресный call_end своим же другим устройствам).
+  Тест: scratchpad `test_call_roster.py` (TestClient, два сокета одного
+  юзера, обрыв телефона).
 - `app/ws/handler.py` — вход: ping, message (маркер `/quest_card` дропается —
   анти-спуф; счётчик grammar_errors по регэкспам), typing, dota_ready/
   dota_ready_request (эфемерный ready-лист карточки /dota_call, TTL 3ч),
@@ -159,7 +175,10 @@ print-логи видны в `docker compose logs` с опозданием (не
   x.x.x» с кнопкой «Скачать APK» (→ `/apk`) раз в 3 захода (1-й, 4-й,
   7-й…; счётчик в secureStorage на каждую сборку зеркала свой; заход =
   холодный старт или возврат из фона после ≥2ч; пока не закрыто «Что
-  нового» — молчит; в PWA не показывается).
+  нового» — молчит; в PWA не показывается). Запрос `/apk/info`, номер
+  своей сборки и ссылка на `/apk` — в `services/updates.ts` (общие с
+  экраном «Обновления» в профиле); найденная сборка через `noteApkInfo`
+  зажигает бейдж у кнопки «Обновления» даже в заходы, когда окно молчит.
 - `app/backups.py` — ночные дампы БД: 04:00 МСК `pg_dump -Fc` в
   ОТДЕЛЬНЫЙ том `backups:/app/backups` (НЕ uploads — тот публичен!),
   ротация 14 шт. **Офсайт**: при заданных BACKUP_WEBDAV_URL/USER/
@@ -230,6 +249,26 @@ print-логи видны в `docker compose logs` с опозданием (не
   от started_at (лобби собрали в обед, сели вечером — резать нельзя),
   finished не трогает — с `poker_table_removed` в чат (оба клиента его
   обрабатывают); «за газ» и не доиграно — сперва возврат gas_paid.
+  **«Встать» посреди турнира** (22.09; до этого сервер лишь ставил
+  is_active=False, движок держал игрока в раздачах, клиенты рисовали его
+  за столом — «встать не работает»): `poker_game.leave_game` — сдался:
+  в живой раздаче фолд (свой ход → `_advance`, чужой → только пометка,
+  очередь за чужой ход двигать нельзя), стек 0, `g.left` (нет докупки —
+  `can_reenter`, `public_view` отдаёт `left`), энтри «за газ» остаётся в
+  котле как при вылете; `leave_table` в живой раздаче зовёт
+  `ws.handler.broadcast_and_continue` (общий хвост с handle_poker_action:
+  состояние всем, фаст-форвард, конец раздачи → стеки/следующая/финал —
+  если после фолда остался один, турнир закрывается тут же), между
+  раздачами только рассылает состояние — таймер следующей раздачи сам
+  увидит стек 0, а `start_hand`, объявив финал, доводит его через
+  `_finish_tournament` (правка в `_next`). Ремни: `g.finalized_hand_no` —
+  `_finish_hand_and_maybe_next` доводит раздачу один раз (обычный поток ×
+  фаст-форвард × «встать» ставили бы второй таймер = двойная сдача),
+  `g.fast_forwarding` — один `_ff` на раздачу. Клиенты (оба): место с
+  `is_active=false` / игрок с `left` — пустой слот, «Встать»/панель
+  действий по активному месту, счётчик игроков без вставших. Тест:
+  scratchpad `test_poker_leave.py` (TestClient, выход не в свой ход /
+  в свой ход при двух и при трёх).
   **Настройки стола** (миграция 0013): создатель задаёт при создании и
   правит в лобби (PATCH /settings): стек, малый блайнд (большой = 2×),
   интервал роста, мест; `_apply_settings` валидирует (стек ≥ 5 BB и т.д.).
@@ -511,7 +550,12 @@ print-логи видны в `docker compose logs` с опозданием (не
   `gandola-poker-chat-column`, дефолт вкл). **Значок стола в сайдбаре**:
   `pokerApi.active()` → `GET /api/poker/active` ({chat_id: lobby|playing}
   по чатам юзера) при коннекте + рефетч на любой `poker_table_*`; иконка
-  `cards` у имени чата (оранжевая = играют).
+  `cards` у имени чата (оранжевая = играют). **«Перейти сюда»** (2.3.15) в
+  плашке созвона, когда состав содержит нас самих: вторым входом тем же
+  user_id войти нельзя (mesh ключуется юзером), поэтому `takeOverCall`
+  сперва шлёт `call_end` (сервер выкидывает юзера из состава и кладёт
+  трубку на том устройстве), ждёт состав без себя до 3с и зовёт
+  `joinOngoingCall`. Пустой состав = звонок кончился, входить некуда.
 - `ChatArea.tsx` (большой) — переписка: маркеры контента → карточки:
   `/poker_table N`, `/dota_call` (ready-лист по WS, запуск
   `steam://rungameid/570`, золотая при comp_max_level≥10 отправителя),
@@ -587,11 +631,65 @@ print-логи видны в `docker compose logs` с опозданием (не
   build`. Сборка релиза: `npm run dist` (electron-builder, releaseType
   draft).
 
-## Мобилка/PWA (`mobile/`, Expo SDK 51 + RN)
+## Мобилка/PWA (`mobile/`, Expo SDK 57 + RN 0.86, новая архитектура)
 
 Один код на Android-натив и веб-PWA (iPhone: Добавить на экран «Домой» с
-`https://…/app/`). metro.config подменяет нативные модули (webrtc, notifee)
-веб-стабами (webrtc-стаб мапит на браузерный WebRTC — звонки в PWA работают).
+`https://…/app/`). metro.config подменяет нативные модули (webrtc, notifee,
+incall-manager, expo-media-library) веб-стабами (webrtc-стаб мапит на
+браузерный WebRTC — звонки в PWA работают; media-library-стаб — потому что
+с SDK 54+ его индекс на вебе требует нативный модуль ПРИ ИМПОРТЕ, и PWA
+падала белым экраном ещё до логина; «Сохранить» фото в PWA = открыть в
+новой вкладке).
+**Стек 0.9.0 (SDK 57, 18.09)**: RN 0.86 — ТОЛЬКО новая архитектура (legacy
+снята в RN 0.82), edge-to-edge принудительно (окно под клавиатуру больше
+НЕ ужимается — adjustResize при setDecorFitsSystemWindows(false)
+игнорируется, а штатный `KeyboardAvoidingView` на Android БЕСПОЛЕЗЕН:
+RN шлёт keyboardDidShow с `screenY` по видимой рамке окна, которая тут не
+меняется, и KAV считает перекрытие нулевым — клавиатура накрывала поле
+ввода целиком в 0.9.0–0.9.2 (грабля №17). Лечение —
+`components/KeyboardInset.tsx` вокруг RootNavigator в App.tsx: эмуляция
+adjustResize, всё приложение ужимается над клавиатурой, как на старых
+сборках; высота — `useAnimatedKeyboard` из reanimated (нативный слушатель
+инсета ime() на decorView, покадрово, панель функций/подсказок клавиатуры
+входит — она часть окна IME) с ОБОИМИ флагами translucent (иначе
+reanimated дописывает отступы системных полос корню Activity — двойной
+статус-бар) минус `useSafeAreaInsets().bottom` (высота там от нижнего края
+экрана; safe-area ime() не включает). Натив reanimated в сборке есть —
+едет по OTA; хук deprecated в пользу react-native-keyboard-controller,
+тот потребует нового APK. Нижний инсет системной полосы — у BottomTabs и
+у футера MediaViewer); React 19; expo-av УДАЛЁН —
+звук через **expo-audio** (`services/voiceRecorder.ts`: рекордер создаём
+ИМПЕРАТИВНО, свежий объект на каждую запись — хук useAudioRecorder даёт
+один на экран, а упавший prepare делает объект одноразовым; конструктору
+нужны ПЛОСКИЕ опции платформы, раскладываем пресет сами; `VoiceMessage` —
+`createAudioPlayer` по тапу + `playbackStatusUpdate`, после `didJustFinish`
+перед play обязателен `seekTo(0)`; рингтон в CallContext — тот же плеер,
+`seekTo(0)+play` раз в 5с), видео через **expo-video** (`VideoMessage`:
+`useVideoPlayer` в дочернем компоненте, монтируется по тапу,
+`surfaceType="textureView"` — SurfaceView не режется скруглением пузыря,
+соотношение сторон из `sourceLoad`/`videoTrack`; в вебе дорожек нет — 16:9
+contain). expo-file-system — новый API (`File`/`Paths`;
+`File.downloadFileAsync` не перезаписывает — старую копию удалять).
+react-navigation 7: `navigate` больше НЕ возвращается к экрану глубже в
+стеке (только к текущему) — в `navigationRef.navigateToChat` и
+`ChatsSidebar` вложенные params несут `pop: true`, поиск по сообщениям
+ходит `navigation.popTo(...)` (иначе Chat пушился поверх Chat); тема
+контейнера обязана содержать `fonts` (берём из DarkTheme); форма
+`navigate({name, params})` deprecated — `navigate("Main", {...})`.
+**Загрузка файлов — ТОЛЬКО XMLHttpRequest** (`api.ts uploadFile`): с SDK 54+
+глобальный `fetch` подменён своим (`expo/winter`, `install('fetch', …)`), а он
+понимает лишь строки, Blob и File — RN-часть `{uri, name, type}` отвергает
+с «Unsupported FormDataPart implementation» (так в 0.9.0 отвалились
+голосовые) и вдобавок собирает всё тело в памяти JS. XHR у RN свой,
+нативный NetworkingModule стримит файл с диска; `FormData` Expo только
+дополняет (append/entries поверх `_parts`), `getParts()` цел. Не
+«упрощать» обратно на fetch.
+Типы react-native-webrtc 124.0.8 в пакете битые (lib/typescript ссылается
+на vendor/event-target-shim, которого там нет — tsc «не видит»
+addEventListener): `scripts/patch-webrtc-types.js` в postinstall
+докладывает d.ts из src (только для tsc, сборке всё равно). `npx expo
+install` здесь НЕ работает (api.expo.dev закрыт прокси, «Host not i…») —
+матрицу версий берём из `npm pack expo@57` → `bundledNativeModules.json`.
 Табы: ЧАТЫ / ГАНДОЛИУМ / Я. Экраны: chats/* (ChatScreen рендерит маркеры
 карточек, PokerScreen), compendium/CompendiumScreen (полный: задания с
 пулами, сезон, трофеи, косметика), profile/* (MyProfile — секция DOTA 2 с
@@ -620,8 +718,11 @@ active/visibilitychange — иначе после разворота телеф�
 addTrack+ренегосиацию через negotiationneeded, disableCamera глушит железо
 через replaceTrack(null)+stop); «назад» СВОРАЧИВАЕТ звонок (мини-бар
 сверху, тап=развернуть), НЕ кладёт трубку; RemoteTile рендерит RTCView
-ВСЕГДА (в вебе это <video> с ЗВУКОМ — иначе собеседник без камеры нем в
-PWA), аватар — оверлеем; дорожки без потока (десктопный transceiver без
+только В ВЕБЕ (там это <video> с ЗВУКОМ — иначе собеседник без камеры нем
+в PWA); на НАТИВЕ при выключенном видео вьюху не держим: RTCView —
+SurfaceView, он рисуется ПОВЕРХ обычных вьюх, и аватарка-оверлей не
+перекрывала застывший последний кадр («выключил камеру на компе — на
+телефоне стоп-кадр»), аватар — оверлеем; дорожки без потока (десктопный transceiver без
 msid) докладываются в remoteStreams-карту — без этого вебка с компа не
 появлялась; webrtc.init перевешивает WS-хендлеры каждый раз (логаут
 стирает их — иначе после перелогина звонки мертвы); звонит только на
@@ -677,8 +778,48 @@ CallContext по call_active (дедуп по составу), в ChatScreen п�
 начатый пока мы ещё «звонили». UI (CallContext): `screens` +
 `ScreenTiles` сверху (objectFit contain, key по видеодорожке), тап —
 `screenFocus`: экран на всё, участники в полосу 104px (НЕ размонтируем —
-в вебе через их RTCView играет звук). Экран С телефона — по-прежнему
-нативная работа (MediaProjection), см. ниже.
+в вебе через их RTCView играет звук). **Видео-линия ЕСТЬ ВСЕГДА**:
+`_createPeer` при выключенной камере сразу заводит
+`addTransceiver("video", {direction:"sendrecv", streams:[localStream]})` и
+кладёт его sender в `videoSenders` — как десктоп. `streams` ОБЯЗАТЕЛЕН:
+он даёт m-line msid нашего потока; без него видеодорожка приезжала на
+десктоп «сиротой» (`event.streams` пуст), а simple-peer на такие не
+реагирует вовсе (ни 'stream', ни 'track') — включённая на телефоне
+камера на компе была чёрным экраном. С msid дорожка входит в тот же
+поток, что и звук, и десктоп получает её при первом согласовании;
+msid, появившийся позже (ренегосиацией), браузер в новый 'track' не
+превращает — поэтому именно при создании транссивера. Без неё в согласованном SDP видео нет
+вовсе, и включённая позже камера ЛЮБОЙ стороны требует ренегосиации,
+которую отвечающая сторона начать не может (m-line добавляет только
+офферящий) — отсюда «позвонил с компа без видео, телефон вошёл, включил
+видео на компе — не видно». `enableCamera` после `replaceTrack`
+дожимает `_renegotiate`, если `currentDirection` у слота всё ещё null.
+**Экран С ТЕЛЕФОНА** (0.9.0):
+кнопка «экран» в звонке (Android и PWA в десктопном браузере — где есть
+getDisplayMedia; `canShareScreen`) → `webrtcService.startScreenShare`:
+`mediaDevices.getDisplayMedia` (натив — `android.resolutionScale` 0.6:
+полный 1080×2400×30fps на несколько кодировщиков mesh — перебор для
+телефона) и ОТДЕЛЬНЫЙ RTCPeerConnection на каждого участника
+(`screenSendPeers`, purpose=screen, role=sender, мы инициатор — зеркало
+десктопа); ответы с role=receiver идут в `_applyScreenSendSignal`, а не в
+приёмные screenPeers (один собеседник может одновременно показывать нам и
+смотреть наш); опоздавшему участнику экранный peer открывается из
+`_createPeer`; ICE рестартим сами (инициатор); `screen_share_status
+{sharing}` шлём как десктоп; стоп из системной шторки / «Stop sharing» =
+`ended` у дорожки → `onScreenShareEnded` гасит кнопку; teardown звонка
+гасит шаринг первым (отпускает MediaProjection). НАТИВ (только новым APK):
+Android 14+ пускает MediaProjection только процессу с РАБОТАЮЩИМ
+foreground-сервисом типа mediaProjection, поднятым ПОСЛЕ согласия в
+системном диалоге — rn-webrtc умеет это сам (свой `MediaProjectionService`
+в манифесте библиотеки), но флаг по умолчанию выключен:
+`plugins/withWebRTCMediaProjection.js` (а) вписывает
+`WebRTCModuleOptions.getInstance().enableMediaProjectionService = true` в
+MainApplication.onCreate, (б) кладёт `res/drawable/ic_notification.xml`
+(bitmap-алиас на notification_icon от expo-notifications) — библиотека
+ищет его по getIdentifier и НЕ поставляет, без него «Invalid notification
+(no valid small icon)» = краш при первом же старте шаринга; разрешение
+FOREGROUND_SERVICE_MEDIA_PROJECTION — в app.json. Сервис notifee остаётся
+microphone|camera — тип mediaProjection ему не нужен.
 ЗВУК в звонке (0.8, `services/callAudio.ts`): кнопка 🔊/🔈 — громкая связь
 ↔ разговорный динамик через **react-native-incall-manager** (нативный
 модуль => только новым APK, не по OTA; в вебе metro-стаб + кнопка скрыта
@@ -696,7 +837,7 @@ CallContext по call_active (дедуп по составу), в ChatScreen п�
 принудительный EARPIECE, и он выигрывает у Bluetooth/проводной гарнитуры
 (наушники бы молчали). Не-boolean → flag=0 = маршрут по умолчанию —
 хелпер `forceSpeaker`. Аудиосессия забирается при ПОДКЛЮЧЕНИИ участника,
-а не по inCall: IN_COMMUNICATION глушил бы наш гудок/рингтон (expo-av).
+а не по inCall: IN_COMMUNICATION глушил бы наш гудок/рингтон (expo-audio).
 BLUETOOTH_CONNECT (Android 12+) в app.json + запрос в `ensurePermissions`
 рядом с микрофоном ОБЯЗАТЕЛЕН: без него BT-менеджер библиотеки выходит на
 старте и гарнитуры вообще нет в списке устройств. SCHEDULE_EXACT_ALARM/
@@ -707,9 +848,8 @@ USE_EXACT_ALARM — чтобы напоминания не уезжали в Doz
 входящий звонок поверх блокировки через notifee;
 REQUEST_IGNORE_BATTERY_OPTIMIZATIONS — подсказка «отключи оптимизацию
 батареи» для самсунгов, которые режут фоновые звонки и пуши.
-ОСТАЛОСЬ нативным (в OTA не доедет, нужен ещё APK): шеринг экрана С
-телефона — MediaProjection + foregroundServiceType на сервисе notifee
-(config-плагин), и апгрейд Expo SDK (сейчас 51).
+Нативный батч 0.9.0 (SDK 57 + экран С телефона, runtimeVersion 9) —
+сделан 18.09; всё объявленное для 0.8 в манифесте осталось.
 **Фоновый сервис звонка** — ПОДТВЕРЖДЁННАЯ ПРИЧИНА «Гандола не отвечает»
 в середине звонка. ANR-трейс с телефона хозяина: «A foreground service of
 FOREGROUND_SERVICE_TYPE_SHORT_SERVICE did not stop within a timeout:
@@ -756,15 +896,63 @@ useChats/getChatName, иначе показывался бы сам юзер.
 объектом Recording (упавший prepare портит объект навсегда — ловили
 «одно голосовое за запуск»), busy-флаг со сторожком 6с. Кнопка 📝
 Заметок показывает ошибку вместо молчания (404 = «сервер не обновлён»).
-**Видео** (17.09): `components/VideoMessage.tsx` — плашка ▶ с именем, по
-тапу монтируется expo-av `Video` (ExoPlayer / `<video>` в PWA) с нативными
-контролами, `shouldPlay`, ширина 240, высота по naturalSize (вертикальные
-≤320), ошибка → плашка «ещё раз»; НЕ монтировать все ролики ленты сразу
-(декодеры + трафик). «Фото/видео» в скрепке = ImagePicker
-`MediaTypeOptions.All`, ролики >50 МБ отсеиваются до отправки по
-`fileSize`; превью последнего сообщения в списке чатов 🎤/🖼/🎬 —
+**Видео**: `components/VideoMessage.tsx` — плашка ▶ с именем файла, по тапу
+ролик открывается ВО ВЕСЬ ЭКРАН (`MediaViewer` с `video: true`, expo-video
+`VideoView` + `nativeControls` + `fullscreenOptions {enable:true}`;
+кнопка «Сохранить» — В ФУТЕРЕ под контентом, а не оверлеем: абсолютная
+накрывала дорожку перемотки нативных контролов).
+Инлайн-плеер в ленте не держим (был в 0.9.0 и не работал): строка
+сообщения обёрнута в Pressable (двойной тап ❤️, долгий — меню) и
+Swipeable, они перехватывают касания у нативных контролов — ролик
+запускался, но его нельзя было ни остановить, ни перемотать, ни
+развернуть; плюс десяток смонтированных плееров = десяток декодеров.
+Сохранение в галерею — `MediaLibrary.Asset.create` (класс-API SDK 57;
+старый `saveToLibraryAsync` теперь только ругается deprecation-ошибкой и
+ничего не делает). «Фото/видео» в скрепке = ImagePicker с
+`mediaTypes: ["images","videos"]`, ролики >50 МБ отсеиваются до отправки
+по `fileSize`; превью последнего сообщения в списке чатов 🎤/🖼/🎬 —
 `filePreview` в useChats (как markers.ts на десктопе).
-Версия своя (0.7.x, app.json+package.json).
+**Тап по пушу**: `navigationRef` копит переход в `pendingLink`, если
+навигатор ещё не готов (холодный старт из пуша приходит раньше, чем
+смонтирован контейнер — он ждёт чтения токена), и `flushPendingLink()` в
+`onReady` его выполняет; без этого пуш открывал приложение «просто так».
+Параметры из пуша неполные (только id и имя чата), а `peer_user_id` у
+серверов до 22.09 был СВОИМ id получателя (сервер брал «не отправителя»
+относительно отправителя — см. раздел сервера): шапка была с пустым
+кружком / своей аватаркой, тап по ней открывал свой профиль, звонок из
+шапки шёл бы себе. ChatScreen лечит сам: если нет `avatarUrl`, собеседник
+ЛС отсутствует или равен себе, у группы нет `allowAllWrite`/`createdBy` —
+берёт карточку чата из `chatApi.list()` и дописывает параметры через
+`navigation.setParams` (собеседник = участник ≠ я), дальше экран как
+открытый из списка. Работает и со старым сервером.
+Звонковый пуш вдобавок поднимает плашку «Входящий» через
+`setCallInviteHandler` — пока телефон спал, его сокет был мёртв и оффер
+звонящего (`send_to_user` без живых сокетов) пропал, по WS плашка уже не
+придёт. «Принять» в такой плашке идёт не `joinCall` (отвечать нечему), а
+`joinOngoing` → `call_join`; выбор — по `webrtcService.hasPendingOffer`.
+**Экран «Обновления»** (вариант C из эскизов, выбор хозяина 22.09; вход —
+строка «Обновления» в MyProfileScreen сразу под «Все настройки», а НЕ в
+настройках — так попросил): `screens/profile/UpdatesScreen.tsx` (роут
+`Updates` в ProfileStack), логика — `services/updates.ts`. В строке —
+версия (`myVersion()` = `Constants.nativeAppVersion`, в PWA —
+`expoConfig.version`) и лаймовый бейдж `useUpdateBadge()` = скачанный OTA
+(`Updates.useUpdates().isUpdatePending`) + новая сборка APK из кэша
+модуля (наполняют `checkForUpdates` по кнопке, `noteApkInfo` из окна
+«обнови меня» и `loadLastCheck` — время и найденный APK переживают
+перезапуск в secureStorage `gandola.updates.lastCheck`, найденная сборка
+перепроверяется по build > своего). Экран: крупная версия, «сборка N ·
+runtime R · канал C», две карточки-пояснения (Код по воздуху:
+«встроенный в сборку» либо дата+7 символов updateId; Сборка APK),
+«Проверить сейчас» → `checkForUpdateAsync` → `fetchUpdateAsync` →
+плашка «есть обновление кода» с «перезапустить сейчас» (`reloadAsync`),
+затем `GET /apk/info` → плашка «есть новая сборка» с «скачать APK»
+(`/apk`); ошибка OTA-канала не роняет проверку сборки; «Всё свежее.
+Последняя проверка …». В PWA — только версия с пометкой «обновляется
+сама» и «Список изменений» (`ChangelogModal` — вынесен из
+WhatsNewModal, тот его переиспользует). `components/SettingsRow.tsx` —
+общая строка навигации (label/value/badge/›). Проверено Playwright
+(`scratchpad/pw/shot_updates.js`).
+Версия своя (0.9.x, app.json+package.json).
 
 ## Локальная проверка (как я гоняю без окружения хозяина)
 
@@ -777,6 +965,47 @@ useChats/getChatName, иначе показывался бы сам юзер.
   TestClient + `create_access_token(id)` (login не нужен).
 - Клиент: `npm install && npx vite build`. Движок компендиума тестируется
   без БД (SimpleNamespace-строки + UserCtx).
+- Мобилка: `npm install` (postinstall патчит типы rn-webrtc) → `npx tsc
+  --noEmit` (шум: TS1323 и две старые ошибки MessageSearchScreen — не
+  чинить); веб-бандл `EXPO_OFFLINE=1 CI=1 npx expo export -p web
+  --output-dir dist --clear && node scripts/postbuild-web.js` (`--clear`
+  — иначе кэш Metro в /tmp отдаёт манифест со старой версией); смоук PWA — сид
+  `scratchpad/seed_pwa.py`, uvicorn на 8000, симлинк `server/web →
+  mobile/dist` (снести после — иначе попадёт в git status), Playwright
+  (`NODE_PATH=$(npm root -g)`); белый экран = смотреть `pageerror` в
+  консоли (модуль без веб-реализации → стаб в metro.config). Натив без
+  Android SDK: `npx expo prebuild --platform android --no-install
+  --template <tgz>` (шаблон — `npm pack expo-template-bare-minimum@sdk-57`;
+  gitignored `google-services.json` подложить пустышкой) → проверить
+  манифест / MainApplication.kt / res, потом `rm -rf android
+  google-services.json`. Плагины с чистой функцией (`applyServiceType`,
+  `enableMediaProjectionService`) гоняются node-скриптом без prebuild.
+- **Сквозные звонки в браузере** (22.09; звонки PWA ↔ десктоп с камерой
+  проверяются БЕЗ телефона): десктопный рендерер собирается под локальный
+  сервер (`cd client && VITE_API_URL=http://127.0.0.1:8000
+  VITE_WS_URL=ws://127.0.0.1:8000 npx vite build`) и раздаётся статикой
+  (`python3 -m http.server 5174` из `client/dist/renderer`; в браузере всё
+  живёт через `window.electron?.`-гарды), PWA — на :8000 через симлинк;
+  Chromium с `--use-fake-device-for-media-stream
+  --use-fake-ui-for-media-stream` даёт фейковую камеру (зелёный «пакман» —
+  кадр нечёрный, проверяется через canvas). `scratchpad/pw/call_e2e.js`:
+  телефон (gandola) звонит, десктоп (Костян) принимает (сперва закрыть
+  «Понятно» у «Что нового» — оно накрывает баннер звонка), телефон
+  включает камеру → на десктопе `[data-tile-id="remote-<id>"] video` с
+  videoWidth>0, плюс msid в первом оффере (`setLocalDescription`
+  перехвачен через addInitScript); `call_e2e_reverse.js`: десктоп звонит
+  с выключенной камерой, телефон принимает, десктоп включает камеру →
+  `<video>` на телефоне живой (сценарий находки №1 партии 0.9.1).
+  Селекторы: на мобилке — `accessibilityLabel` кнопок звонка (Позвонить/
+  Принять/Отклонить/Микрофон/Камера/Показ экрана/Завершить → aria-label в
+  PWA), на десктопе — `title` кнопок («Звонок», «Включить камеру»,
+  «Завершить звонок»). `shot_video_viewer.js` — просмотр видео на 400×800:
+  кнопка СОХРАНИТЬ ниже `<video>`; сам ролик в headless Chromium серый —
+  там нет H.264, это не баг. Тестовое видео в чат — POST
+  `/api/chats/{id}/files` с `server/assets/compendium/intro.mp4`.
+  `shot_poker_leave.js` / `desk_poker_leave.js` — «встать» посреди турнира
+  на PWA и десктопе (стол на троих через API, раздача идёт): место
+  вставшего пропадает, кнопки нет, в API is_active=false.
 
 ## Грабли (уже кусали — не наступать)
 
@@ -807,7 +1036,8 @@ useChats/getChatName, иначе показывался бы сам юзер.
     токен выкидывается только на 401/403 (AuthContext). Иначе PWA с ярлыка
     разлогинивала людей при секундном отсутствии сети («не могу зайти»).
 11. **OTA ходит по runtimeVersion, и он теперь РУЧНОЙ** (`"runtimeVersion":
-    "8"` в app.json; было `policy: appVersion` — из-за него ЛЮБОЙ бамп
+    "9"` в app.json = сборка 0.9.0 на SDK 57; было `policy: appVersion` —
+    из-за него ЛЮБОЙ бамп
     version заставлял всех 50 человек качать APK заново, даже ради
     JS-правки). Правило: `version`/`versionCode` поднимаем свободно, JS
     едет по воздуху ко всем с тем же runtimeVersion; **runtimeVersion
@@ -851,7 +1081,27 @@ useChats/getChatName, иначе показывался бы сам юзер.
     Отменить/перезапустить прогон из сессии нельзя (403 на Actions у
     интеграции) — только хозяин руками. Логи задачи API отдаёт ТОЛЬКО
     после её завершения. Попутно: actions/checkout@v4 и setup-node@v4
-    ругаются на Node 20 (принудительно Node 24) — при случае поднять до v5.
+    ругаются на Node 20 (принудительно Node 24) — в mobile-release.yml
+    подняты до v5 (Node 22), release.yml и mobile-ota.yml — при случае.
+16. **Мажорный апгрейд Expo молча меняет РАНТАЙМ, а не только API.** SDK 57
+    (0.9.0 → правки в 0.9.1): подменённый глобальный `fetch` уронил все
+    загрузки файлов; expo-media-library на вебе требует натив ПРИ ИМПОРТЕ
+    (белый экран PWA), а на нативе `saveToLibraryAsync` стал заглушкой с
+    руганью; RTCView (SurfaceView) на новой архитектуре стал рисоваться
+    ПОВЕРХ оверлеев; нативные контролы expo-video не выживают под
+    родительским Pressable, а фулскрин у них по умолчанию ВЫКЛЮЧЕН
+    (`fullscreenOptions`). Ничего из этого не ловится ни `tsc`, ни
+    веб-сборкой, ни prebuild'ом — только руками на телефоне. Поэтому
+    нативный батч идёт тестовой сборкой (publish=false) и правится по
+    списку находок, а не мержится «раз собралось».
+17. **KeyboardAvoidingView на Android в edge-to-edge — пустышка.** RN
+    0.86 считает keyboardDidShow по `getWindowVisibleDisplayFrame`, а с
+    setDecorFitsSystemWindows(false) рамка не меняется: `screenY` = низ
+    экрана, перекрытие «ноль», отступа нет — поле ввода накрыто целиком,
+    и никакой `behavior`/`keyboardVerticalOffset` не поможет (0.9.2
+    ушла хозяину с этим). Клавиатуру объезжаем корнем приложения по
+    инсету ime() (`components/KeyboardInset.tsx`, reanimated); чинить
+    KAV в экранах — не надо.
 
 ## Бэклог (одобрено хозяином, порядок — мой)
 
@@ -869,11 +1119,20 @@ useChats/getChatName, иначе показывался бы сам юзер.
 хроме) НЕ делаем без отдельной просьбы: моно-переписка кому-то нравится.
 Хвосты звонков (ICE-restart/очередь сигналов на мобилке, приём экрана с
 компа, экран опоздавшему) — сделаны 16.09 (OTA, натив не менялся).
-Экран С телефона — отдельная нативная задача (новый APK).
+Экран С телефона — сделан в нативном батче 0.9.0 (см. раздел мобилки).
 Покерная шпаргалка + «Шансы» на мобилке — сделаны 16.09:
 `screens/chats/PokerAssist.tsx` под столом, математика —
 `services/pokerAssist.ts` = КОПИЯ десктопного `pokerAssist.ts` (общего
-пакета нет — править оба), тумблер «Шансы» в secureStorage.
+пакета нет — править оба), тумблер «Шансы» в secureStorage. Стол на
+телефоне (`PokerTable`, 0.9.2): места — коробки SEAT_W×SEAT_H на овале,
+радиус считается от РЕАЛЬНОГО размера стола (onLayout), чтобы коробка
+целиком была внутри (раньше своё место с картами свисало за нижний край,
+боковые заезжали за рамку); содержимое прижато к дальнему от центра
+краю; сам стол капается и по ВЫСОТЕ видимой области (`maxHeight` из
+onLayout ScrollView) — иначе своё место уезжало под панель действий и
+между картами и кнопками приходилось скроллить. Проверка — Playwright на
+400×800 (`scratchpad/pw/shot_poker_phone.js`: стол через API, замер
+bounding-box'ов мест относительно стола).
 Два столбца PWA на широких экранах — сделаны 17.09 (см. раздел мобилки).
 PR #79 хозяин смержил и выпустил как 2.3.11 вечером 16.09 — только со
 стилем «Б» (грабля №14); хвост (три мобильных пакета, возврат ⛽, видео
@@ -882,19 +1141,23 @@ PR #79 хозяин смержил и выпустил как 2.3.11 вечер�
 грабля №15). Ветка после этого перезапущена от main. Батч 18.09 (PR #81,
 2.3.14 + сервер): покер — часть чата (вариант 1) + стол с колонкой
 переписки (вариант 2) + значок стола в сайдбаре + пуши на файлы +
-офсайт вложений. Осталось:
+офсайт вложений. **Нативный батч 0.9.0** (одобрен хозяином 18.09,
+ОТДЕЛЬНЫЙ PR после #81): Expo SDK 51→57 + экран С телефона — новый APK,
+runtimeVersion 9; мержить в main только после того, как хозяин поставил
+тестовую сборку (Mobile Release → Run workflow → publish=false; merge в
+main = публикация в mobile-latest, куда смотрит «обнови меня» у всех).
+Это PR #82: три партии находок хозяина по тестовой сборке (0.9.1, 0.9.2,
+третья — клавиатура/аватарка из пуша/«встать») закрыты, 22.09 вечером
+хозяин проверил последнюю OTA — «вроде всё норм», PR готов к мержу.
+После мержа: сервер (обязательно — там созвон, peer_user_id, «встать»),
+тег v2.3.15, APK 0.9.2 (сборка 11) публикуется сам, PWA пересобрать.
+Осталось:
 1. По желанию: тот же шрифт Twemoji в PWA (web-сборка мобилки) — на
    нативном андроиде эмодзи всё равно системные.
-2. Экран С телефона (MediaProjection, нативная работа, новый APK).
-3. **Нативный батч** (одобрен хозяином 18.09, отдельный PR): апгрейд Expo
-   SDK с 51 + экран С телефона (MediaProjection) — новый APK, подъём
-   runtimeVersion; мержить в main только после того, как хозяин
-   поставил тестовую сборку (merge в main = публикация в mobile-latest,
-   куда смотрит «обнови меня» у всех).
-4. **«Кружки»** (видеосообщения как в Telegram; отложено хозяином 17.09,
+2. **«Кружки»** (видеосообщения как в Telegram; отложено хозяином 17.09,
    «пока в бэклог»). Оценка: день-два, БЕЗ нового APK — всё нужное уже
-   стоит: expo-camera 15 (`CameraView.recordAsync`, нужен `mode="video"`
-   + `useMicrophonePermissions`), expo-av для показа, на десктопе
+   стоит: expo-camera 57 (`CameraView.recordAsync`, нужен `mode="video"`
+   + `useMicrophonePermissions`), expo-video для показа, на десктопе
    MediaRecorder (webm). План: файл — обычное видео с именем
    `circle_<ts>.mp4|webm` (как `voice_*` у голосовых), клиенты рисуют
    кругом с object-fit cover (натив: View с borderRadius + overflow

@@ -72,6 +72,17 @@ class GameState:
     # История раздач — в памяти, пока стол жив (хозяин: «потом пофиг»)
     hand_log: Optional[dict] = None
     history: list[dict] = field(default_factory=list)
+    # Кто встал из-за стола посреди турнира (leave_game): сдался, стек
+    # сгорел, докупиться нельзя, клиенты место не рисуют.
+    left: set[int] = field(default_factory=set)
+    # Какую раздачу WS-слой уже довёл до конца (стеки/следующая/финал) —
+    # страховка от двойного завершения (обычный поток × фаст-форвард ×
+    # «встать»): вторая финализация плодила бы второй таймер следующей
+    # раздачи и двойную сдачу.
+    finalized_hand_no: int = 0
+    # Фаст-форвард (все в all-in, улицы сдаются таймером) уже крутится —
+    # второй запускать нельзя (двойная сдача улиц).
+    fast_forwarding: bool = False
 
     # ---- helpers -------------------------------------------------------
     def alive_players(self) -> list[PlayerState]:
@@ -399,6 +410,40 @@ def apply_action(g: GameState, user_id: int, action: str, amount: int = 0) -> di
     return {"type": "action", "action": action, "user_id": user_id, "amount": amount}
 
 
+def leave_game(g: GameState, user_id: int) -> dict | None:
+    """Игрок встал из-за стола посреди турнира — сдался.
+
+    В живой раздаче складывает карты: свой ход — очередь двигаем как после
+    обычного фолда; чужой — только помечаем, _advance перескочит его сам,
+    когда сходит текущий (двигать очередь за чужой ход нельзя — она ушла
+    бы от того, кто ходит). Стек сгорает (в котёл «за газ» ничего не
+    возвращается — как при вылете), в следующие раздачи не попадает
+    (start_hand сдаёт по stack > 0), докупка закрыта (can_reenter).
+    Возвращает итог раздачи, если после его фолда в ней остался один
+    игрок, иначе None. Раньше API лишь помечал место неактивным, а движок
+    и столы у всех держали игрока как живого — «встать не работает»."""
+    p = g.players.get(user_id)
+    if p is None or user_id in g.left:
+        return None
+    g.left.add(user_id)
+    hand = g.hand
+    result = None
+    if hand is not None and hand.street != "done" and not p.has_folded:
+        was_turn = hand.to_act_seat == p.seat_index
+        p.has_folded = True
+        p.has_acted = True
+        hand.last_action = {"user_id": user_id, "action": "fold", "amount": 0}
+        _log_action(g, p, "fold")
+        in_hand = g.players_in_hand()
+        if len(in_hand) == 1:
+            result = _award_uncalled_pot(g, in_hand[0])
+        elif was_turn:
+            _advance(g)
+    p.stack = 0
+    p.is_all_in = False
+    return result
+
+
 def _advance(g: GameState):
     hand = g.hand
     assert hand
@@ -646,6 +691,9 @@ def public_view(g: GameState, viewer_user_id: int) -> dict:
                 "bet": p.bet,
                 "has_folded": p.has_folded,
                 "is_all_in": p.is_all_in,
+                # Встал из-за стола: клиенты не рисуют его место и не
+                # показывают ему панель действий
+                "left": p.user_id in g.left,
                 "reentries": g.reentries.get(p.user_id, 0),
                 "can_reenter": can_reenter(g, p.user_id)[0],
                 "is_my_turn": hand is not None and hand.to_act_seat == p.seat_index,
@@ -737,6 +785,8 @@ def can_reenter(g: GameState, user_id: int) -> tuple[bool, str]:
         return False, "На этом столе нет докупки"
     if g.finished:
         return False, "Турнир окончен"
+    if user_id in g.left:
+        return False, "Ты встал из-за стола"
     p = g.players.get(user_id)
     if p is None:
         return False, "Ты не за этим столом"

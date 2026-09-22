@@ -15,11 +15,23 @@ on:
       - "mobile/eas.json"
       - "mobile/google-services.json"
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Опубликовать в mobile-latest (иначе — только тестовая сборка: артефакт + ссылка EAS)"
+        required: false
+        default: false
+        type: boolean
 
 # Publishes the finished APK to the rolling "mobile-latest" release so the
 # permanent URL below always serves the newest build (desktop profile shows
 # it as a QR code):
 #   https://github.com/Papa-Gandola/gandolachat/releases/download/mobile-latest/gandolachat.apk
+#
+# ТЕСТОВАЯ СБОРКА С ВЕТКИ: Actions → Mobile Release → Run workflow → выбрать
+# ветку, publish = false. APK не уйдёт в mobile-latest (на него смотрят QR и
+# «обнови меня» у всех), а ляжет артефактом прогона + прямой ссылкой EAS в
+# сводке. Так проверяют нативные изменения (новый SDK, разрешения) на своём
+# телефоне ДО мержа в main.
 permissions:
   contents: write
 
@@ -31,11 +43,12 @@ jobs:
       run:
         working-directory: mobile
     steps:
-      - uses: actions/checkout@v4
+      # v5: v4 ругались на устаревший Node 20 раннера (грабля №15)
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install dependencies
         run: npm install
@@ -54,8 +67,22 @@ jobs:
           fi
           curl -fL --retry 3 -o gandolachat.apk "$APK_URL"
           ls -lh gandolachat.apk
+          {
+            echo "### APK"
+            echo "- Версия: $(jq -r '.expo.version' app.json) (сборка $(jq -r '.expo.android.versionCode' app.json), runtime $(jq -r '.expo.runtimeVersion' app.json))"
+            echo "- Прямая ссылка EAS: $APK_URL"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload APK as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gandolachat-apk
+          path: mobile/gandolachat.apk
+          retention-days: 14
 
       - name: Publish rolling release mobile-latest
+        # Ручной прогон без publish=true — только тестовая сборка
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

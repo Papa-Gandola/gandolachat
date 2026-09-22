@@ -28,14 +28,17 @@ export function ChatsSidebar() {
     return navigationRef.addListener("state", read);
   }, []);
 
-  // navigate (а не push): если такой чат уже открыт справа — просто
-  // обновятся параметры, стек не растёт с каждым кликом по списку.
+  // navigate с pop (а не push): если такой чат уже есть в стеке справа —
+  // возвращаемся к нему и обновляем параметры, стек не растёт с каждым
+  // кликом по списку. В react-navigation 7 navigate сам по себе больше не
+  // возвращается к существующему экрану (только к текущему) — без pop
+  // чередование ЛС/группа наращивало бы стек Chat/GroupChat/Chat/…
   const goChats = (screen: ChatTarget | "Search" | "NewChat", params?: ChatOpenParams) => {
     if (!navigationRef.isReady()) return;
     navigationRef.dispatch(
-      CommonActions.navigate({
-        name: "Main",
-        params: { screen: "Chats", params: params ? { screen, params } : { screen } },
+      CommonActions.navigate("Main", {
+        screen: "Chats",
+        params: params ? { screen, params, pop: true } : { screen },
       }),
     );
   };

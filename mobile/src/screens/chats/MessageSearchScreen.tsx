@@ -47,12 +47,22 @@ export function MessageSearchScreen({ navigation, route }: Props) {
   const goToMessage = (msgId: number) => {
     // Pass the target message back to ChatScreen via params; ChatScreen
     // listens on `scrollToTick` and highlights the matching message.
-    navigation.navigate("Chat", {
-      chatId,
-      name: chatName,
-      scrollToMessageId: msgId,
-      scrollToTick: Date.now(),
-    } as never);
+    // popTo (react-navigation 7): возвращаемся к УЖЕ открытому чату под
+    // поиском и домешиваем параметры — navigate теперь пушил бы второй
+    // ChatScreen поверх поиска. Поиск открывают и из группы (GroupChat) —
+    // целимся в тот экран чата, что реально лежит в стеке.
+    const names = navigation.getState().routes.map((r) => r.name);
+    const target = names.includes("Chat") ? "Chat" : names.includes("GroupChat") ? "GroupChat" : "Chat";
+    navigation.popTo(
+      target,
+      {
+        chatId,
+        name: chatName,
+        scrollToMessageId: msgId,
+        scrollToTick: Date.now(),
+      } as never,
+      { merge: true },
+    );
   };
 
   return (

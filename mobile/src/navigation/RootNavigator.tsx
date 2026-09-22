@@ -1,4 +1,4 @@
-import { NavigationContainer, Theme as NavTheme } from "@react-navigation/native";
+import { DarkTheme, NavigationContainer, Theme as NavTheme } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
 import { useAuth } from "../services/AuthContext";
@@ -6,7 +6,7 @@ import { initNotificationTapHandler } from "../services/notificationTapHandler";
 import { useTheme } from "../theme";
 import { AuthStack } from "./AuthStack";
 import { MainTabs } from "./MainTabs";
-import { navigationRef } from "./navigationRef";
+import { flushPendingLink, navigationRef } from "./navigationRef";
 import { RootStackParamList } from "./types";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -19,9 +19,12 @@ export function RootNavigator() {
   // stack flashing for a moment when a saved token was about to log in.
   if (!ready) return null;
 
+  // react-navigation 7 требует в теме ещё и fonts — берём из DarkTheme.
   const navTheme: NavTheme = {
+    ...DarkTheme,
     dark: true,
     colors: {
+      ...DarkTheme.colors,
       primary: theme.colors.accent,
       background: theme.colors.bg,
       card: theme.colors.bg,
@@ -39,6 +42,9 @@ export function RootNavigator() {
         // Hook up notification tap → deeplink handler now that we have a
         // navigation ref ready to dispatch against.
         initNotificationTapHandler();
+        // Тап, прилетевший до готовности навигатора (холодный старт из
+        // пуша), ждал здесь — выполняем его теперь.
+        flushPendingLink();
       }}
     >
       <Stack.Navigator screenOptions={{ headerShown: false }}>

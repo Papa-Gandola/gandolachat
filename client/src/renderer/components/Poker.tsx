@@ -64,7 +64,7 @@ export default function Poker({ chat, currentUser, onBackToChat, chatColumn, onT
     const lastActionKey = gameState.hand.last_action
       ? `${gameState.hand.last_action.user_id}:${gameState.hand.last_action.action}:${gameState.hand.last_action.amount}`
       : null;
-    const me = gameState.players.find((p) => p.user_id === currentUser.id);
+    const me = gameState.players.find((p) => p.user_id === currentUser.id && !p.left);
     const myTurnNow = !!me?.is_my_turn;
 
     // New hand started — deal sound (hole cards)
@@ -438,7 +438,9 @@ export default function Poker({ chat, currentUser, onBackToChat, chatColumn, onT
           ) : (
             <div style={s.list}>
               {tables.map((t) => {
-                const mySeat = t.seats.find((s) => s.user_id === currentUser.id);
+                // Вставшие посреди турнира (is_active=false) — не за столом
+                const activeSeats = t.seats.filter((s) => s.is_active !== false);
+                const mySeat = activeSeats.find((s) => s.user_id === currentUser.id);
                 return (
                   <div key={t.id} style={{ ...s.tableCard, ...(isNeo ? { borderRadius: 0, border: "1px solid var(--border)" } : {}) }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
@@ -447,7 +449,7 @@ export default function Poker({ chat, currentUser, onBackToChat, chatColumn, onT
                           {isNeo ? `// СТОЛ #${t.id}` : `Стол #${t.id}`}
                         </div>
                         <div style={{ ...s.tableMeta, ...mono }}>
-                          {t.seats.length}/{t.max_seats} игроков · стек {t.starting_stack.toLocaleString()} · блайнды {t.starting_small_blind}/{t.starting_big_blind} · +1.5× каждые {t.blind_increase_minutes} мин
+                          {activeSeats.length}/{t.max_seats} игроков · стек {t.starting_stack.toLocaleString()} · блайнды {t.starting_small_blind}/{t.starting_big_blind} · +1.5× каждые {t.blind_increase_minutes} мин
                         </div>
                         {t.mode === "gas" && (
                           <div style={{ ...s.tableMeta, ...mono, color: "var(--accent)", fontWeight: 700 }}>
@@ -468,7 +470,7 @@ export default function Poker({ chat, currentUser, onBackToChat, chatColumn, onT
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-                      {t.seats.map((s) => (
+                      {activeSeats.map((s) => (
                         <span key={s.id} style={{ ...mono, display: "inline-flex", alignItems: "center", gap: 6, background: "var(--bg-tertiary)", padding: "4px 8px", borderRadius: isNeo ? 0 : 4, fontSize: 12 }}>
                           <SeatAvatar seat={s} small />
                           {s.username}
@@ -514,9 +516,9 @@ export default function Poker({ chat, currentUser, onBackToChat, chatColumn, onT
 
   // === Single table view ===
   const t = activeTable;
-  const mySeat = t.seats.find((sx) => sx.user_id === currentUser.id);
+  const mySeat = t.seats.find((sx) => sx.user_id === currentUser.id && sx.is_active !== false);
   const liveGame = gameState && gameState.table_id === t.id ? gameState : null;
-  const myPlayer = liveGame?.players.find((p) => p.user_id === currentUser.id);
+  const myPlayer = liveGame?.players.find((p) => p.user_id === currentUser.id && !p.left);
   const myTurn = !!myPlayer?.is_my_turn;
 
   return (
@@ -888,7 +890,7 @@ function LiveTableLayout({ table, game, currentUserId, isNeo }: {
   isNeo: boolean;
 }) {
   const N = table.max_seats;
-  const myPlayer = game.players.find((p) => p.user_id === currentUserId);
+  const myPlayer = game.players.find((p) => p.user_id === currentUserId && !p.left);
   const mySeatIndex = myPlayer?.seat_index ?? 0;
   const slotPositions: { x: number; y: number }[] = [];
   for (let i = 0; i < N; i++) {
@@ -933,7 +935,9 @@ function LiveTableLayout({ table, game, currentUserId, isNeo }: {
 
       {/* Seats */}
       {Array.from({ length: N }).map((_, idx) => {
-        const player = playersBySeat.get(idx);
+        // Вставший посреди турнира (left) — место свободно, рисуем пустой слот
+        const livePlayer = playersBySeat.get(idx);
+        const player = livePlayer && !livePlayer.left ? livePlayer : undefined;
         const tableSeat = table.seats.find((sx) => sx.seat_index === idx);
         const pos = slotPositions[idx];
         const isToAct = game.hand?.to_act_seat === idx;

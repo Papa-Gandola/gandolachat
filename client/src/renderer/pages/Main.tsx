@@ -434,6 +434,25 @@ export default function Main({ token, user, onLogout }: Props) {
     }, 12000);
   }
 
+  /** «Перейти сюда»: созвон держит другое наше устройство (или отвалившийся
+   *  телефон, который сервер ещё считает живым). Вторым входом тем же
+   *  user_id войти нельзя — сперва кладём трубку ТАМ (call_end от нашего
+   *  имени выкидывает юзера из состава и гасит звонок на том устройстве),
+   *  ждём свежий состав и входим здесь. */
+  async function takeOverCall(chat: ChatOut) {
+    if (callChat) return;
+    wsService.send({ type: "call_end", chat_id: chat.id });
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 150));
+      const parts = activeCallsRef.current.get(chat.id) ?? [];
+      if (parts.length === 0) return; // звонок кончился целиком — входить некуда
+      if (!parts.includes(currentUser.id)) {
+        joinOngoingCall(chat);
+        return;
+      }
+    }
+  }
+
   function acceptCall(call: { chatId: number; fromUserId: number }) {
     const chat = chats.find((c) => c.id === call.chatId);
     if (chat) {
@@ -676,6 +695,7 @@ export default function Main({ token, user, onLogout }: Props) {
                   onStartCall={() => startCall(activeChat)}
                   activeCallUsers={activeCalls.get(activeChat.id) ?? []}
                   onJoinCall={() => joinOngoingCall(activeChat)}
+                  onTakeOverCall={() => takeOverCall(activeChat)}
                   inCallHere={callChat?.id === activeChat.id}
                   allChats={chats}
                   onOpenProfile={(u) => setViewingProfile(u)}
@@ -694,6 +714,7 @@ export default function Main({ token, user, onLogout }: Props) {
                 onStartCall={() => startCall(activeChat)}
                 activeCallUsers={activeCalls.get(activeChat.id) ?? []}
                 onJoinCall={() => joinOngoingCall(activeChat)}
+                onTakeOverCall={() => takeOverCall(activeChat)}
                 inCallHere={callChat?.id === activeChat.id}
                 allChats={chats}
                 onOpenProfile={(u) => setViewingProfile(u)}

@@ -22,6 +22,8 @@ interface Props {
   // Плашка «в созвоне»: кто сейчас в звонке этого чата + вход в него.
   activeCallUsers?: number[];
   onJoinCall?: () => void;
+  /** Перетащить созвон с другого своего устройства сюда. */
+  onTakeOverCall?: () => void;
   inCallHere?: boolean;
   allChats?: ChatOut[];
   onOpenProfile?: (user: UserOut) => void;
@@ -39,7 +41,7 @@ interface Props {
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-export default function ChatArea({ chat, currentUser, onStartCall, activeCallUsers, onJoinCall, inCallHere, allChats = [], onOpenProfile, onOpenChatInfo, onOpenPoker, compact = false, pendingOpenSearch, pendingAddMember, onPendingHandled }: Props) {
+export default function ChatArea({ chat, currentUser, onStartCall, activeCallUsers, onJoinCall, onTakeOverCall, inCallHere, allChats = [], onOpenProfile, onOpenChatInfo, onOpenPoker, compact = false, pendingOpenSearch, pendingAddMember, onPendingHandled }: Props) {
   const theme = useTheme();
   const isNeo = theme === "neo";
   const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
@@ -1096,7 +1098,25 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
           {inCallHere ? (
             <span style={{ color: "var(--text-muted)", fontSize: 12 }}>вы в звонке</span>
           ) : activeCallUsers!.includes(currentUser.id) ? (
-            <span style={{ color: "var(--text-muted)", fontSize: 12 }}>вы в звонке с другого устройства</span>
+            // Созвон держит другое наше устройство. Вторым входом тем же
+            // user_id войти нельзя (mesh ключуется юзером), поэтому кнопка
+            // сперва кладёт трубку ТАМ, а потом входит здесь. Это же
+            // вытаскивает из тупика, когда «там» — отвалившийся телефон.
+            <button
+              style={{
+                background: "transparent",
+                color: "var(--text-muted)",
+                border: "1px solid var(--border)",
+                borderRadius: 4,
+                padding: "4px 12px",
+                cursor: "pointer",
+                fontSize: 12,
+              }}
+              title="Положить трубку на другом устройстве и войти здесь"
+              onClick={onTakeOverCall}
+            >
+              Перейти сюда
+            </button>
           ) : (
             <button
               style={{

@@ -323,15 +323,59 @@ export const chatApi = {
     getInstance().get<Array<{ user_id: number; last_read_message_id: number | null }>>(
       `/api/chats/${chatId}/read-status`,
     ),
-  uploadFile: async (
-    chatId: number,
-    file: { uri: string; name: string; type: string },
-    caption = "",
-    mediaGroupId?: string,
-  ): Promise<MessageOut> => {
-    // Use fetch (not axios) for multipart — RN's fetch builds the multipart
-    // boundary correctly for { uri, name, type } file parts, where axios
-    // routinely fails and surfaces as a network error.
+  uploadFile: uploadFileImpl,
+};
+
+/** POST multipart через XMLHttpRequest (см. комментарий в uploadFile).
+ *  Ошибку сервера разворачиваем в её `detail`, сетевой сбой — в
+ *  «Network request failed», чтобы вызывающий ретраил только его. */
+function xhrUpload(url: string, form: FormData, token: string | null): Promise<MessageOut> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.onload = () => {
+      const raw = typeof xhr.response === "string" ? xhr.response : xhr.responseText;
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(raw) as MessageOut);
+        } catch {
+          reject(new Error("Сервер вернул не JSON"));
+        }
+        return;
+      }
+      let detail = `Ошибка ${xhr.status}`;
+      try {
+        const body = JSON.parse(raw) as { detail?: string };
+        if (body.detail) detail = body.detail;
+      } catch {
+        // non-JSON error body
+      }
+      reject(new Error(detail));
+    };
+    xhr.onerror = () => reject(new Error("Network request failed"));
+    xhr.ontimeout = () => reject(new Error("Network request failed"));
+    xhr.send(form as unknown as Document);
+  });
+}
+
+async function uploadFileImpl(
+  chatId: number,
+  file: { uri: string; name: string; type: string },
+  caption = "",
+  mediaGroupId?: string,
+): Promise<MessageOut> {
+    // Multipart НЕ через fetch и НЕ через axios.
+    //
+    // axios на RN регулярно падал «Network request failed» на файловых
+    // частях. А с Expo SDK 54+ глобальный fetch — СВОЙ (expo/winter): он
+    // умеет только строки, Blob и File, а RN-часть `{uri, name, type}`
+    // отвергает с «Unsupported FormDataPart implementation» (ровно эта
+    // ошибка и вылезала на голосовых в 0.9.0). Плюс он собирает всё тело
+    // в памяти JS — для видео до 50 МБ это заведомо плохо.
+    //
+    // XMLHttpRequest остаётся РОДНОЙ реализацией React Native: нативный
+    // NetworkingModule сам стримит файл с диска по uri. Поэтому грузим им.
     const token = await SecureStore.getItemAsync(TOKEN_KEY);
     const params: string[] = [];
     if (caption) params.push(`caption=${encodeURIComponent(caption)}`);
@@ -351,22 +395,7 @@ export const chatApi = {
         form.append("file", file as any);
         if (caption) form.append("caption", caption);
         if (mediaGroupId) form.append("media_group_id", mediaGroupId);
-        const res = await fetch(url, {
-          method: "POST",
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-          body: form,
-        });
-        if (!res.ok) {
-          let detail = `Ошибка ${res.status}`;
-          try {
-            const body = (await res.json()) as { detail?: string };
-            if (body.detail) detail = body.detail;
-          } catch {
-            // non-JSON error body
-          }
-          throw new Error(detail);
-        }
-        return (await res.json()) as MessageOut;
+        return await xhrUpload(url, form, token);
       } catch (err) {
         lastErr = err;
         // Only retry transient network failures, not server-side rejections.
@@ -375,9 +404,8 @@ export const chatApi = {
         await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
       }
     }
-    throw lastErr;
-  },
-};
+  throw lastErr;
+}
 
 export interface PokerSeatOut {
   id: number;
@@ -450,6 +478,8 @@ export interface PokerPlayerView {
   is_all_in: boolean;
   reentries: number;
   can_reenter: boolean;
+  /** Встал из-за стола посреди турнира: место не рисуем, панели действий нет */
+  left?: boolean;
   is_my_turn: boolean;
   hole: string[];
 }

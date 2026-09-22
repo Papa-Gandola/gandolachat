@@ -1,11 +1,10 @@
-import Constants from "expo-constants";
 import { useEffect, useRef, useState } from "react";
-import { AppState, Linking, Modal, Platform, Pressable, Text, View } from "react-native";
+import { AppState, Modal, Platform, Pressable, Text, View } from "react-native";
 
 import { CHANGELOG_ID } from "../changelog";
 import { useAuth } from "../services/AuthContext";
-import { API_URL } from "../services/config";
 import * as SecureStore from "../services/secureStorage";
+import { ApkInfo, fetchApkInfo, myBuildNumber, myVersion, noteApkInfo, openApkDownload } from "../services/updates";
 import { useTheme } from "../theme";
 
 // «Обнови меня до x.x.x» — для НАТИВНОГО андроида, у которого стоит старый
@@ -19,32 +18,12 @@ import { useTheme } from "../theme";
 // старт или возврат из фона после ≥2 часов. Пока висит «Что нового»
 // (свежий OTA), молчим — два окна разом это перебор; PWA не трогаем: у
 // неё обновлять нечего.
+// Проверка сборки и её адрес — в services/updates.ts (общие с экраном
+// «Обновления» в профиле).
 const COUNT_KEY = "gandola.updateNag";
 const CHANGELOG_SEEN_KEY = "gandola.changelogSeen";
 const EVERY = 3;
 const BACKGROUND_RESET_MS = 2 * 60 * 60 * 1000;
-
-type ApkInfo = { version: string | null; build: number | null; release_name: string | null };
-
-async function fetchApkInfo(): Promise<ApkInfo | null> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 8000);
-  try {
-    const res = await fetch(`${API_URL}/apk/info`, { signal: ctrl.signal });
-    if (!res.ok) return null; // 404 — зеркало ещё не набрало кэш
-    return (await res.json()) as ApkInfo;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-export function myBuildNumber(): number | null {
-  const raw = Constants.nativeBuildVersion;
-  const n = raw ? Number.parseInt(String(raw), 10) : NaN;
-  return Number.isFinite(n) ? n : null;
-}
 
 export function UpdateNagModal() {
   const theme = useTheme();
@@ -62,6 +41,9 @@ export function UpdateNagModal() {
       if ((await SecureStore.getItemAsync(CHANGELOG_SEEN_KEY)) !== CHANGELOG_ID) return;
       const info = await fetchApkInfo();
       if (!info || info.build == null || info.build <= mine) return;
+      // Бейдж у кнопки «Обновления» в профиле — независимо от того,
+      // покажем ли окно в этот заход.
+      noteApkInfo(info);
       let count = 0;
       try {
         const saved = JSON.parse((await SecureStore.getItemAsync(COUNT_KEY)) ?? "null") as { build: number; count: number } | null;
@@ -96,7 +78,7 @@ export function UpdateNagModal() {
   }, [user?.id]);
 
   if (!visible || !latest) return null;
-  const mineVersion = Constants.nativeAppVersion ?? Constants.expoConfig?.version ?? "?";
+  const mineVersion = myVersion();
   const target = latest.version ?? latest.release_name ?? "новой";
   const title = theme.decorate ? "// ОБНОВИ МЕНЯ" : "Обнови меня";
   return (
@@ -125,7 +107,7 @@ export function UpdateNagModal() {
           <Pressable
             onPress={() => {
               setVisible(false);
-              Linking.openURL(`${API_URL}/apk`).catch(() => {});
+              openApkDownload();
             }}
             style={{
               marginTop: 16,
