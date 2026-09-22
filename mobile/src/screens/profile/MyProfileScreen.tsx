@@ -11,9 +11,11 @@ import { IconBtn } from "../../components/IconBtn";
 import { NeoButton } from "../../components/NeoButton";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import { Section } from "../../components/Section";
+import { SettingsRow as NavRow } from "../../components/SettingsRow";
 import { ProfileStackParamList } from "../../navigation/types";
 import { apiErrorMessage, authApi, userApi } from "../../services/api";
 import { useAuth } from "../../services/AuthContext";
+import { myVersion, useUpdateBadge } from "../../services/updates";
 import { useTheme, useThemeControls } from "../../theme";
 
 type Props = NativeStackScreenProps<ProfileStackParamList, "MyProfile">;
@@ -26,6 +28,8 @@ export function MyProfileScreen({ navigation }: Props) {
   const u = auth.user;
   const initial = (u?.username?.[0] ?? "?").toUpperCase();
   const [avatarBusy, setAvatarBusy] = useState(false);
+  // Бейдж у «Обновления»: скачанный код и/или новая сборка APK.
+  const updateBadge = useUpdateBadge();
 
   const pickAvatar = async () => {
     try {
@@ -129,6 +133,14 @@ export function MyProfileScreen({ navigation }: Props) {
           onPress={() => setThemeId(themeId === "neo" ? "discord" : "neo")}
         />
         <SettingsRow theme={theme} label="Все настройки" value="" onPress={() => navigation.navigate("Settings")} />
+        {/* Экран «Обновления» (вариант C из эскизов): версия, что стоит,
+            проверка по кнопке. Бейдж — сколько обновлений уже найдено. */}
+        <NavRow
+          label="Обновления"
+          value={myVersion()}
+          badge={updateBadge || null}
+          onPress={() => navigation.navigate("Updates")}
+        />
 
         <View style={{ padding: 16, paddingTop: 24 }}>
           <NeoButton variant="secondary" onPress={() => auth.signOut()}>

@@ -11,10 +11,11 @@ const KEY = "gandola.changelogSeen";
 /**
  * «Что нового» после обновления: показывается один раз, когда сохранённая
  * метка отстаёт от CHANGELOG_ID (src/changelog.ts). Свежая установка окошко
- * не видит — только реальные обновления.
+ * не видит — только реальные обновления. Само окно — ChangelogModal ниже,
+ * его же открывают руками из настроек («Что нового») и с экрана
+ * «Обновления».
  */
 export function WhatsNewModal() {
-  const theme = useTheme();
   const { user } = useAuth();
   const [visible, setVisible] = useState(false);
 
@@ -44,9 +45,15 @@ export function WhatsNewModal() {
     SecureStore.setItemAsync(KEY, CHANGELOG_ID).catch(() => {});
   };
 
+  return <ChangelogModal visible={visible} onClose={close} />;
+}
+
+/** Окно со списком изменений текущей версии. */
+export function ChangelogModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const theme = useTheme();
   if (!visible) return null;
   return (
-    <Modal visible transparent animationType="fade" onRequestClose={close}>
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.72)", alignItems: "center", justifyContent: "center", padding: 24 }}>
         <View
           style={{
@@ -76,7 +83,7 @@ export function WhatsNewModal() {
             ))}
           </ScrollView>
           <Pressable
-            onPress={close}
+            onPress={onClose}
             style={{
               marginTop: 14,
               backgroundColor: theme.colors.accent,

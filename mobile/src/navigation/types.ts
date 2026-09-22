@@ -48,6 +48,7 @@ export type ChatsStackParamList = {
 export type ProfileStackParamList = {
   MyProfile: undefined;
   Settings: undefined;
+  Updates: undefined;
 };
 
 export type MainTabsParamList = {

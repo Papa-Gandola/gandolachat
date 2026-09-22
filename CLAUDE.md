@@ -28,7 +28,7 @@ Discord-подобный мессенджер для чата друзей. Ра
 |---|---|
 | `server/` | VPS: `git pull && docker compose build server && docker compose up -d server`. Миграции и синк ассетов — сами при старте. Релиз НЕ нужен |
 | `client/` | Бамп версии в **двух** местах: `client/package.json` + `APP_VERSION` в `client/src/renderer/changelog.ts` (+`npm i --package-lock-only`); ТАМ ЖЕ дописать пункты в CHANGELOG — окошко «Что нового» покажется каждому один раз после обновления (Main.tsx версию берёт отсюда). После мержа: `git tag v2.x.x && git push origin v2.x.x` → Actions собирает **черновик** релиза (Linux создаёт, Windows докладывает — последовательно, гонку уже чинили) → хозяин жмёт Publish release |
-| `mobile/` | PWA: на VPS `cd mobile && npm run build:web` → скопировать `mobile/dist/*` в `server/web/` (bind-mount, рестарт не нужен; Node 20 на VPS стоит). Скрипт `postbuild-web.js` префиксует пути `/app`. Нативный Android: изменение mobile/app.json\|package.json\|eas.json в main (или тег `mobile-v*`) → Actions ждёт сборку EAS и сам публикует APK в скользящий релиз **mobile-latest** — постоянная ссылка `releases/download/mobile-latest/gandolachat.apk` (на неё смотрит QR в профиле десктопа). При новом APK поднимать И version, И versionCode (appVersionSource: local), а при НАТИВНОМ изменении — ещё и runtimeVersion (грабля №11). Версия mobile своя (0.9.x). **Тестовая сборка с ветки БЕЗ публикации**: Actions → Mobile Release → Run workflow → ветка, publish=false → APK артефактом прогона + прямая ссылка EAS в сводке (QR — на странице сборки в expo.dev, кнопка Install); так хозяин проверяет натив на телефоне ДО мержа (merge в main = публикация в mobile-latest, куда смотрит «обнови меня» у всех). **JS-правки на тестовую сборку — без нового APK**: Actions → Mobile OTA Update → Run workflow → git-ветка PR, EAS branch `preview` → обновление получают ТОЛЬКО сборки с тем же runtimeVersion (тестовая), телефоны на старом runtime его не видят; ставится при следующем запуске приложения (открыть дважды). При заметном батче правок поднять `CHANGELOG_ID` (дата) в `mobile/src/changelog.ts` + дописать пункты — мобильное «Что нового» (версия для OTA не годится, она не меняется) |
+| `mobile/` | PWA: на VPS `cd mobile && npm run build:web` → скопировать `mobile/dist/*` в `server/web/` (bind-mount, рестарт не нужен; Node 20 на VPS стоит). Скрипт `postbuild-web.js` префиксует пути `/app`. В `build:web` `--clear` ОБЯЗАТЕЛЕН: манифест (version, extra) инлайнится в expo-constants на этапе трансформации, а кэш Metro в /tmp его в ключ не включает — без сброса PWA после бампа показывала старую версию (0.9.0 при 0.9.2 в app.json). Нативный Android: изменение mobile/app.json\|package.json\|eas.json в main (или тег `mobile-v*`) → Actions ждёт сборку EAS и сам публикует APK в скользящий релиз **mobile-latest** — постоянная ссылка `releases/download/mobile-latest/gandolachat.apk` (на неё смотрит QR в профиле десктопа). При новом APK поднимать И version, И versionCode (appVersionSource: local), а при НАТИВНОМ изменении — ещё и runtimeVersion (грабля №11). Версия mobile своя (0.9.x). **Тестовая сборка с ветки БЕЗ публикации**: Actions → Mobile Release → Run workflow → ветка, publish=false → APK артефактом прогона + прямая ссылка EAS в сводке (QR — на странице сборки в expo.dev, кнопка Install); так хозяин проверяет натив на телефоне ДО мержа (merge в main = публикация в mobile-latest, куда смотрит «обнови меня» у всех). **JS-правки на тестовую сборку — без нового APK**: Actions → Mobile OTA Update → Run workflow → git-ветка PR, EAS branch `preview` → обновление получают ТОЛЬКО сборки с тем же runtimeVersion (тестовая), телефоны на старом runtime его не видят; ставится при следующем запуске приложения (открыть дважды). При заметном батче правок поднять `CHANGELOG_ID` (дата) в `mobile/src/changelog.ts` + дописать пункты — мобильное «Что нового» (версия для OTA не годится, она не меняется) |
 | только docs | ничего |
 
 Ошибся тегом: удалить И черновик релиза на GitHub, И тег
@@ -170,7 +170,10 @@ print-логи видны в `docker compose logs` с опозданием (не
   x.x.x» с кнопкой «Скачать APK» (→ `/apk`) раз в 3 захода (1-й, 4-й,
   7-й…; счётчик в secureStorage на каждую сборку зеркала свой; заход =
   холодный старт или возврат из фона после ≥2ч; пока не закрыто «Что
-  нового» — молчит; в PWA не показывается).
+  нового» — молчит; в PWA не показывается). Запрос `/apk/info`, номер
+  своей сборки и ссылка на `/apk` — в `services/updates.ts` (общие с
+  экраном «Обновления» в профиле); найденная сборка через `noteApkInfo`
+  зажигает бейдж у кнопки «Обновления» даже в заходы, когда окно молчит.
 - `app/backups.py` — ночные дампы БД: 04:00 МСК `pg_dump -Fc` в
   ОТДЕЛЬНЫЙ том `backups:/app/backups` (НЕ uploads — тот публичен!),
   ротация 14 шт. **Офсайт**: при заданных BACKUP_WEBDAV_URL/USER/
@@ -885,6 +888,28 @@ Swipeable, они перехватывают касания у нативных 
 звонящего (`send_to_user` без живых сокетов) пропал, по WS плашка уже не
 придёт. «Принять» в такой плашке идёт не `joinCall` (отвечать нечему), а
 `joinOngoing` → `call_join`; выбор — по `webrtcService.hasPendingOffer`.
+**Экран «Обновления»** (вариант C из эскизов, выбор хозяина 22.09; вход —
+строка «Обновления» в MyProfileScreen сразу под «Все настройки», а НЕ в
+настройках — так попросил): `screens/profile/UpdatesScreen.tsx` (роут
+`Updates` в ProfileStack), логика — `services/updates.ts`. В строке —
+версия (`myVersion()` = `Constants.nativeAppVersion`, в PWA —
+`expoConfig.version`) и лаймовый бейдж `useUpdateBadge()` = скачанный OTA
+(`Updates.useUpdates().isUpdatePending`) + новая сборка APK из кэша
+модуля (наполняют `checkForUpdates` по кнопке, `noteApkInfo` из окна
+«обнови меня» и `loadLastCheck` — время и найденный APK переживают
+перезапуск в secureStorage `gandola.updates.lastCheck`, найденная сборка
+перепроверяется по build > своего). Экран: крупная версия, «сборка N ·
+runtime R · канал C», две карточки-пояснения (Код по воздуху:
+«встроенный в сборку» либо дата+7 символов updateId; Сборка APK),
+«Проверить сейчас» → `checkForUpdateAsync` → `fetchUpdateAsync` →
+плашка «есть обновление кода» с «перезапустить сейчас» (`reloadAsync`),
+затем `GET /apk/info` → плашка «есть новая сборка» с «скачать APK»
+(`/apk`); ошибка OTA-канала не роняет проверку сборки; «Всё свежее.
+Последняя проверка …». В PWA — только версия с пометкой «обновляется
+сама» и «Список изменений» (`ChangelogModal` — вынесен из
+WhatsNewModal, тот его переиспользует). `components/SettingsRow.tsx` —
+общая строка навигации (label/value/badge/›). Проверено Playwright
+(`scratchpad/pw/shot_updates.js`).
 Версия своя (0.9.x, app.json+package.json).
 
 ## Локальная проверка (как я гоняю без окружения хозяина)
@@ -901,7 +926,8 @@ Swipeable, они перехватывают касания у нативных 
 - Мобилка: `npm install` (postinstall патчит типы rn-webrtc) → `npx tsc
   --noEmit` (шум: TS1323 и две старые ошибки MessageSearchScreen — не
   чинить); веб-бандл `EXPO_OFFLINE=1 CI=1 npx expo export -p web
-  --output-dir dist && node scripts/postbuild-web.js`; смоук PWA — сид
+  --output-dir dist --clear && node scripts/postbuild-web.js` (`--clear`
+  — иначе кэш Metro в /tmp отдаёт манифест со старой версией); смоук PWA — сид
   `scratchpad/seed_pwa.py`, uvicorn на 8000, симлинк `server/web →
   mobile/dist` (снести после — иначе попадёт в git status), Playwright
   (`NODE_PATH=$(npm root -g)`); белый экран = смотреть `pageerror` в
