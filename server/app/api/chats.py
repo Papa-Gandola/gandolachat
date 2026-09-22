@@ -669,9 +669,10 @@ async def upload_file(
                 preview = f"{preview} · {clean_caption[:100]}"
             title = chat_full.name if chat_full.is_group else current_user.username
             sub_body = f"{current_user.username}: {preview}" if chat_full.is_group else preview
-            peer_user_id = None if chat_full.is_group else next(
-                (m.id for m in chat_full.members if m.id != current_user.id), None
-            )
+            # «Собеседник» — ДЛЯ ПОЛУЧАТЕЛЯ пуша, то есть отправитель. Раньше
+            # брали «не отправителя», и получателю прилетал его же id: шапка
+            # чата из пуша тянула свою аватарку, звонок из неё шёл бы себе.
+            peer_user_id = None if chat_full.is_group else current_user.id
             await send_push(
                 db,
                 recipients,

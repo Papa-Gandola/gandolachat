@@ -81,9 +81,8 @@ async def create_dota_call(
     try:
         from app.push import send_push
         recipients = [m.id for m in chat.members if m.id != current_user.id]
-        peer_user_id = None
-        if not chat.is_group and recipients:
-            peer_user_id = recipients[0]
+        # Собеседник ПОЛУЧАТЕЛЯ пуша = зовущий (не «первый получатель»).
+        peer_user_id = None if chat.is_group else current_user.id
         await send_push(
             db,
             recipients,

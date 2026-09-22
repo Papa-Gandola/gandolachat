@@ -8,6 +8,7 @@ import { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
+import { KeyboardInset } from "./src/components/KeyboardInset";
 import { UpdateNagModal } from "./src/components/UpdateNagModal";
 import { WhatsNewModal } from "./src/components/WhatsNewModal";
 import { RootNavigator } from "./src/navigation/RootNavigator";
@@ -45,7 +46,12 @@ export default function App() {
         <ThemeProvider>
           <AuthProvider>
             <CallProvider>
-              <RootNavigator />
+              {/* Клавиатура на Android: всё приложение ужимается над ней
+                  (см. KeyboardInset) — мини-бар звонка CallProvider рисует
+                  выше, он не двигается. */}
+              <KeyboardInset>
+                <RootNavigator />
+              </KeyboardInset>
               <WhatsNewModal />
               <UpdateNagModal />
             </CallProvider>

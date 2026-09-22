@@ -326,7 +326,7 @@ export function PokerScreen({ navigation, route }: Props) {
             </Text>
           ) : null}
           {tables.map((t) => {
-            const mySeat = t.seats.find((s) => s.user_id === user?.id);
+            const mySeat = t.seats.find((s) => s.user_id === user?.id && s.is_active !== false);
             return (
               <View
                 key={t.id}
@@ -359,7 +359,7 @@ export function PokerScreen({ navigation, route }: Props) {
                   </Text>
                 </View>
                 <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkDim, marginBottom: t.mode === "gas" ? 4 : 10 }}>
-                  {t.seats.length}/{t.max_seats} · стек {t.starting_stack.toLocaleString()} · блайнды{" "}
+                  {t.seats.filter((s) => s.is_active !== false).length}/{t.max_seats} · стек {t.starting_stack.toLocaleString()} · блайнды{" "}
                   {t.starting_small_blind}/{t.starting_big_blind} · +1,5× / {t.blind_increase_minutes} мин
                 </Text>
                 {t.mode === "gas" ? (
@@ -368,7 +368,8 @@ export function PokerScreen({ navigation, route }: Props) {
                   </Text>
                 ) : null}
                 <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
-                  {t.seats.map((s) => (
+                  {/* Вставшие посреди турнира (is_active=false) — не за столом */}
+                  {t.seats.filter((s) => s.is_active !== false).map((s) => (
                     <View key={s.id} style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
                       <Avatar letter={(s.username[0] ?? "?").toUpperCase()} size={22} bg={colorFor(s.user_id)} uri={s.avatar_url} />
                       <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkDim }}>{s.username}</Text>
@@ -415,9 +416,9 @@ export function PokerScreen({ navigation, route }: Props) {
 
   // ===== Single table =====
   const t = activeTable;
-  const mySeat = t.seats.find((s) => s.user_id === user?.id);
+  const mySeat = t.seats.find((s) => s.user_id === user?.id && s.is_active !== false);
   const live = gameState && gameState.table_id === t.id ? gameState : null;
-  const myPlayer = live?.players.find((p) => p.user_id === user?.id);
+  const myPlayer = live?.players.find((p) => p.user_id === user?.id && !p.left);
   const myTurn = !!myPlayer?.is_my_turn;
 
   return (
@@ -807,8 +808,12 @@ function PokerTable({
         const x = 50 + rx * 100 * Math.cos(angle);
         const y = 50 + ry * 100 * Math.sin(angle);
         const sin = Math.sin(angle);
-        const player = playersBySeat.get(idx);
-        const seat = seatsBySeat.get(idx);
+        // Вставший посреди турнира (player.left / seat.is_active=false) —
+        // место свободно, рисуем пустой слот
+        const livePlayer = playersBySeat.get(idx);
+        const player = livePlayer && !livePlayer.left ? livePlayer : undefined;
+        const tableSeat = seatsBySeat.get(idx);
+        const seat = tableSeat && tableSeat.is_active !== false ? tableSeat : undefined;
         const isToAct = game?.hand?.to_act_seat === idx;
         const isButton = game?.hand?.button_seat === idx;
         return (

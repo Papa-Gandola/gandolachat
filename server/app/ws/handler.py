@@ -388,11 +388,9 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                                 # For DM, give the mobile deeplink enough info
                                 # to land on the right Chat screen with userId
                                 # set (otherwise mobile treats it as a group).
-                                peer_user_id = None
-                                if not chat_full.is_group:
-                                    peers = [m.id for m in chat_full.members if m.id != user_id]
-                                    if peers:
-                                        peer_user_id = peers[0]
+                                # Собеседник ПОЛУЧАТЕЛЯ пуша = звонящий (раньше
+                                # слали «не звонящего» — самого получателя).
+                                peer_user_id = None if chat_full.is_group else user_id
                                 await send_push(
                                     db,
                                     recipients,
@@ -766,12 +764,11 @@ async def handle_message(data: dict, sender_id: int, db: AsyncSession):
                 sub_body = f"{sender.username}: {body_text}" if chat_full.is_group else body_text
                 # Compute peer for DM so the mobile deeplink can open the Chat
                 # screen with the right userId (otherwise mobile thinks it's a
-                # group). For groups peer_user_id stays None.
-                peer_user_id = None
-                if not chat_full.is_group:
-                    peers = [m.id for m in chat_full.members if m.id != sender_id]
-                    if peers:
-                        peer_user_id = peers[0]
+                # group). For groups peer_user_id stays None. Собеседник
+                # ПОЛУЧАТЕЛЯ пуша = отправитель: раньше брали «не отправителя»,
+                # и получателю прилетал его же id — шапка чата из пуша тянула
+                # свою аватарку, а звонок из неё шёл бы себе.
+                peer_user_id = None if chat_full.is_group else sender_id
                 await send_push(
                     db,
                     recipients,
@@ -903,8 +900,18 @@ async def handle_poker_action(data: dict, user_id: int, db: AsyncSession):
         })
         return
 
+    await broadcast_and_continue(table_id, g, db=db)
+
+
+async def broadcast_and_continue(table_id: int, g, db=None) -> None:
+    """Хвост любого изменения игры: разослать состояние всем сидящим и
+    довести раздачу — фаст-форвард при всеобщем all-in, конец раздачи →
+    стеки / следующая раздача / финал. Общий для действия игрока
+    (handle_poker_action) и «встать» посреди турнира (API leave_table)."""
+    from app.poker_game import game_store, public_view, needs_fast_forward, deal_next_street_or_finish
+
     # Broadcast new individualised game state to all seated players
-    for uid in g.players.keys():
+    for uid in list(g.players.keys()):
         await manager.send_to_user(uid, {
             "type": "poker_game_state",
             "table_id": table_id,
@@ -913,8 +920,11 @@ async def handle_poker_action(data: dict, user_id: int, db: AsyncSession):
 
     # Fast-forward: if everyone still in the hand is all-in, deal remaining streets
     # one at a time with a short pause between them so the UI shows cards appearing.
-    from app.poker_game import needs_fast_forward, deal_next_street_or_finish
-    if needs_fast_forward(g):
+    # Один таймер на раздачу: «встать» во время фаст-форварда не должно
+    # запускать второй (двойная сдача улиц).
+    if needs_fast_forward(g) and not g.fast_forwarding:
+        g.fast_forwarding = True
+
         async def _ff():
             try:
                 # Small initial pause before the first reveal so the last action stays on screen
@@ -924,9 +934,14 @@ async def handle_poker_action(data: dict, user_id: int, db: AsyncSession):
                     if live is not g or g.finished:
                         return
                     if g.hand is None or g.hand.street == "done":
+                        # Раздачу закончили без нас (последний соперник встал
+                        # из-за стола) — довести её всё равно надо; финализация
+                        # идемпотентна по номеру раздачи.
+                        if g.hand is not None:
+                            await _finish_hand_and_maybe_next(table_id, g)
                         return
                     deal_next_street_or_finish(g)
-                    for uid in g.players.keys():
+                    for uid in list(g.players.keys()):
                         await manager.send_to_user(uid, {
                             "type": "poker_game_state",
                             "table_id": table_id,
@@ -940,6 +955,8 @@ async def handle_poker_action(data: dict, user_id: int, db: AsyncSession):
                     await asyncio.sleep(0.85)
             except Exception as exc:
                 print(f"[poker] fast-forward task failed: {exc}")
+            finally:
+                g.fast_forwarding = False
         _spawn(_ff())
         return  # don't run the normal "hand ended" branch — _ff() will do it
 
@@ -961,6 +978,12 @@ async def _finish_hand_and_maybe_next(table_id: int, g, db=None):
     # автозакрытие, «сыграть ещё») — эта игра уже никому не принадлежит
     if game_store.get(table_id) is not g:
         return
+    # Каждую раздачу доводим ровно один раз: сюда приходят и обычный поток
+    # действий, и фаст-форвард, и «встать» из-за стола — второй проход
+    # ставил бы второй таймер следующей раздачи (двойная сдача).
+    if g.hand is None or g.hand.hand_no == g.finalized_hand_no:
+        return
+    g.finalized_hand_no = g.hand.hand_no
     own_session = db is None
     if own_session:
         db = AsyncSessionLocal()
@@ -1001,12 +1024,17 @@ async def _finish_hand_and_maybe_next(table_id: int, g, db=None):
                 if live is not g or g.finished:
                     return
                 start_hand(g)
-                for uid in g.players.keys():
+                for uid in list(g.players.keys()):
                     await manager.send_to_user(uid, {
                         "type": "poker_game_state",
                         "table_id": table_id,
                         "state": public_view(g, uid),
                     })
+                if g.finished:
+                    # Между раздачами кто-то встал из-за стола (стек сгорел),
+                    # и start_hand объявил финал сам — выплата и статус стола
+                    # всё равно наши.
+                    await _finish_tournament(table_id, g)
             except Exception as exc:
                 print(f"[poker] next-hand task failed: {exc}")
         _spawn(_next())

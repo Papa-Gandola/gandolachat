@@ -8,7 +8,6 @@ import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -89,35 +88,43 @@ export function ChatScreen({ navigation, route }: Props) {
   const call = useCall();
   const { chatId, name, userId, avatarUrl, allowAllWrite, createdBy, isNotes } = route.params;
   const [showReminderSheet, setShowReminderSheet] = useState(false);
-  // Аватарка в шапке. При заходе из пуша параметров с ней нет (в payload
-  // только имя и id) — добираем сами: ЛС — профиль собеседника, группа —
-  // карточка чата из списка. Иначе после тапа по уведомлению шапка была
-  // с пустым кружком.
-  const [headerAvatar, setHeaderAvatar] = useState<string | null | undefined>(avatarUrl);
+  // Параметры маршрута из пуша неполные: там только id и имя чата, а
+  // peer_user_id у старых серверов — СВОЙ id получателя (сервер считал
+  // «собеседника» относительно отправителя). Поэтому шапка была с пустым
+  // кружком, тап по ней открывал свой профиль, а звонок из шапки пошёл бы
+  // себе. Добираем карточку чата из списка и дописываем параметры через
+  // setParams (аватарка, настоящий собеседник, права канала, создатель) —
+  // дальше экран работает как открытый из списка.
+  const groupLike = route.params.isGroup ?? userId == null;
   useEffect(() => {
-    if (avatarUrl || isNotes) return;
+    if (isNotes) return;
+    const badPeer = !groupLike && (userId == null || userId === user?.id);
+    const incomplete =
+      avatarUrl === undefined || badPeer || (groupLike && (allowAllWrite === undefined || createdBy === undefined));
+    if (!incomplete) return;
     let cancelled = false;
-    if (userId != null) {
-      userApi
-        .getUser(userId)
-        .then((r) => {
-          if (!cancelled) setHeaderAvatar(r.data.avatar_url ?? null);
-        })
-        .catch(() => {});
-    } else {
-      chatApi
-        .list()
-        .then((r) => {
-          if (cancelled) return;
-          const c = r.data.find((x) => String(x.id) === String(chatId));
-          if (c?.avatar_url) setHeaderAvatar(c.avatar_url);
-        })
-        .catch(() => {});
-    }
+    chatApi
+      .list()
+      .then((r) => {
+        if (cancelled) return;
+        const c = r.data.find((x) => String(x.id) === String(chatId));
+        if (!c) return;
+        const peer = c.is_group ? undefined : c.members.find((m) => m.id !== user?.id);
+        navigation.setParams({
+          name: (c.is_group ? c.name : peer?.username) ?? name,
+          userId: peer?.id ?? (c.is_group ? undefined : userId),
+          avatarUrl: (c.is_group ? c.avatar_url : peer?.avatar_url) ?? null,
+          isGroup: c.is_group,
+          allowAllWrite: c.allow_all_write,
+          createdBy: c.created_by,
+          isNotes: c.is_notes,
+        });
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [avatarUrl, userId, chatId, isNotes]);
+  }, [avatarUrl, userId, chatId, groupLike, isNotes, allowAllWrite, createdBy, user?.id, name, navigation]);
   // Плашка «в созвоне»: кто сейчас в звонке этого чата (по call_active).
   const callParticipants = call.activeCalls.get(Number(chatId)) ?? [];
   const inThisCall = call.inCall && call.callChatId === Number(chatId);
@@ -735,7 +742,7 @@ export function ChatScreen({ navigation, route }: Props) {
             else if (userId != null) navigation.navigate("OtherProfile", { userId });
           }}
         >
-          <Avatar letter={(name[0] ?? "?").toUpperCase()} size={36} bg="#ef5350" uri={headerAvatar} />
+          <Avatar letter={(name[0] ?? "?").toUpperCase()} size={36} bg="#ef5350" uri={avatarUrl} />
           <View style={{ flex: 1 }}>
             <Text
               style={{
@@ -1115,13 +1122,12 @@ export function ChatScreen({ navigation, route }: Props) {
         );
       })()}
 
-      {/* padding И на Android: с SDK 57 edge-to-edge включён принудительно,
-          и на Android 15 окно под клавиатуру больше не ужимается
-          (adjustResize не работает) — без явного padding клавиатура
-          накрывала поле ввода целиком. На старых Android окно ещё
-          ужимается само, но KAV считает перекрытие по реальным рамкам и
-          лишнего отступа не добавляет. */}
-      <KeyboardAvoidingView behavior="padding">
+      {/* Клавиатуру объезжает не этот экран, а корень приложения
+          (components/KeyboardInset.tsx): с SDK 57 edge-to-edge включён
+          принудительно, окно под клавиатуру не ужимается, а штатный
+          KeyboardAvoidingView на Android получает от RN неверную координату
+          клавиатуры и отступа не даёт — поле ввода накрывало целиком. */}
+      <View>
         {isChannelLocked ? (
           <View
             style={{
@@ -1366,7 +1372,7 @@ export function ChatScreen({ navigation, route }: Props) {
         </View>
           </>
         )}
-      </KeyboardAvoidingView>
+      </View>
 
       <Modal
         visible={!!forwardMsg}

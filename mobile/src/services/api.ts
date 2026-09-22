@@ -478,6 +478,8 @@ export interface PokerPlayerView {
   is_all_in: boolean;
   reentries: number;
   can_reenter: boolean;
+  /** Встал из-за стола посреди турнира: место не рисуем, панели действий нет */
+  left?: boolean;
   is_my_turn: boolean;
   hole: string[];
 }
