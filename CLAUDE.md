@@ -28,7 +28,7 @@ Discord-подобный мессенджер для чата друзей. Ра
 |---|---|
 | `server/` | VPS: `git pull && docker compose build server && docker compose up -d server`. Миграции и синк ассетов — сами при старте. Релиз НЕ нужен |
 | `client/` | Бамп версии в **двух** местах: `client/package.json` + `APP_VERSION` в `client/src/renderer/changelog.ts` (+`npm i --package-lock-only`); ТАМ ЖЕ дописать пункты в CHANGELOG — окошко «Что нового» покажется каждому один раз после обновления (Main.tsx версию берёт отсюда). После мержа: `git tag v2.x.x && git push origin v2.x.x` → Actions собирает **черновик** релиза (Linux создаёт, Windows докладывает — последовательно, гонку уже чинили) → хозяин жмёт Publish release |
-| `mobile/` | PWA: на VPS `cd mobile && npm run build:web` → скопировать `mobile/dist/*` в `server/web/` (bind-mount, рестарт не нужен; Node 20 на VPS стоит). Скрипт `postbuild-web.js` префиксует пути `/app`. В `build:web` `--clear` ОБЯЗАТЕЛЕН: манифест (version, extra) инлайнится в expo-constants на этапе трансформации, а кэш Metro в /tmp его в ключ не включает — без сброса PWA после бампа показывала старую версию (0.9.0 при 0.9.2 в app.json). Нативный Android: изменение mobile/app.json\|package.json\|eas.json в main (или тег `mobile-v*`) → Actions ждёт сборку EAS и сам публикует APK в скользящий релиз **mobile-latest** — постоянная ссылка `releases/download/mobile-latest/gandolachat.apk` (на неё смотрит QR в профиле десктопа). При новом APK поднимать И version, И versionCode (appVersionSource: local), а при НАТИВНОМ изменении — ещё и runtimeVersion (грабля №11). Версия mobile своя (0.9.x). **Тестовая сборка с ветки БЕЗ публикации**: Actions → Mobile Release → Run workflow → ветка, publish=false → APK артефактом прогона + прямая ссылка EAS в сводке (QR — на странице сборки в expo.dev, кнопка Install); так хозяин проверяет натив на телефоне ДО мержа (merge в main = публикация в mobile-latest, куда смотрит «обнови меня» у всех). **JS-правки на тестовую сборку — без нового APK**: Actions → Mobile OTA Update → Run workflow → git-ветка PR, EAS branch `preview` → обновление получают ТОЛЬКО сборки с тем же runtimeVersion (тестовая), телефоны на старом runtime его не видят; ставится при следующем запуске приложения (открыть дважды). При заметном батче правок поднять `CHANGELOG_ID` (дата) в `mobile/src/changelog.ts` + дописать пункты — мобильное «Что нового» (версия для OTA не годится, она не меняется) |
+| `mobile/` | PWA: на VPS после `git pull`: `cd mobile && npm ci && npm run build:web && rm -rf ../server/web/* && cp -r dist/* ../server/web/` (bind-mount, рестарт не нужен; Node ≥ 20.19 для SDK 57; `rm` — иначе старые хэшированные бандлы копятся; `npm ci` требует lock в синке с package.json — при бампе версии mobile обновлять и lock: `npm i --package-lock-only`). Скрипт `postbuild-web.js` префиксует пути `/app`. В `build:web` `--clear` ОБЯЗАТЕЛЕН: манифест (version, extra) инлайнится в expo-constants на этапе трансформации, а кэш Metro в /tmp его в ключ не включает — без сброса PWA после бампа показывала старую версию (0.9.0 при 0.9.2 в app.json). Нативный Android: изменение mobile/app.json\|package.json\|eas.json в main (или тег `mobile-v*`) → Actions ждёт сборку EAS и сам публикует APK в скользящий релиз **mobile-latest** — постоянная ссылка `releases/download/mobile-latest/gandolachat.apk` (на неё смотрит QR в профиле десктопа). При новом APK поднимать И version, И versionCode (appVersionSource: local), а при НАТИВНОМ изменении — ещё и runtimeVersion (грабля №11). Версия mobile своя (0.9.x). **Тестовая сборка с ветки БЕЗ публикации**: Actions → Mobile Release → Run workflow → ветка, publish=false → APK артефактом прогона + прямая ссылка EAS в сводке (QR — на странице сборки в expo.dev, кнопка Install); так хозяин проверяет натив на телефоне ДО мержа (merge в main = публикация в mobile-latest, куда смотрит «обнови меня» у всех). **JS-правки на тестовую сборку — без нового APK**: Actions → Mobile OTA Update → Run workflow → git-ветка PR, EAS branch `preview` → обновление получают ТОЛЬКО сборки с тем же runtimeVersion (тестовая), телефоны на старом runtime его не видят; ставится при следующем запуске приложения (открыть дважды). При заметном батче правок поднять `CHANGELOG_ID` (дата) в `mobile/src/changelog.ts` + дописать пункты — мобильное «Что нового» (версия для OTA не годится, она не меняется) |
 | только docs | ничего |
 
 Ошибся тегом: удалить И черновик релиза на GitHub, И тег
@@ -704,7 +704,8 @@ ChatsList; на широком ChatsList — заглушка «выбери ч�
 ребёнок с ключом: смена ширины НЕ перемонтирует навигатор (проверено
 Playwright: ресайз 1280→400 сохраняет открытый чат). Локальная прогонка
 PWA: сид `scratchpad/seed_pwa.py`, uvicorn на 8000 + симлинк
-`server/web → mobile/dist` (не коммитить), `scratchpad/pw/shot_pwa.js`
+`server/web → mobile/dist` (`server/web/` в .gitignore с 22.09 — на VPS
+там лежит раскатанный бандл), `scratchpad/pw/shot_pwa.js`
 (playwright из глобальных модулей: `NODE_PATH=$(npm root -g)`). PWA-обвязка: public/manifest.webmanifest +
 icon-192/512 + статические apple-теги инжектятся постбилдом в index.html
 (scripts/postbuild-web.js) — НЕ полагаться на рантайм-инжект webPwa.ts.
@@ -971,7 +972,8 @@ WhatsNewModal, тот его переиспользует). `components/Settings
   --output-dir dist --clear && node scripts/postbuild-web.js` (`--clear`
   — иначе кэш Metro в /tmp отдаёт манифест со старой версией); смоук PWA — сид
   `scratchpad/seed_pwa.py`, uvicorn на 8000, симлинк `server/web →
-  mobile/dist` (снести после — иначе попадёт в git status), Playwright
+  mobile/dist` (в .gitignore; сервер монтирует `/app` при старте —
+  симлинк создавать ДО запуска uvicorn, иначе PWA 404), Playwright
   (`NODE_PATH=$(npm root -g)`); белый экран = смотреть `pageerror` в
   консоли (модуль без веб-реализации → стаб в metro.config). Натив без
   Android SDK: `npx expo prebuild --platform android --no-install
@@ -1148,9 +1150,11 @@ runtimeVersion 9; мержить в main только после того, ка�
 main = публикация в mobile-latest, куда смотрит «обнови меня» у всех).
 Это PR #82: три партии находок хозяина по тестовой сборке (0.9.1, 0.9.2,
 третья — клавиатура/аватарка из пуша/«встать») закрыты, 22.09 вечером
-хозяин проверил последнюю OTA — «вроде всё норм», PR готов к мержу.
-После мержа: сервер (обязательно — там созвон, peer_user_id, «встать»),
-тег v2.3.15, APK 0.9.2 (сборка 11) публикуется сам, PWA пересобрать.
+хозяин проверил последнюю OTA — «вроде всё норм» — и в ночь на 23.09
+смержил (#82, 8 коммитов). Деплой по таблице: сервер (обязательно — там
+созвон, peer_user_id, «встать»), тег v2.3.15, APK 0.9.2 (сборка 11)
+публикуется сам, PWA — команда из таблицы деплоя. Ветка после мержа
+перезапущена от main (грабля №14), хвост — lock/.gitignore/CLAUDE.md.
 Осталось:
 1. По желанию: тот же шрифт Twemoji в PWA (web-сборка мобилки) — на
    нативном андроиде эмодзи всё равно системные.

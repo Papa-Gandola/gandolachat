@@ -31,3 +31,6 @@ Thumbs.db
 # untracked in mobile/google-services.json.
 mobile/google-services.json
 mobile/google-services.plist
+
+# PWA-бандл на VPS (bind-mount в docker compose) и локальный симлинк на mobile/dist
+server/web/
