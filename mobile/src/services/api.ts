@@ -24,6 +24,17 @@ export interface UserOut {
   comp_title?: string | null;
   comp_color?: string | null;
   comp_frame?: string | null;
+  // Косметика уровней 13–30 (октябрь 2026), см. CompExtra
+  comp_extra?: CompExtra | null;
+}
+
+// Косметика уровней 13–30: сервер хранит одним JSON (users.comp_extra)
+export interface CompExtra {
+  badge_emoji?: string;   // ур.13 — свой значок у ника вместо ⛽
+  glow?: boolean;         // ур.15 — свечение ника
+  bubble?: string;        // ур.17 — цвет обводки своих сообщений
+  custom_title?: string;  // ур.19 — свой титул (≤20 символов)
+  star?: boolean;         // ур.30 — звезда легенды
 }
 
 // ==== Гандолиум (компендиум) — зеркало десктопных типов ====
@@ -54,12 +65,16 @@ export interface CompendiumTrophy {
 
 export interface CompendiumCosmetics {
   max_level: number;
+  level_cap?: number;          // потолок уровней (30 с октября 2026)
   badge: boolean;
   title: string | null;
   color: string | null;
   frame: string | null;
+  extra?: CompExtra;           // косметика 13–30
   earned_titles: string[];
   palette: string[];
+  palette2?: string[];         // вторая палитра (ур.14)
+  badge_emojis?: string[];     // набор значков-эмодзи (ур.13)
   unlocks: Record<string, number>;
   // Рамки за подиум финала сезона (место 1/2/3 в любом сезоне)
   podium_frames?: { gold: boolean; silver: boolean; bronze: boolean };
@@ -86,10 +101,13 @@ export interface CompendiumMe {
   linked: boolean;
   cosmetics?: CompendiumCosmetics;
   season: string;
+  theme?: string | null;       // "halloween" в октябре — паутина в шапке
+  intro_version?: string;
   gas?: number;
   level?: number;
   level_progress?: number;
   level_target?: number;
+  level_cap?: number;
   matches?: number;
   wins?: number;
   rank_tier?: number | null;
@@ -118,6 +136,7 @@ export interface CompendiumSeasonRow {
   comp_color?: string | null;
   comp_frame?: string | null;
   comp_badge?: boolean;
+  comp_extra?: CompExtra | null;
 }
 
 export interface MessageOut {
@@ -684,6 +703,6 @@ export const compendiumApi = {
       leaderboard_rank: number | null;
     }>(`/api/compendium/user/${userId}`),
   // ""/false = снять; надеть можно только открытое уровнем
-  updateCosmetics: (data: { badge?: boolean; title?: string; color?: string; frame?: string }) =>
+  updateCosmetics: (data: { badge?: boolean; title?: string; color?: string; frame?: string; extra?: Partial<CompExtra> }) =>
     getInstance().patch<CompendiumCosmetics>("/api/compendium/cosmetics", data),
 };

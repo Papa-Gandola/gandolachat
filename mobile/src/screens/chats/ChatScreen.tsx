@@ -1918,7 +1918,7 @@ function QuestCardMobile({ theme, mine, payload }: {
                 {secret ? "🔓 " : ""}{it.name}
               </Text>
               <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "800", color: isAnti ? BLOOD : secret ? GOLD : theme.colors.accent }}>
-                +{it.gas} ⛽
+                {it.gas < 0 ? "" : "+"}{it.gas} ⛽
               </Text>
             </View>
           );
