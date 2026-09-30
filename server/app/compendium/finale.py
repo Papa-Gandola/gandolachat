@@ -135,7 +135,8 @@ async def _finalize_one(db, season: str) -> None:
             for r in rows[:3]
         ],
     }
-    # Тема сезона (октябрь — хеллоуин): клиенты красят карточку итогов
+    # Тема сезона (октябрь — хеллоуин): клиенты дописывают 🎃 к заголовку
+    # карточки итогов (ChatArea/ChatScreen, kind=season_final)
     from app.compendium.halloween import theme_for
     if theme_for(season):
         payload["theme"] = theme_for(season)

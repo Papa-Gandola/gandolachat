@@ -2426,7 +2426,7 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
         }}
       >
         <div style={{ ...mono, fontWeight: 800, fontSize: 12.5, letterSpacing: "0.06em", color: darkOnLime ? "#0a0a0a" : GOLD }}>
-          🏆 ИТОГИ СЕЗОНА
+          🏆 ИТОГИ СЕЗОНА{payload.theme === "halloween" ? " 🎃" : ""}
         </div>
         <div style={{ ...mono, color: subColor, fontSize: 12, marginTop: 2 }}>
           Сезон {payload.season_name || payload.season} закрыт · игроков: {payload.players ?? podium.length}

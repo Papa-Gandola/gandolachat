@@ -93,6 +93,22 @@ def level_progress(gas: int, season: str | None = None) -> tuple[int, int]:
     return gas - base, gas_for_level(lvl + 1) - base
 
 
+# Косметика до октября кончалась на 12-м уровне — старые сезоны в зачёт
+# comp_max_level идут не выше него (миграция 0016 так же срезала колонку).
+OLD_SCALE_MAX_LEVEL = 12
+
+
+def level_for_cosmetics(gas: int, season: str) -> int:
+    """Уровень для зачёта в comp_max_level (ratchet): по шкале сезона, но
+    старые сезоны не выше OLD_SCALE_MAX_LEVEL — иначе поздний парс
+    сентябрьской катки (поллер) задирал бы «сороковой» поверх среза и
+    открывал новую косметику даром, а следующая ставка (recalc_max_level)
+    всё снимала. ЕДИНСТВЕННОЕ место с этим правилом: поллер и
+    bets.recalc_max_level зовут его, не считают сами."""
+    lvl = level_for_gas(gas, season)
+    return min(lvl, OLD_SCALE_MAX_LEVEL) if season < NEW_CURVE_FROM else min(lvl, LEVEL_CAP)
+
+
 class UserCtx:
     """Контекст одного игрока для предикатов заданий.
 

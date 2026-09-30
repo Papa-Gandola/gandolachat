@@ -28,7 +28,7 @@ from app import opendota
 from app.compendium import engine
 from app.compendium.engine import (
     UserCtx, TeamCtx, Completion,
-    season_of, day_key_of, week_key_of, current_season, level_for_gas, to_msk, MSK,
+    season_of, day_key_of, week_key_of, current_season, level_for_gas, level_for_cosmetics, to_msk, MSK,
 )
 from app.compendium.quests import BY_ID, QUESTS
 from app.compendium.halloween import quest_name
@@ -194,9 +194,13 @@ async def _apply_and_announce(db, user: User, comps: list[Completion], season: s
     prof.gas = max(0, prof.gas + sum(c.gas for c in comps))
     level_after = level_for_gas(prof.gas, season)
     gas_total = prof.gas
-    # Разблокировки косметики — по высшему уровню за всё время
-    if level_after > (user.comp_max_level or 0):
-        user.comp_max_level = level_after
+    # Разблокировки косметики — по высшему уровню за всё время, но в зачёт
+    # идёт КАПНУТЫЙ уровень (старые сезоны ≤12): level_after остаётся честным
+    # для карточки, а comp_max_level не обходит срез миграции 0016 поздним
+    # парсом сентябрьской катки (ревью 01.10)
+    cos_lvl = level_for_cosmetics(prof.gas, season)
+    if cos_lvl > (user.comp_max_level or 0):
+        user.comp_max_level = cos_lvl
     await db.commit()
 
     # 2) карточки: обычные+пасхалки одной, анти — отдельной (прожарка),
@@ -303,7 +307,7 @@ async def _handle_team(db, row: DotaMatch, user: User) -> None:
             ))
         prof = await _get_or_create_profile(db, uid, season)
         prof.gas += sum(c.gas for c in comps)
-        lvl = level_for_gas(prof.gas, season)
+        lvl = level_for_cosmetics(prof.gas, season)  # в зачёт — капнутый (см. _apply_and_announce)
         member = users.get(uid)
         if member is not None and lvl > (member.comp_max_level or 0):
             member.comp_max_level = lvl

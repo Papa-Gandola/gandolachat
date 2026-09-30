@@ -162,6 +162,9 @@ export default function Main({ token, user, onLogout }: Props) {
           comp_title: data.comp_title,
           comp_color: data.comp_color,
           comp_frame: data.comp_frame,
+          // Косметика 13–30 (значок-эмодзи, свечение, обводка, титул, звезда)
+          // — без неё чужие обновки висели бы до перезапуска
+          comp_extra: data.comp_extra,
         } : {}),
       });
       setChats((prev) => prev.map((c) => ({

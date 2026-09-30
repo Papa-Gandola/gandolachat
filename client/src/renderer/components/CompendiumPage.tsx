@@ -29,10 +29,13 @@ function seasonName(season: string): string {
 // вкладок) убирает её насовсем — и так же возвращает. Файл раздаёт сервер;
 // если его вдруг нет — оверлей молча закрывается.
 const INTRO_URL = `${BASE_URL}/uploads/compendium/intro.mp4`;
-// Значение: "1" (старый формат) либо JSON {"v": "<intro_version>"} — флаг
-// «отключить» привязан к ролику: заменили видео → отпечаток с сервера
-// (/me.intro_version) другой → флаг слетает, заставка крутится ещё раз
-// (просьба хозяина 30.09).
+// Значение: JSON {"v": "<intro_version>"} — флаг «отключить» привязан к
+// ролику: заменили видео → отпечаток с сервера (/me.intro_version) другой →
+// флаг слетает, заставка крутится ещё раз (просьба хозяина 30.09). Старый
+// формат "1" (до 2.3.16) — флаг от ПРЕЖНЕГО ролика: 2.3.16 привёз новый,
+// поэтому «1» тоже снимается и заставка играет раз, как у всех (ревью
+// 01.10: молчаливая привязка «1» к новому ролику лишала бы её именно тех,
+// ради кого хозяин менял видео).
 const INTRO_OFF_KEY = "gandolium.introOff";
 // Последний известный отпечаток ролика — им же бьём кэш: src ролика несёт
 // ?v=<отпечаток>, новый файл на сервере = новый URL, старая копия из
@@ -106,9 +109,9 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
     } catch { /* приватный режим — переживём */ }
   }
 
-  // Сверить сохранённый флаг с отпечатком ролика: старый формат «1»
-  // привязываем к текущему ролику молча; другой отпечаток = видео сменили,
-  // флаг снимаем и показываем заставку.
+  // Сверить сохранённый флаг с отпечатком ролика: другой отпечаток (или
+  // старый формат «1» без отпечатка — флаг от прежнего ролика) = видео
+  // сменили, флаг снимаем и показываем заставку.
   function reconcileIntro(v: string | undefined) {
     if (!v) return;
     setIntroVersion(v);
@@ -117,10 +120,6 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
     if (!raw) return;
     let stored: string | null = null;
     try { stored = raw === "1" ? null : (JSON.parse(raw)?.v ?? null); } catch { stored = null; }
-    if (stored === null) {
-      try { localStorage.setItem(INTRO_OFF_KEY, JSON.stringify({ v })); } catch { /* ок */ }
-      return;
-    }
     if (stored !== v) {
       try { localStorage.removeItem(INTRO_OFF_KEY); } catch { /* ок */ }
       setIntroOffState(false);
@@ -138,7 +137,10 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
       v.muted = true;
       v.play().catch(() => setShowIntro(false));
     });
-  }, [showIntro]);
+    // introSrc в зависимостях: смена ?v= на лету (отпечаток приехал с /me,
+    // пока ролик уже крутился) перезагружает <video> в паузе — без повторного
+    // play() висел бы первый кадр (ревью 01.10)
+  }, [showIntro, introSrc]);
 
   async function load() {
     try {

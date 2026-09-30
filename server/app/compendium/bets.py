@@ -100,22 +100,22 @@ async def recalc_max_level(db, user_id: int) -> None:
     а косметика там кончалась на 12-м — поэтому старые сезоны в зачёт
     максимума идут не выше 12 (миграция 0016 так же срезала колонку). Всё
     новое (13–30) зарабатывается по новой кривой с октября."""
-    from app.compendium.engine import NEW_CURVE_FROM, LEVEL_CAP
+    from app.compendium.engine import level_for_cosmetics
     prof_res = await db.execute(
         select(CompendiumProfile.season, CompendiumProfile.gas)
         .where(CompendiumProfile.user_id == user_id, CompendiumProfile.gas > 0)
     )
     lvl = 0
     for season, gas in prof_res.all():
-        cap = 12 if season < NEW_CURVE_FROM else LEVEL_CAP
-        lvl = max(lvl, min(level_for_gas(gas, season), cap))
+        # Единое правило зачёта (старые сезоны ≤12) — там же, что у поллера
+        lvl = max(lvl, level_for_cosmetics(gas, season))
     await db.execute(
         update(User).where(User.id == user_id).values(comp_max_level=lvl)
     )
 
     # Слетание косметики ниже порога. UNLOCKS живут в api.compendium —
     # рантайм-импорт (модульный сделал бы цикл: api импортирует bets).
-    from app.api.compendium import UNLOCKS, NAME_PALETTE_2
+    from app.api.compendium import UNLOCKS, NAME_PALETTE_2, LEVEL_FRAMES
     user_res = await db.execute(
         select(User).where(User.id == user_id).execution_options(populate_existing=True)
     )
@@ -142,10 +142,10 @@ async def recalc_max_level(db, user_id: int) -> None:
     if user.comp_color and user.comp_color in NAME_PALETTE_2 and lvl < UNLOCKS["palette2"]:
         user.comp_color = None
         changed = True
-    if user.comp_frame in ("lime", "animated", "legend"):
-        need = {"lime": UNLOCKS["frame_lime"], "animated": UNLOCKS["frame_animated"],
-                "legend": UNLOCKS["frame_legend"]}[user.comp_frame]
-        if lvl < need:
+    # Рамки за уровень — по той же карте, что валидация в PATCH /cosmetics
+    # (новая рамка = одна правка LEVEL_FRAMES, а не KeyError тут при ставке)
+    if user.comp_frame in LEVEL_FRAMES:
+        if lvl < UNLOCKS[LEVEL_FRAMES[user.comp_frame]]:
             user.comp_frame = None
             changed = True
     extra = dict(user.comp_extra or {})
