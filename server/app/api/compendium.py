@@ -18,7 +18,8 @@ from app.models import User, Bet, DotaMatch, CompendiumProfile, QuestCompletion,
 from app.compendium.finale import month_gen
 from app.auth import get_current_user
 from app.compendium.engine import (
-    current_season, day_key_of, week_key_of, level_for_gas, level_progress, LEVEL_CAP,
+    current_season, day_key_of, week_key_of, level_for_gas, level_progress,
+    LEVEL_CAP, NEW_CURVE_FROM,
 )
 from app.compendium.quests import (
     BY_ID, QUESTS, daily_rotation, weekly_rotation,
@@ -271,7 +272,10 @@ async def my_compendium(
         "level": level_for_gas(gas, season),
         "level_progress": lp_cur,
         "level_target": lp_target,
-        "level_cap": LEVEL_CAP,
+        # Потолок — только у сезонов на новой шкале: клиенты пишут «МАКС» по
+        # level >= level_cap, а сентябрьский «40-й» по старой линейке — не
+        # потолок (деплой до 1 октября иначе показал бы «МАКС · 30» у 40-го)
+        "level_cap": LEVEL_CAP if season >= NEW_CURVE_FROM else None,
         "matches": len(ctx.rows),
         "wins": wins,
         "rank_tier": current_user.dota_rank_tier,

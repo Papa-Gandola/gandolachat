@@ -475,7 +475,9 @@ print-логи видны в `docker compose logs` с опозданием (не
 - `api/compendium.py` — /me (ротации+done, марафоны с прогрессом, анти done
   только текущего сезона, трофеи, cosmetics; плюс `theme`, `intro_version`,
   `level`/`level_progress`/`level_target` по шкале сезона, `level_cap` —
-  и в ответе для непривязанных theme/intro_version есть), /season
+  None у сезонов на старой шкале: клиенты пишут «МАКС» по
+  `level >= level_cap`, и сентябрьский «40-й» иначе стал бы «МАКС · 30»;
+  в ответе для непривязанных theme/intro_version тоже есть), /season
   (таблица привязанных, строки несут `comp_extra`), /user/{id} (чужая
   полка, desc у тайных «???»), PATCH /cosmetics (валидация по
   comp_max_level — уровню ЛУЧШЕГО сезона, см. bets.py: значок ур.2, титул
