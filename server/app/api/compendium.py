@@ -18,14 +18,41 @@ from app.models import User, Bet, DotaMatch, CompendiumProfile, QuestCompletion,
 from app.compendium.finale import month_gen
 from app.auth import get_current_user
 from app.compendium.engine import (
-    current_season, day_key_of, week_key_of, level_for_gas,
+    current_season, day_key_of, week_key_of, level_for_gas, level_progress, LEVEL_CAP,
 )
 from app.compendium.quests import (
-    BY_ID, QUESTS, GAS_PER_LEVEL, daily_rotation, weekly_rotation,
+    BY_ID, QUESTS, daily_rotation, weekly_rotation,
 )
+from app.compendium.halloween import quest_name, theme_for
 from app.compendium import poller
 
 router = APIRouter(prefix="/api/compendium", tags=["compendium"])
+
+_INTRO_VERSION: str | None = None
+
+
+def intro_version() -> str:
+    """Отпечаток ролика-заставки (uploads/compendium/intro.mp4). Клиенты
+    запоминают «отключить заставку» ВМЕСТЕ с ним: заменил видео в репо →
+    деплой → отпечаток другой → флаг слетает, ролик покажется каждому ещё
+    раз (просьба хозяина 30.09). Считается один раз на процесс: файл
+    синкается из assets только при старте."""
+    global _INTRO_VERSION
+    if _INTRO_VERSION is None:
+        import hashlib
+        from pathlib import Path
+        from app.config import settings
+        p = Path(settings.UPLOAD_DIR) / "compendium" / "intro.mp4"
+        try:
+            h = hashlib.sha256()
+            with open(p, "rb") as f:
+                h.update(f.read(1 << 20))  # первый мегабайт — ролики различить хватает
+            h.update(str(p.stat().st_size).encode())
+            _INTRO_VERSION = h.hexdigest()[:12]
+        except OSError:
+            _INTRO_VERSION = "none"
+    return _INTRO_VERSION
+
 
 # === Косметика: пороги разблокировок (уровни навсегда, comp_max_level) ===
 UNLOCKS = {
@@ -35,13 +62,29 @@ UNLOCKS = {
     "frame_lime": 8,      # лаймовая рамка аватарки
     "dota_gold": 10,      # золотой /dota
     "frame_animated": 12, # переливающаяся рамка
+    # --- октябрь 2026, потолок 30 (фаза 1 — то, что видно в чате у всех) ---
+    "badge_emoji": 13,    # свой значок-эмодзи у ника вместо ⛽ (из BADGE_EMOJI)
+    "palette2": 14,       # вторая палитра цветов ника (NAME_PALETTE_2)
+    "glow": 15,           # свечение ника
+    "bubble": 17,         # цветная обводка своих сообщений
+    "custom_title": 19,   # свой титул, любой текст до 20 символов
+    "frame_legend": 25,   # легендарная рамка
+    "star": 30,           # звезда легенды у ника
 }
 # Палитра Гандолы для цветных ников
 NAME_PALETTE = [
     "#c6ff3d", "#57f287", "#fee75c", "#faa61a", "#ff6a5e",
     "#eb459e", "#a78bda", "#5865f2", "#00b0f4", "#ffd24a",
 ]
-FRAMES = ("lime", "animated", "gold", "silver", "bronze")
+# Вторая палитра (ур.14): тыква, кровь, яд, лёд, кость…
+NAME_PALETTE_2 = [
+    "#ff8c00", "#ff3d3d", "#b23cff", "#00e5ff", "#7fff00",
+    "#ff69b4", "#f5deb3", "#40e0d0", "#ffa07a", "#c0c0c0",
+]
+# Значки-эмодзи у ника (ур.13) — набор фиксированный, чтобы не рисовали что попало
+BADGE_EMOJI = ["🎃", "💀", "👑", "🔥", "⚡", "🐺", "🦇", "🧛", "🧟", "☠️", "🕷️", "🌙"]
+FRAMES = ("lime", "animated", "legend", "gold", "silver", "bronze")
+LEVEL_FRAMES = {"lime": "frame_lime", "animated": "frame_animated", "legend": "frame_legend"}
 # Рамки за подиум сезона — открываются МЕСТОМ в season_results, не уровнем.
 PODIUM_FRAME_PLACE = {"gold": 1, "silver": 2, "bronze": 3}
 
@@ -86,21 +129,27 @@ async def _podium_frames(db: AsyncSession, user_id: int) -> dict:
 def _cosmetics_dict(user: User, earned: list[str], podium: dict | None = None) -> dict:
     return {
         "max_level": user.comp_max_level or 0,
+        "level_cap": LEVEL_CAP,
         "badge": user.comp_badge,
         "title": user.comp_title,
         "color": user.comp_color,
         "frame": user.comp_frame,
+        # Косметика 13–30 (октябрь 2026): {badge_emoji, glow, bubble, custom_title, star}
+        "extra": user.comp_extra or {},
         "earned_titles": earned,
         "palette": NAME_PALETTE,
+        "palette2": NAME_PALETTE_2,
+        "badge_emojis": BADGE_EMOJI,
         "unlocks": UNLOCKS,
         # Рамки за подиум сезона: заработано местом, не уровнем.
         "podium_frames": podium or {"gold": False, "silver": False, "bronze": False},
     }
 
 
-def _quest_dict(q, done: bool = False, progress: tuple | None = None) -> dict:
+def _quest_dict(q, done: bool = False, progress: tuple | None = None, season: str | None = None) -> dict:
     d = {
-        "id": q.id, "num": q.num, "name": q.name, "desc": q.desc,
+        # Название — с сезонной шкуркой (октябрь: хеллоуин), id/газ/предикат те же
+        "id": q.id, "num": q.num, "name": quest_name(q, season), "desc": q.desc,
         "gas": q.gas, "cat": q.category, "needs_parse": q.needs_parse,
         "done": done,
     }
@@ -122,7 +171,7 @@ async def my_compendium(
     this_week = week_key_of(now)
 
     if current_user.dota_account_id is None:
-        return {"linked": False, "season": season}
+        return {"linked": False, "season": season, "theme": theme_for(season), "intro_version": intro_version()}
 
     ctx = await poller._build_ctx(db, current_user, season)
     keys = ctx.completion_keys
@@ -130,11 +179,11 @@ async def my_compendium(
     daily_active = daily_rotation(today)
     weekly_active = weekly_rotation(this_week)
     daily = [
-        _quest_dict(BY_ID[qid], done=(qid, today) in keys)
+        _quest_dict(BY_ID[qid], done=(qid, today) in keys, season=season)
         for qid in daily_active
     ]
     weekly = [
-        _quest_dict(BY_ID[qid], done=(qid, this_week) in keys)
+        _quest_dict(BY_ID[qid], done=(qid, this_week) in keys, season=season)
         for qid in weekly_active
     ]
 
@@ -143,7 +192,7 @@ async def my_compendium(
     def _pool(pool_ids: list[str], active_ids: list[str], period_key: str) -> list[dict]:
         out = []
         for qid in sorted(pool_ids, key=lambda i: BY_ID[i].num):
-            d = _quest_dict(BY_ID[qid], done=(qid, period_key) in keys)
+            d = _quest_dict(BY_ID[qid], done=(qid, period_key) in keys, season=season)
             d["active"] = qid in active_ids
             out.append(d)
         return out
@@ -163,10 +212,10 @@ async def my_compendium(
                 prog = q.progress(ctx)
             except Exception:
                 prog = None
-        season_quests.append(_quest_dict(q, done=done, progress=prog))
+        season_quests.append(_quest_dict(q, done=done, progress=prog, season=season))
 
     team = [
-        _quest_dict(q, done=(q.id, season) in keys)
+        _quest_dict(q, done=(q.id, season) in keys, season=season)
         for q in QUESTS if q.category == "team"
     ]
 
@@ -181,7 +230,7 @@ async def my_compendium(
     # Анти-ачивки показываем списком — пусть боятся. Пасхалки не светим.
     # «done» — только по ТЕКУЩЕМУ сезону (прошлогодний «Донор крови» не в счёт).
     anti = [
-        _quest_dict(q, done=q.id in season_qids)
+        _quest_dict(q, done=q.id in season_qids, season=season)
         for q in QUESTS if q.category == "anti"
     ]
 
@@ -191,7 +240,7 @@ async def my_compendium(
         if not q:
             continue
         trophies.append({
-            "quest_id": c.quest_id, "name": q.name, "cat": q.category,
+            "quest_id": c.quest_id, "name": quest_name(q, season), "cat": q.category,
             # Своя полка: полное описание, включая тайные (сам же выполнил).
             "desc": q.desc,
             "gas": c.gas, "completed_at": c.completed_at.isoformat(),
@@ -209,14 +258,20 @@ async def my_compendium(
 
     wins = sum(1 for r in ctx.rows if r.is_win)
     earned = await _earned_titles(db, current_user.id)
+    lp_cur, lp_target = level_progress(gas, season)
     return {
         "linked": True,
         "cosmetics": _cosmetics_dict(current_user, earned, await _podium_frames(db, current_user.id)),
         "season": season,
+        # Тема сезона (октябрь — "halloween": паутина в шапке) и отпечаток
+        # ролика-заставки (сменился — заставку показать заново)
+        "theme": theme_for(season),
+        "intro_version": intro_version(),
         "gas": gas,
-        "level": level_for_gas(gas),
-        "level_progress": gas % GAS_PER_LEVEL,
-        "level_target": GAS_PER_LEVEL,
+        "level": level_for_gas(gas, season),
+        "level_progress": lp_cur,
+        "level_target": lp_target,
+        "level_cap": LEVEL_CAP,
         "matches": len(ctx.rows),
         "wins": wins,
         "rank_tier": current_user.dota_rank_tier,
@@ -237,6 +292,9 @@ class CosmeticsIn(BaseModel):
     title: str | None = None       # "" = снять титул
     color: str | None = None       # "" = сбросить цвет
     frame: str | None = None       # "" = без рамки
+    # Косметика 13–30: частичное обновление ключей {badge_emoji, glow, bubble,
+    # custom_title, star}; пустое/false значение = снять
+    extra: dict | None = None
 
 
 @router.patch("/cosmetics")
@@ -274,7 +332,10 @@ async def update_cosmetics(
         else:
             if lvl < UNLOCKS["color"]:
                 raise HTTPException(400, f"Цвет ника открывается на уровне {UNLOCKS['color']}")
-            if c not in NAME_PALETTE:
+            if c in NAME_PALETTE_2:
+                if lvl < UNLOCKS["palette2"]:
+                    raise HTTPException(400, f"Вторая палитра открывается на уровне {UNLOCKS['palette2']}")
+            elif c not in NAME_PALETTE:
                 raise HTTPException(400, "Только цвета из палитры Гандолы")
             current_user.comp_color = c
 
@@ -296,10 +357,59 @@ async def update_cosmetics(
                     medal = {1: "🥇 1-е", 2: "🥈 2-е", 3: "🥉 3-е"}[place]
                     raise HTTPException(400, f"Эта рамка — за {medal} место в сезоне")
             else:
-                need = UNLOCKS["frame_lime"] if f == "lime" else UNLOCKS["frame_animated"]
+                need = UNLOCKS[LEVEL_FRAMES[f]]
                 if lvl < need:
                     raise HTTPException(400, f"Эта рамка открывается на уровне {need}")
             current_user.comp_frame = f
+
+    if data.extra is not None:
+        ex = dict(current_user.comp_extra or {})
+        e = data.extra
+
+        def _need(key: str, label: str) -> None:
+            if lvl < UNLOCKS[key]:
+                raise HTTPException(400, f"{label} открывается на уровне {UNLOCKS[key]}")
+
+        if "badge_emoji" in e:
+            v = str(e.get("badge_emoji") or "").strip()
+            if v:
+                _need("badge_emoji", "Значок-эмодзи")
+                if v not in BADGE_EMOJI:
+                    raise HTTPException(400, "Такого значка нет в наборе")
+                ex["badge_emoji"] = v
+            else:
+                ex.pop("badge_emoji", None)
+        if "glow" in e:
+            if e.get("glow"):
+                _need("glow", "Свечение ника")
+                ex["glow"] = True
+            else:
+                ex.pop("glow", None)
+        if "bubble" in e:
+            v = str(e.get("bubble") or "").strip()
+            if v:
+                _need("bubble", "Обводка сообщений")
+                if v not in NAME_PALETTE and v not in NAME_PALETTE_2:
+                    raise HTTPException(400, "Только цвета из палитры Гандолы")
+                ex["bubble"] = v
+            else:
+                ex.pop("bubble", None)
+        if "custom_title" in e:
+            v = str(e.get("custom_title") or "").strip()
+            if v:
+                _need("custom_title", "Свой титул")
+                if len(v) > 20:
+                    raise HTTPException(400, "Свой титул — до 20 символов")
+                ex["custom_title"] = v
+            else:
+                ex.pop("custom_title", None)
+        if "star" in e:
+            if e.get("star"):
+                _need("star", "Звезда легенды")
+                ex["star"] = True
+            else:
+                ex.pop("star", None)
+        current_user.comp_extra = ex or None
 
     await db.commit()
     await db.refresh(current_user)
@@ -561,7 +671,7 @@ async def season_table(
             "username": u.username,
             "avatar_url": u.avatar_url,
             "gas": gas,
-            "level": level_for_gas(gas),
+            "level": level_for_gas(gas, season),
             "quests_done": done_by_user.get(u.id, 0),
             "anti_count": anti_by_user.get(u.id, 0),
             "rank_tier": u.dota_rank_tier,
@@ -570,6 +680,7 @@ async def season_table(
             "comp_color": u.comp_color,
             "comp_frame": u.comp_frame,
             "comp_badge": u.comp_badge,
+            "comp_extra": u.comp_extra or {},
         })
     rows.sort(key=lambda r: (-r["gas"], r["username"].lower()))
     return {"season": season, "rows": rows, "me": current_user.id}
@@ -597,7 +708,7 @@ async def user_trophies(
         if not q:
             continue
         trophies.append({
-            "quest_id": c.quest_id, "name": q.name, "cat": q.category,
+            "quest_id": c.quest_id, "name": quest_name(q, season), "cat": q.category,
             # Чужая полка: описание для тултипа, у тайных — интрига «???».
             "desc": "???" if q.category == "secret" else q.desc,
             "gas": c.gas, "completed_at": c.completed_at.isoformat(),
@@ -612,7 +723,7 @@ async def user_trophies(
     gas = prof.gas if prof else 0
     return {
         "user_id": user_id, "username": user.username, "season": season,
-        "gas": gas, "level": level_for_gas(gas), "trophies": trophies,
+        "gas": gas, "level": level_for_gas(gas, season), "trophies": trophies,
         "rank_tier": user.dota_rank_tier, "leaderboard_rank": user.dota_leaderboard_rank,
     }
 

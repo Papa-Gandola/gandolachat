@@ -92,7 +92,8 @@ async def _standings(db, season: str) -> list[dict]:
             "user_id": uid,
             "username": u.username,
             "gas": gas,
-            "level": level_for_gas(gas),
+            # Уровень по шкале ТОГО сезона: сентябрь-2026 — старая линейка
+            "level": level_for_gas(gas, season),
             "quests_done": done.get(uid, 0),
             "anti_count": anti.get(uid, 0),
         })
@@ -134,6 +135,10 @@ async def _finalize_one(db, season: str) -> None:
             for r in rows[:3]
         ],
     }
+    # Тема сезона (октябрь — хеллоуин): клиенты красят карточку итогов
+    from app.compendium.halloween import theme_for
+    if theme_for(season):
+        payload["theme"] = theme_for(season)
     push_title = f"🏆 Итоги сезона — {month_gen(season)}"
     push_body = f"Чемпион: {rows[0]['username']} ({rows[0]['gas']}⛽)! Подиум в чате."
 

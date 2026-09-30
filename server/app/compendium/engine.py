@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from app.compendium.quests import (
-    BY_ID, QUESTS, GAS_PER_LEVEL,
+    BY_ID, QUESTS, GAS_PER_LEVEL, UNDEAD_HEROES,
     daily_rotation, weekly_rotation,
 )
 
@@ -41,8 +41,48 @@ def current_season(now: datetime | None = None) -> str:
     return season_of(now or datetime.now(timezone.utc))
 
 
-def level_for_gas(gas: int) -> int:
-    return gas // GAS_PER_LEVEL + 1
+# ---------- уровни ----------
+# До октября 2026 уровень был линейный: 100 газа = уровень, без потолка —
+# так люди его и видели, снапшоты сезонов не переписываем. С октября цена
+# уровня растёт (второй за 60, каждый следующий на 10 дороже) и есть потолок
+# 30: за сентябрь топ набрал 3960 газа — по новой шкале это 24-й уровень,
+# 30-й (5800) берётся только полным месяцем гринда. Хозяин: «почти половина
+# дошла до максимального за неделю» — отсюда и растяжка.
+LEVEL_CAP = 30
+NEW_CURVE_FROM = "2026-10"
+
+
+def gas_for_level(level: int) -> int:
+    """Сколько газа нужно, чтобы ИМЕТЬ уровень `level` по новой кривой:
+    T(n) = 5·(n−1)·(n+10) — первый уровень даром, второй за 60, третий за
+    130, двенадцатый за 1210, двадцатый за 2850, тридцатый за 5800."""
+    if level <= 1:
+        return 0
+    return 5 * (level - 1) * (level + 10)
+
+
+def level_for_gas(gas: int, season: str | None = None) -> int:
+    """Уровень по газу. season — чей газ считаем: до NEW_CURVE_FROM старая
+    линейка (без потолка), иначе новая с потолком LEVEL_CAP. Без season —
+    новая (текущие сезоны)."""
+    if season is not None and season < NEW_CURVE_FROM:
+        return gas // GAS_PER_LEVEL + 1
+    lvl = 1
+    while lvl < LEVEL_CAP and gas >= gas_for_level(lvl + 1):
+        lvl += 1
+    return lvl
+
+
+def level_progress(gas: int, season: str | None = None) -> tuple[int, int]:
+    """(набрано внутри текущего уровня, сколько всего нужно до следующего).
+    На потолке — (1, 1): полоска полная, клиенты пишут «макс»."""
+    if season is not None and season < NEW_CURVE_FROM:
+        return gas % GAS_PER_LEVEL, GAS_PER_LEVEL
+    lvl = level_for_gas(gas, season)
+    if lvl >= LEVEL_CAP:
+        return 1, 1
+    base = gas_for_level(lvl)
+    return gas - base, gas_for_level(lvl + 1) - base
 
 
 class UserCtx:
@@ -109,6 +149,26 @@ class UserCtx:
 
     def same_hero_win_streak_ending_at(self, m) -> int:
         return self._streak(m, lambda r: r.is_win and r.hero_id == m.hero_id)
+
+    def undead_win_streak_ending_at(self, m) -> int:
+        """Победы подряд на нежити («Тыквенный король»)."""
+        return self._streak(m, lambda r: r.is_win and r.hero_id in UNDEAD_HEROES)
+
+    def lose_streak_before(self, m) -> int:
+        """Сколько поражений подряд было ПЕРЕД этой каткой («Восставший»:
+        победа сразу после серии поражений)."""
+        n = 0
+        for r in reversed([r for r in self.all_rows if r.started_at < m.started_at]):
+            if not r.is_win:
+                n += 1
+            else:
+                break
+        return n
+
+    def season_rows_up_to(self, m) -> list:
+        """Строки ЭТОГО сезона до катки включительно (для «двадцать пятая
+        катка на герое за сезон» и подобного счёта)."""
+        return [r for r in self.rows if r.started_at <= m.started_at]
 
     def gap_before_days(self, m) -> float:
         """Сколько дней прошло с предыдущей катки до этой. 0 — если это
@@ -284,6 +344,24 @@ def extract_player_facts(match: dict, player: dict) -> dict:
     items = [player.get(f"item_{i}") or 0 for i in range(6)]
     items += [player.get(f"backpack_{i}") or 0 for i in range(3)]
 
+    # Дымы («Кальянщик»): покупки из parsed purchase_log; до парса 0.
+    smokes = 0
+    for p in player.get("purchase_log") or []:
+        if isinstance(p, dict) and p.get("key") == "smoke_of_deceit":
+            smokes += 1
+    # Составы сторон — для «победа против нежити» и подобного
+    ally_heroes: list[int] = []
+    enemy_heroes: list[int] = []
+    for p in match.get("players") or []:
+        try:
+            hid = int(p.get("hero_id") or 0)
+            p_radiant = (p.get("player_slot") or 0) < 128
+        except Exception:
+            continue
+        if p.get("player_slot") == slot:
+            continue
+        (ally_heroes if p_radiant == is_radiant else enemy_heroes).append(hid)
+
     extra = {
         "items": items,
         "own_rax_lost": own_rax_lost,
@@ -291,6 +369,11 @@ def extract_player_facts(match: dict, player: dict) -> dict:
         "aegis_picks": aegis_picks,
         "party_id": player.get("party_id"),
         "party_size": player.get("party_size"),
+        "smokes": smokes,
+        # leaver_status OpenDota: 0 норм, 1 отвал с возвратом, 2+ бросил
+        "leaver": int(player.get("leaver_status") or 0),
+        "ally_heroes": ally_heroes,
+        "enemy_heroes": enemy_heroes,
     }
 
     return {

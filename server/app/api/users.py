@@ -159,6 +159,7 @@ async def _broadcast_profile(db: AsyncSession, user: User) -> None:
         "comp_title": user.comp_title,
         "comp_color": user.comp_color,
         "comp_frame": user.comp_frame,
+        "comp_extra": user.comp_extra or {},
     }
     for row in chat_ids_result.all():
         await manager.broadcast_to_chat(row.chat_id, payload)
