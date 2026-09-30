@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from "react";
 import { UserOut, userApi, chatApi } from "../services/api";
 import { useTheme } from "../services/theme";
 import DotaRankBadge from "./DotaRankBadge";
-import { CompBadge, CompTitle, frameStyle, frameClass } from "./cosmetics";
+import { CompBadge, CompStar, CompTitle, frameStyle, frameClass, glowStyle, titleOf } from "./cosmetics";
 import Icon, { Gas } from "./Icon";
 import QRCode from "qrcode";
 
@@ -130,10 +130,10 @@ export default function ProfilePage({ user: initialUser, currentUser, onClose, o
             )}
           </label>
         </div>
-        {(user.comp_title || user.comp_badge) && (
+        {(titleOf(user) || user.comp_badge || user.comp_extra?.badge_emoji || user.comp_extra?.star) && (
           <div style={{ textAlign: "center", marginTop: -14, marginBottom: 18 }}>
-            <span style={{ color: user.comp_color || "var(--text-primary)", fontWeight: 700, fontSize: 14, ...(isNeo ? { fontFamily: "var(--font-mono)" } : {}) }}>
-              {user.username}<CompBadge user={user} />
+            <span style={{ color: user.comp_color || "var(--text-primary)", fontWeight: 700, fontSize: 14, ...glowStyle(user), ...(isNeo ? { fontFamily: "var(--font-mono)" } : {}) }}>
+              {user.username}<CompBadge user={user} /><CompStar user={user} />
             </span>
             <CompTitle user={user} size={12} center />
           </div>

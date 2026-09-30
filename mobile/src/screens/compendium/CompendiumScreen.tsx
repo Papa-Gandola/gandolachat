@@ -4,6 +4,7 @@ import { ActivityIndicator, Alert, Platform, Pressable, RefreshControl, ScrollVi
 import { AppBar } from "../../components/AppBar";
 import { Avatar } from "../../components/Avatar";
 import { DotaRankBadge } from "../../components/DotaRankBadge";
+import { HalloweenDecor } from "../../components/HalloweenDecor";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import {
   apiErrorMessage, compendiumApi, CompendiumCosmetics, CompendiumMe, CompendiumQuest,
@@ -13,9 +14,10 @@ import { useAuth } from "../../services/AuthContext";
 import { useDotaPlaying } from "../../services/dotaPresence";
 import { wsService } from "../../services/ws";
 import { useTheme } from "../../theme";
+import { BingoGrid } from "./BingoGrid";
 
 type ThemeT = ReturnType<typeof useTheme>;
-type TabKey = "quests" | "season" | "bets" | "archive" | "trophies" | "cosmetics";
+type TabKey = "quests" | "season" | "bets" | "archive" | "trophies" | "bingo" | "cosmetics";
 
 const BLOOD = "#ff6a5e";
 const GOLD = "#ffd24a";
@@ -132,7 +134,11 @@ export function CompendiumScreen() {
 
   return (
     <ScreenContainer>
-      <AppBar title={theme.decorate ? "// ГАНДОЛИУМ ⛽" : "⛽ Гандолиум"} />
+      {/* Октябрь: паутина по углам и паучок поверх шапки (тема с сервера) */}
+      <View style={{ position: "relative", zIndex: 2 }}>
+        <AppBar title={theme.decorate ? "// ГАНДОЛИУМ ⛽" : "⛽ Гандолиум"} />
+        {data?.theme === "halloween" ? <HalloweenDecor /> : null}
+      </View>
       <ScrollView
         style={{ flex: 1 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.colors.accent} />}
@@ -160,7 +166,7 @@ export function CompendiumScreen() {
             <View style={{ margin: 14, padding: 14, backgroundColor: theme.colors.bgElev, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.md, gap: 10 }}>
               <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "baseline" }}>
                 <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: theme.colors.inkMuted, letterSpacing: 1 }}>
-                  СЕЗОН · {seasonTitle.toUpperCase()}
+                  СЕЗОН · {seasonTitle.toUpperCase()}{data.theme === "halloween" ? " 🎃" : ""}
                 </Text>
                 <DotaRankBadge rankTier={data.rank_tier} leaderboardRank={data.leaderboard_rank} small />
               </View>
@@ -175,7 +181,9 @@ export function CompendiumScreen() {
                   <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
                     <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.ink }}>⛽ {data.gas} газа</Text>
                     <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: theme.colors.inkMuted }}>
-                      {data.level_progress}/{data.level_target}
+                      {data.level_cap && (data.level ?? 0) >= data.level_cap
+                        ? `МАКС · ${data.level_cap}`
+                        : `${data.level_progress}/${data.level_target}`}
                     </Text>
                   </View>
                   <View style={{ height: 7, backgroundColor: theme.colors.bgInput, borderRadius: 4, overflow: "hidden" }}>
@@ -244,6 +252,7 @@ export function CompendiumScreen() {
                   ["season", "СЕЗОН"],
                   ["bets", "СТАВКИ"],
                   ["trophies", "ТРОФЕИ"],
+                  ["bingo", "БИНГО"],
                   ["cosmetics", "КОСМЕТИКА"],
                   ["archive", "АРХИВ"],
                 ] as [TabKey, string][]
@@ -281,7 +290,7 @@ export function CompendiumScreen() {
                   <QuestGroup theme={theme} title="КОМАНДНЫЕ" meta="катки с людьми из чата" quests={data.team ?? []} accent />
                   <QuestGroup theme={theme} title="АНТИ-АЧИВКИ" meta="выдаются сами" quests={data.anti ?? []} blood />
                   <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted, lineHeight: 15 }}>
-                    📼 — нужен парс реплея (доезжает чуть позже катки) · ещё есть 12 скрытых пасхалок — узнаешь, когда триггернёшь 🔒
+                    📼 — нужен парс реплея (доезжает чуть позже катки) · ещё есть 20 скрытых пасхалок — узнаешь, когда триггернёшь; открытые собираются во вкладке БИНГО 🔒
                   </Text>
                 </>
               )}
@@ -322,10 +331,10 @@ export function CompendiumScreen() {
                           <Avatar letter={(r.username[0] ?? "?").toUpperCase()} size={28} bg="#5865f2" uri={r.avatar_url} />
                           <View style={{ flex: 1, minWidth: 0 }}>
                             <Text numberOfLines={1} style={{ fontFamily: theme.fonts.mono, fontSize: 13, fontWeight: "700", color: r.comp_color || theme.colors.ink }}>
-                              {r.username}{r.comp_badge ? " ⛽" : ""}{dotaPlaying.has(r.user_id) ? " 🎮" : ""}{r.user_id === auth.user?.id ? " (ты)" : ""}
+                              {r.username}{r.comp_extra?.badge_emoji ? ` ${r.comp_extra.badge_emoji}` : r.comp_badge ? " ⛽" : ""}{r.comp_extra?.star ? " ⭐" : ""}{dotaPlaying.has(r.user_id) ? " 🎮" : ""}{r.user_id === auth.user?.id ? " (ты)" : ""}
                             </Text>
                             <Text numberOfLines={1} style={{ fontFamily: theme.fonts.mono, fontSize: 9.5, color: theme.colors.inkMuted }}>
-                              ур.{r.level} · ✓{r.quests_done}{r.anti_count ? ` · 💀${r.anti_count}` : ""}{r.comp_title ? ` · «${r.comp_title}»` : ""}
+                              ур.{r.level} · ✓{r.quests_done}{r.anti_count ? ` · 💀${r.anti_count}` : ""}{(r.comp_extra?.custom_title || r.comp_title) ? ` · «${r.comp_extra?.custom_title || r.comp_title}»` : ""}
                             </Text>
                           </View>
                           <Text style={{ fontFamily: theme.fonts.mono, fontSize: 13, fontWeight: "800", color: theme.colors.accent }}>
@@ -404,6 +413,8 @@ export function CompendiumScreen() {
                   ) : null}
                 </View>
               )}
+
+              {tab === "bingo" && <BingoGrid cells={data.bingo} />}
 
               {tab === "trophies" && (
                 <View style={{ gap: 6 }}>
@@ -524,7 +535,7 @@ function QuestGroup({ theme, title, meta, quests, pool, blood, accent }: {
               ) : null}
             </View>
             <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11.5, fontWeight: "800", color: blood ? BLOOD : theme.colors.accent }}>
-              {blood ? "+" : ""}{q.gas} ⛽
+              {blood && q.gas >= 0 ? "+" : ""}{q.gas} ⛽
             </Text>
           </View>
         );
@@ -765,10 +776,15 @@ function CosmeticsTab({ theme, cos, onSaved }: {
   onSaved: (c: CompendiumCosmetics) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [customTitle, setCustomTitle] = useState(cos.extra?.custom_title ?? "");
   const lvl = cos.max_level;
   const U = cos.unlocks;
+  const ex = cos.extra ?? {};
+  const allColors = [...cos.palette, ...(cos.palette2 ?? [])];
+  const p2Need = U.palette2 ?? 14;
+  const legendNeed = U.frame_legend ?? 25;
 
-  const save = async (patch: { badge?: boolean; title?: string; color?: string; frame?: string }) => {
+  const save = async (patch: { badge?: boolean; title?: string; color?: string; frame?: string; extra?: Record<string, unknown> }) => {
     if (busy) return;
     setBusy(true);
     try {
@@ -870,9 +886,33 @@ function CosmeticsTab({ theme, cos, onSaved }: {
             />
           ))}
         </View>
+        {/* Вторая палитра (ур.14) — тыква, кровь, яд, лёд, кость */}
+        {(cos.palette2?.length ?? 0) > 0 ? (
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center", marginTop: 8 }}>
+            <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: lvl < p2Need ? theme.colors.inkMuted : theme.colors.accent }}>
+              {lvl < p2Need ? `🔒 ${p2Need} · вторая палитра` : "вторая палитра"}
+            </Text>
+            {cos.palette2!.map((c) => (
+              <Pressable
+                key={c}
+                onPress={() => lvl >= p2Need && save({ color: c })}
+                disabled={busy || lvl < p2Need}
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 14,
+                  backgroundColor: c,
+                  opacity: lvl < p2Need ? 0.35 : 1,
+                  borderWidth: cos.color === c ? 3 : 1,
+                  borderColor: cos.color === c ? theme.colors.ink : theme.colors.border,
+                }}
+              />
+            ))}
+          </View>
+        ) : null}
       </Row>
 
-      <Row need={U.frame_lime ?? 8} name="Рамка аватарки" desc="Лаймовая — «ветеран сезона»">
+      <Row need={U.frame_lime ?? 8} name="Рамка аватарки" desc="Лаймовая — «ветеран сезона», переливающаяся — 12-й, легендарная — 25-й">
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
           <Pressable onPress={() => save({ frame: "" })} disabled={busy} style={chip(!cos.frame)}>
             <Text style={chipText(!cos.frame)}>без рамки</Text>
@@ -888,6 +928,13 @@ function CosmeticsTab({ theme, cos, onSaved }: {
             <Text style={chipText(cos.frame === "animated")}>
               переливающаяся{lvl < (U.frame_animated ?? 12) ? ` 🔒${U.frame_animated ?? 12}` : ""}
             </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => lvl >= legendNeed && save({ frame: "legend" })}
+            disabled={busy || lvl < legendNeed}
+            style={chip(cos.frame === "legend", lvl < legendNeed)}
+          >
+            <Text style={chipText(cos.frame === "legend")}>легендарная{lvl < legendNeed ? ` 🔒${legendNeed}` : ""}</Text>
           </Pressable>
         </View>
       </Row>
@@ -914,6 +961,87 @@ function CosmeticsTab({ theme, cos, onSaved }: {
 
       <Row need={U.dota_gold ?? 10} name="Золотой /dota" desc="Твой зов «Газуем в дотан» — с короной. Включается сам.">
         <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: GOLD }}>👑 активен — просто напиши /dota</Text>
+      </Row>
+
+      {/* --- Октябрь 2026: уровни 13–30 --- */}
+      <Row need={U.badge_emoji ?? 13} name="Свой значок у ника" desc="Вместо ⛽ — из набора; виден в таблице сезона и профиле">
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+          <Pressable onPress={() => save({ extra: { badge_emoji: "" } })} disabled={busy} style={chip(!ex.badge_emoji)}>
+            <Text style={chipText(!ex.badge_emoji)}>{cos.badge ? "обычный ⛽" : "без значка"}</Text>
+          </Pressable>
+          {(cos.badge_emojis ?? []).map((e) => (
+            <Pressable key={e} onPress={() => save({ extra: { badge_emoji: e } })} disabled={busy} style={{ ...chip(ex.badge_emoji === e), paddingHorizontal: 9 }}>
+              <Text style={{ fontSize: 16 }}>{e}</Text>
+            </Pressable>
+          ))}
+        </View>
+      </Row>
+
+      <Row need={U.glow ?? 15} name="Свечение ника" desc="Ник светится цветом ника в чате на компе и в списках">
+        <Pressable onPress={() => save({ extra: { glow: !ex.glow } })} disabled={busy} style={chip(!!ex.glow)}>
+          <Text style={chipText(!!ex.glow)}>{ex.glow ? "Вкл" : "Выкл"}</Text>
+        </Pressable>
+      </Row>
+
+      <Row need={U.bubble ?? 17} name="Обводка сообщений" desc="Цветная рамка вокруг твоих пузырей в чате на компе — видят все">
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+          <Pressable onPress={() => save({ extra: { bubble: "" } })} disabled={busy} style={chip(!ex.bubble)}>
+            <Text style={chipText(!ex.bubble)}>без обводки</Text>
+          </Pressable>
+          {allColors.map((c) => (
+            <Pressable
+              key={c}
+              onPress={() => save({ extra: { bubble: c } })}
+              disabled={busy}
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 14,
+                borderWidth: ex.bubble === c ? 4 : 2.5,
+                borderColor: c,
+                backgroundColor: ex.bubble === c ? theme.colors.bgElevH : "transparent",
+              }}
+            />
+          ))}
+        </View>
+      </Row>
+
+      <Row need={U.custom_title ?? 19} name="Свой титул" desc="Любой текст до 20 символов — важнее заработанного">
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+          <TextInput
+            value={customTitle}
+            onChangeText={setCustomTitle}
+            maxLength={20}
+            placeholder="Тыквенный лорд"
+            placeholderTextColor={theme.colors.inkMuted}
+            style={{
+              fontFamily: theme.fonts.mono,
+              fontSize: 12,
+              color: theme.colors.ink,
+              backgroundColor: theme.colors.bgInput,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              borderRadius: theme.radius.sm,
+              paddingHorizontal: 10,
+              paddingVertical: 7,
+              minWidth: 170,
+            }}
+          />
+          <Pressable onPress={() => save({ extra: { custom_title: customTitle.trim() } })} disabled={busy || !customTitle.trim()} style={chip(false)}>
+            <Text style={chipText(false)}>Надеть</Text>
+          </Pressable>
+          {ex.custom_title ? (
+            <Pressable onPress={() => { setCustomTitle(""); void save({ extra: { custom_title: "" } }); }} disabled={busy} style={chip(false)}>
+              <Text style={chipText(false)}>снять</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      </Row>
+
+      <Row need={U.star ?? 30} name="Звезда легенды" desc="⭐ после ника — потолок Гандолиума">
+        <Pressable onPress={() => save({ extra: { star: !ex.star } })} disabled={busy} style={chip(!!ex.star)}>
+          <Text style={chipText(!!ex.star)}>{ex.star ? "Вкл" : "Выкл"}</Text>
+        </Pressable>
       </Row>
     </View>
   );

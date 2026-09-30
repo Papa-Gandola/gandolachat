@@ -1,17 +1,24 @@
-"""Гандолиум: все 70 заданий сезона, 1-в-1 по утверждённой концепции.
+"""Гандолиум: все задания сезона — 70 по утверждённой концепции + 38
+октябрьского пополнения (хеллоуин, именные, штрафные анти; 30.09).
 
 Каждое задание — предикат над строкой DotaMatch (`m`) и контекстом игрока
 (`ctx`, см. engine.UserCtx). Категории:
 
-  daily   — пул 16, активны 3/день (детерминированная ротация по дате МСК)
-  weekly  — пул 14, активны 3/неделю (ротация по ISO-неделе, сброс в Пн)
-  season  — 10 марафонов, висят весь месяц (progress → (current, target))
+  daily   — пул 28, активны 5/день (детерминированная ротация по дате МСК)
+  weekly  — пул 22, активны 7/неделю (ротация по ISO-неделе, сброс в Пн)
+  season  — 14 марафонов, висят весь месяц (progress → (current, target))
   team    — 8 командных, проверяются при совпадении match_id у 2+ из чата
-  anti    — 10 анти-ачивок, выдаются сами (полный прожарочный режим)
-  secret  — 12 пасхалок, в UI скрыты до выполнения
+  anti    — 16 анти-ачивок, выдаются сами (полный прожарочный режим);
+            у двух самых жёстких gas < 0 — штраф (poller не уводит в минус)
+  secret  — 20 пасхалок, в UI скрыты до выполнения
+
+Сезонные «шкурки» названий (октябрь — хеллоуин) — halloween.py, сами
+предикаты от них не зависят.
 
 `repeat` задаёт period_key для уникальности выполнения:
-  period — дефолт: daily→дата, weekly→неделя, остальные→сезон
+  period — дефолт: daily→дата, weekly→неделя ВНУТРИ сезона ("2026-10-W40",
+           engine.week_key_of: неделя на стыке месяцев начинается заново
+           в новом сезоне), остальные→сезон
   match  — можно повторять, ключ = match_id (рампага каждый раз — карточка)
   day    — не чаще раза в день (прожарки за фид)
   week   — не чаще раза в неделю (жирные пасхалки, чтобы не фармили)
@@ -27,11 +34,60 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 GAS_PER_LEVEL = 100
-DAILY_ACTIVE = 3
-WEEKLY_ACTIVE = 3
+# С октября 2026 (решение хозяина 30.09): 5 ежедневок и 7 недельных
+# одновременно — пулы выросли до 28 и 22, газ капает быстрее, кривая уровней
+# в engine это учитывает (потолок 30).
+DAILY_ACTIVE = 5
+WEEKLY_ACTIVE = 7
 
 # Item ids (OpenDota/dotaconstants): Divine Rapier
 ITEM_RAPIER = 133
+
+# ---------- пулы героев для тематических заданий ----------
+# Нежить и прочая нечисть (хеллоуин, id героев OpenDota). Список утверждён
+# хозяином 30.09.
+UNDEAD_HEROES = frozenset({
+    14,   # Pudge
+    31,   # Lich
+    36,   # Necrophos
+    85,   # Undying
+    42,   # Wraith King
+    54,   # Lifestealer
+    43,   # Death Prophet
+    60,   # Night Stalker
+    102,  # Abaddon
+    92,   # Visage
+    67,   # Spectre
+    11,   # Shadow Fiend
+    69,   # Doom
+    3,    # Bane
+    121,  # Grimstroke
+    119,  # Dark Willow
+    138,  # Muerta
+    20,   # Vengeful Spirit
+    109,  # Terrorblade
+    45,   # Pugna
+    30,   # Witch Doctor
+})
+# «Яшка в Тельняшке»: морская пехота
+SEA_HEROES = frozenset({23, 29, 28, 89, 93, 10})  # Kunkka, Tidehunter, Slardar, Naga Siren, Slark, Morphling
+HERO_WINTER_WYVERN = 112
+
+
+def is_undead(m) -> bool:
+    return m.hero_id in UNDEAD_HEROES
+
+
+def _night(m) -> bool:
+    """Катка начата ночью по МСК (с полуночи до шести)."""
+    return 0 <= _hour_msk(m) < 6
+
+
+def _halloween_night(m) -> bool:
+    """Вечер 31 октября по МСК, после 18:00."""
+    from datetime import timedelta
+    d = m.started_at + timedelta(hours=3)
+    return d.month == 10 and d.day == 31 and d.hour >= 18
 
 
 # ---------- role helpers (по строке DotaMatch) ----------
@@ -126,7 +182,8 @@ QUESTS: list[Quest] = [
           check=lambda m, ctx: m.is_win and m.kills <= 3 and m.assists >= 15),
 
     # ================= ЕЖЕНЕДЕЛЬКИ (17–30) =================
-    Quest("w17", 17, "weekly", "Серийник", "Винстрик 3 рейтинговых подряд", 60,
+    # w17 переименован по просьбе хозяина (30.09): «Ban» — ник друга.
+    Quest("w17", 17, "weekly", "МАРК епта, что ты делаешь", "Три победы подряд в рейтинге", 60,
           check=lambda m, ctx: ctx.win_streak_ending_at(m) >= 3),
     Quest("w18", 18, "weekly", "Работяга", "7 рейтинговых за неделю", 50,
           check=lambda m, ctx: len(ctx.week_rows(m)) >= 7),
@@ -264,6 +321,105 @@ QUESTS: list[Quest] = [
           repeat="week", check=lambda m, ctx: m.net_worth >= 40000),
     Quest("x70", 70, "secret", "Смурф?", "KDA 20+ за игру", 100,
           repeat="week", check=lambda m, ctx: kda(m) >= 20),
+
+    # =====================================================================
+    # ОКТЯБРЬСКОЕ ПОПОЛНЕНИЕ (71–108), утверждено хозяином 30.09: хеллоуин,
+    # именные ачивки по друзьям, жёсткие анти со штрафом (gas < 0).
+    # =====================================================================
+
+    # ================= ЕЖЕДНЕВКИ (71–82) =================
+    Quest("d71", 71, "daily", "Нежить", "Победа на герое-нежити (Pudge, Lich, Necro, WK, Undying, SF…)", 20,
+          check=lambda m, ctx: m.is_win and is_undead(m)),
+    Quest("d72", 72, "daily", "Чёртова дюжина", "Ровно 13 убийств за игру", 20,
+          check=lambda m, ctx: m.kills == 13),
+    Quest("d73", 73, "daily", "Полуночник", "Победа в катке, начатой между полуночью и тремя ночи", 20,
+          check=lambda m, ctx: m.is_win and 0 <= _hour_msk(m) < 3),
+    Quest("d74", 74, "daily", "Я тебе вакцину поставлю", "Первая кровь твоя — и победа", 20,
+          needs_parse=True, check=lambda m, ctx: m.is_win and m.firstblood),
+    Quest("d75", 75, "daily", "Кровавая луна", "Серия из 5+ убийств без смерти", 20,
+          needs_parse=True, check=lambda m, ctx: m.kill_streak_max >= 5),
+    Quest("d76", 76, "daily", "Гробовщик", "15+ убийств за игру", 25,
+          check=lambda m, ctx: m.kills >= 15),
+    Quest("d77", 77, "daily", "Живучий", "Поражение в игре 40+ минут, но не больше 3 смертей", 15,
+          check=lambda m, ctx: not m.is_win and m.duration >= 40 * 60 and m.deaths <= 3),
+    Quest("d78", 78, "daily", "Ведьмин котёл", "Победа с 5+ убийствами и 10+ ассистами", 15,
+          check=lambda m, ctx: m.is_win and m.kills >= 5 and m.assists >= 10),
+    Quest("d79", 79, "daily", "Разоритель", "12 000+ урона по строениям", 20,
+          check=lambda m, ctx: m.tower_damage >= 12000),
+    Quest("d80", 80, "daily", "Тьма сгущается", "Победа в игре длиной 50+ минут", 20,
+          check=lambda m, ctx: m.is_win and m.duration >= 50 * 60),
+    Quest("d81", 81, "daily", "Кальянщик", "Купил 3+ дыма за катку", 20,
+          needs_parse=True, title="Кальянщик",
+          check=lambda m, ctx: m.is_parsed and _extra(m, "smokes", 0) >= 3),
+    Quest("d82", 82, "daily", "Яшка в Тельняшке", "Победа на морском герое (Kunkka, Tide, Slardar, Naga, Slark, Morph)", 20,
+          check=lambda m, ctx: m.is_win and m.hero_id in SEA_HEROES),
+
+    # ================= ЕЖЕНЕДЕЛЬКИ (83–90) =================
+    Quest("w83", 83, "weekly", "СуперГимнаст", "Победа без единой смерти в игре 40+ минут", 80,
+          check=lambda m, ctx: m.is_win and m.deaths == 0 and m.duration >= 40 * 60),
+    Quest("w84", 84, "weekly", "Аня лечи меня, АНЯ!", "10 000+ лечения союзников за одну игру", 70,
+          check=lambda m, ctx: m.hero_healing >= 10000),
+    Quest("w85", 85, "weekly", "Некромант", "3 победы на нежити за неделю", 70, title="Некромант",
+          check=lambda m, ctx: sum(1 for r in ctx.week_rows(m) if r.is_win and is_undead(r)) >= 3),
+    Quest("w86", 86, "weekly", "Экзорцист", "Победа против 2+ героев-нежити в составе врага", 60,
+          check=lambda m, ctx: m.is_win
+          and sum(1 for h in _extra(m, "enemy_heroes", []) if h in UNDEAD_HEROES) >= 2),
+    Quest("w87", 87, "weekly", "Голова с плеч", "10+ убийств на герое-нежити", 60,
+          check=lambda m, ctx: is_undead(m) and m.kills >= 10),
+    Quest("w88", 88, "weekly", "Восставший", "Победа сразу после 3+ поражений подряд", 60,
+          check=lambda m, ctx: m.is_win and ctx.lose_streak_before(m) >= 3),
+    Quest("w89", 89, "weekly", "Кладбищенский сторож", "15+ вардов за игру", 50,
+          needs_parse=True, check=lambda m, ctx: m.is_parsed and m.wards_placed >= 15),
+    Quest("w90", 90, "weekly", "Жатва", "40+ убийств суммарно за один день", 60,
+          check=lambda m, ctx: sum(r.kills for r in ctx.day_rows(m)) >= 40),
+
+    # ================= МАРАФОНЫ СЕЗОНА (91–94) =================
+    Quest("s91", 91, "season", "Ваня Виверна", "10 каток на Winter Wyvern за сезон", 200, title="Виверна",
+          progress=lambda ctx: (sum(1 for r in ctx.rows if r.hero_id == HERO_WINTER_WYVERN), 10)),
+    Quest("s92", 92, "season", "Тыквенный марафон", "13 побед на нежити за сезон", 250,
+          progress=lambda ctx: (sum(1 for r in ctx.rows if r.is_win and is_undead(r)), 13)),
+    Quest("s93", 93, "season", "Ночной дозор", "10 каток, начатых после полуночи, за сезон", 150,
+          progress=lambda ctx: (sum(1 for r in ctx.rows if _night(r)), 10)),
+    Quest("s94", 94, "season", "Легион", "15 каток с людьми из чата за сезон", 200,
+          progress=lambda ctx: (sum(1 for r in ctx.rows if (r.team_size or 0) >= 2), 15)),
+
+    # ================= АНТИ-АЧИВКИ (95–100) =================
+    # Две самые жёсткие — со ШТРАФОМ (gas < 0; poller не даёт уйти ниже нуля).
+    Quest("a95", 95, "anti", "Чел, ну это жесть", "0–1 убийств и 15+ смертей. Я даже прибавить газа не могу тебе: −25", -25,
+          repeat="day", title="Жесть",
+          check=lambda m, ctx: m.kills <= 1 and m.deaths >= 15),
+    Quest("a96", 96, "anti", "Ливер", "Бросил катку (abandon): −20 газа", -20,
+          repeat="day", title="Ливер",
+          check=lambda m, ctx: _extra(m, "leaver", 0) >= 2),
+    Quest("a97", 97, "anti", "Зомби", "0 убийств и 0 ассистов за 30+ минут", 15,
+          repeat="day", check=lambda m, ctx: m.duration >= 30 * 60 and m.kills == 0 and m.assists == 0),
+    Quest("a98", 98, "anti", "Призрак", "GPM меньше 250 за 30+ минут", 10,
+          repeat="day", check=lambda m, ctx: m.duration >= 30 * 60 and m.gpm < 250),
+    Quest("a99", 99, "anti", "Пугало", "0 урона по строениям за 40+ минут", 10,
+          repeat="day", check=lambda m, ctx: m.duration >= 40 * 60 and m.tower_damage == 0),
+    Quest("a100", 100, "anti", "Тильт-машина", "4+ катки за день — и все проиграны", 25,
+          repeat="day", title="Тильт",
+          check=lambda m, ctx: len(ctx.day_rows(m)) >= 4 and not any(r.is_win for r in ctx.day_rows(m))),
+
+    # ================= ПАСХАЛКИ (101–108) =================
+    Quest("x101", 101, "secret", "Виверна, я тебя знаю", "25 каток на Winter Wyvern за сезон", 150,
+          check=lambda m, ctx: sum(1 for r in ctx.season_rows_up_to(m) if r.hero_id == HERO_WINTER_WYVERN) == 25),
+    Quest("x102", 102, "secret", "Хеллоуин", "Победа вечером 31 октября (после 18:00)", 66,
+          repeat="week", check=lambda m, ctx: m.is_win and _halloween_night(m)),
+    Quest("x103", 103, "secret", "Число зверя", "6 убийств, 6 смертей, 6 ассистов", 66,
+          repeat="match", check=lambda m, ctx: m.kills == 6 and m.deaths == 6 and m.assists == 6),
+    Quest("x104", 104, "secret", "Восставший из фида", "Победа с 12+ смертями", 50,
+          repeat="week", title="Восставший из фида",
+          check=lambda m, ctx: m.is_win and m.deaths >= 12),
+    Quest("x105", 105, "secret", "Ночной кошмар", "3 победы за одну ночь (с полуночи до шести)", 100,
+          repeat="week", check=lambda m, ctx: sum(1 for r in ctx.day_rows(m) if r.is_win and _night(r)) >= 3),
+    Quest("x106", 106, "secret", "Тыквенный король", "5 побед подряд на нежити", 150,
+          repeat="week", title="Тыквенный король",
+          check=lambda m, ctx: m.is_win and is_undead(m) and ctx.undead_win_streak_ending_at(m) >= 5),
+    Quest("x107", 107, "secret", "Кровавый след", "25+ убийств за игру", 100,
+          repeat="match", check=lambda m, ctx: m.kills >= 25),
+    Quest("x108", 108, "secret", "Дым и зеркала", "5+ дымов за катку", 60,
+          needs_parse=True, repeat="week", check=lambda m, ctx: m.is_parsed and _extra(m, "smokes", 0) >= 5),
 ]
 
 BY_ID: dict[str, Quest] = {q.id: q for q in QUESTS}

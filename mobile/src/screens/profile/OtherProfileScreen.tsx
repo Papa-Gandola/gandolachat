@@ -95,11 +95,11 @@ export function OtherProfileScreen({ navigation, route }: Props) {
                 marginTop: 12,
               }}
             >
-              {user.username}{user.comp_badge ? " ⛽" : ""}
+              {user.username}{user.comp_extra?.badge_emoji ? ` ${user.comp_extra.badge_emoji}` : user.comp_badge ? " ⛽" : ""}{user.comp_extra?.star ? " ⭐" : ""}
             </Text>
-            {user.comp_title ? (
+            {(user.comp_extra?.custom_title || user.comp_title) ? (
               <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: "#ffd24a", marginTop: 3 }}>
-                «{user.comp_title}»
+                «{user.comp_extra?.custom_title || user.comp_title}»
               </Text>
             ) : null}
             {user.dota_rank_tier ? (

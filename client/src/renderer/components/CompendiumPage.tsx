@@ -6,10 +6,13 @@ import {
 import { wsService } from "../services/ws";
 import { useTheme } from "../services/theme";
 import DotaRankBadge from "./DotaRankBadge";
-import { frameClass, frameStyle } from "./cosmetics";
+import { frameClass, frameStyle, CompBadge, CompStar, glowStyle, titleOf } from "./cosmetics";
+import HalloweenDecor from "./HalloweenDecor";
+import { Emoji } from "./Emoji";
 import { useDotaPlaying } from "../services/presence";
 import Icon, { Gas } from "./Icon";
 import type { IconName } from "./icons";
+import { BingoTab } from "./BingoTab";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 const BLOOD = "#ff6a5e";
@@ -26,10 +29,29 @@ function seasonName(season: string): string {
 // вкладок) убирает её насовсем — и так же возвращает. Файл раздаёт сервер;
 // если его вдруг нет — оверлей молча закрывается.
 const INTRO_URL = `${BASE_URL}/uploads/compendium/intro.mp4`;
+// Значение: JSON {"v": "<intro_version>"} — флаг «отключить» привязан к
+// ролику: заменили видео → отпечаток с сервера (/me.intro_version) другой →
+// флаг слетает, заставка крутится ещё раз (просьба хозяина 30.09). Старый
+// формат "1" (до 2.3.16) — флаг от ПРЕЖНЕГО ролика: 2.3.16 привёз новый,
+// поэтому «1» тоже снимается и заставка играет раз, как у всех (ревью
+// 01.10: молчаливая привязка «1» к новому ролику лишала бы её именно тех,
+// ради кого хозяин менял видео).
 const INTRO_OFF_KEY = "gandolium.introOff";
+// Последний известный отпечаток ролика — им же бьём кэш: src ролика несёт
+// ?v=<отпечаток>, новый файл на сервере = новый URL, старая копия из
+// HTTP-кэша Electron не подсунется.
+const INTRO_VERSION_KEY = "gandolium.introVersion";
+
+function readIntroVersion(): string | null {
+  try { return localStorage.getItem(INTRO_VERSION_KEY); } catch { return null; }
+}
+
+function readIntroOffRaw(): string | null {
+  try { return localStorage.getItem(INTRO_OFF_KEY); } catch { return null; }
+}
 
 function readIntroOff(): boolean {
-  try { return localStorage.getItem(INTRO_OFF_KEY) === "1"; } catch { return false; }
+  return !!readIntroOffRaw();
 }
 
 // До полуночи по МСК (UTC+3) — момент ротации ежедневок
@@ -55,7 +77,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
   const isNeo = theme === "neo";
   const mono = { fontFamily: "var(--font-mono)" };
   const [data, setData] = useState<CompendiumMe | null>(null);
-  const [tab, setTab] = useState<"quests" | "season" | "bets" | "archive" | "trophies" | "cosmetics">("quests");
+  const [tab, setTab] = useState<"quests" | "season" | "bets" | "archive" | "trophies" | "bingo" | "cosmetics">("quests");
   const [betsTick, setBetsTick] = useState(0);
   // Панель приза перечитывается по финальной карточке и в полночь МСК
   // (подсказки открываются 8/15/22-го — на открытом экране иначе не появятся)
@@ -71,7 +93,9 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
   const [error, setError] = useState("");
   const [introOff, setIntroOffState] = useState(readIntroOff);
   const [showIntro, setShowIntro] = useState(() => !readIntroOff());
+  const [introVersion, setIntroVersion] = useState<string | null>(readIntroVersion);
   const introRef = useRef<HTMLVideoElement>(null);
+  const introSrc = introVersion ? `${INTRO_URL}?v=${encodeURIComponent(introVersion)}` : INTRO_URL;
 
   function introDone() {
     setShowIntro(false);
@@ -80,9 +104,27 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
   function setIntroOff(off: boolean) {
     setIntroOffState(off);
     try {
-      if (off) localStorage.setItem(INTRO_OFF_KEY, "1");
+      if (off) localStorage.setItem(INTRO_OFF_KEY, introVersion ? JSON.stringify({ v: introVersion }) : "1");
       else localStorage.removeItem(INTRO_OFF_KEY);
     } catch { /* приватный режим — переживём */ }
+  }
+
+  // Сверить сохранённый флаг с отпечатком ролика: другой отпечаток (или
+  // старый формат «1» без отпечатка — флаг от прежнего ролика) = видео
+  // сменили, флаг снимаем и показываем заставку.
+  function reconcileIntro(v: string | undefined) {
+    if (!v) return;
+    setIntroVersion(v);
+    try { localStorage.setItem(INTRO_VERSION_KEY, v); } catch { /* ок */ }
+    const raw = readIntroOffRaw();
+    if (!raw) return;
+    let stored: string | null = null;
+    try { stored = raw === "1" ? null : (JSON.parse(raw)?.v ?? null); } catch { stored = null; }
+    if (stored !== v) {
+      try { localStorage.removeItem(INTRO_OFF_KEY); } catch { /* ок */ }
+      setIntroOffState(false);
+      setShowIntro(true);
+    }
   }
 
   // Автоплей со звуком: клик по пункту меню даёт user activation, но если
@@ -95,13 +137,17 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
       v.muted = true;
       v.play().catch(() => setShowIntro(false));
     });
-  }, [showIntro]);
+    // introSrc в зависимостях: смена ?v= на лету (отпечаток приехал с /me,
+    // пока ролик уже крутился) перезагружает <video> в паузе — без повторного
+    // play() висел бы первый кадр (ревью 01.10)
+  }, [showIntro, introSrc]);
 
   async function load() {
     try {
       const res = await compendiumApi.me();
       setData(res.data);
       setError("");
+      reconcileIntro(res.data.intro_version);
     } catch {
       setError("Не удалось загрузить компендиум");
     }
@@ -193,7 +239,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
           {/* Крутится по кругу — выход только по кнопке (по просьбе Гандолы) */}
           <video
             ref={introRef}
-            src={INTRO_URL}
+            src={introSrc}
             playsInline
             loop
             onError={() => setShowIntro(false)}
@@ -218,14 +264,18 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
           </div>
         </div>
       )}
-      <div style={{ ...s.header, ...(isNeo ? { borderBottomColor: "var(--accent)" } : {}) }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+      <div style={{ ...s.header, position: "relative", ...(isNeo ? { borderBottomColor: "var(--accent)" } : {}) }}>
+        {/* Октябрь: паутина по углам и паучок — тема приходит с сервера */}
+        {data?.theme === "halloween" && <HalloweenDecor />}
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, position: "relative", zIndex: 2 }}>
           <span style={{ ...s.title, ...mono, color: "var(--accent)", letterSpacing: "0.1em" }}>
             {isNeo ? "// ГАНДОЛИУМ" : <><Gas size={16} style={{ marginRight: 6 }} />ГАНДОЛИУМ</>}
           </span>
-          <span style={{ ...mono, color: "var(--text-muted)", fontSize: 12 }}>сезон · {seasonTitle}</span>
+          <span style={{ ...mono, color: "var(--text-muted)", fontSize: 12 }}>
+            сезон · {seasonTitle}{data?.theme === "halloween" && <> · <Emoji e="🎃" /></>}
+          </span>
         </div>
-        <button style={{ ...s.closeBtn, ...mono, ...(isNeo ? { color: "var(--accent)" } : {}) }} onClick={onClose}>✕</button>
+        <button style={{ ...s.closeBtn, ...mono, position: "relative", zIndex: 2, ...(isNeo ? { color: "var(--accent)" } : {}) }} onClick={onClose}>✕</button>
       </div>
 
       <div style={s.content}>
@@ -262,7 +312,9 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
                   <span style={{ ...mono, fontSize: 12, color: "var(--text-secondary)" }}><Gas /> {data.gas} газа</span>
                   <span style={{ ...mono, fontSize: 11, color: "var(--text-muted)" }}>
-                    {data.level_progress}/{data.level_target} до уровня {(data.level || 0) + 1}
+                    {data.level_cap && (data.level || 0) >= data.level_cap
+                      ? `МАКС · ${data.level_cap}-й уровень`
+                      : `${data.level_progress}/${data.level_target} до уровня ${(data.level || 0) + 1}`}
                   </span>
                 </div>
                 <div style={{ height: 8, background: "var(--bg-tertiary)", borderRadius: isNeo ? 0 : 4, overflow: "hidden", border: isNeo ? "1px solid var(--border)" : "none" }}>
@@ -281,7 +333,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
 
             {/* --- вкладки --- */}
             <div style={{ display: "flex", gap: 6, margin: "18px 0 14px", flexWrap: "wrap" }}>
-              {([["quests", "ЗАДАНИЯ"], ["season", "СЕЗОН"], ["bets", "СТАВКИ"], ["trophies", "ТРОФЕИ"], ["cosmetics", "КОСМЕТИКА"], ["archive", "АРХИВ"]] as const).map(([key, label]) => (
+              {([["quests", "ЗАДАНИЯ"], ["season", "СЕЗОН"], ["bets", "СТАВКИ"], ["trophies", "ТРОФЕИ"], ["bingo", "БИНГО"], ["cosmetics", "КОСМЕТИКА"], ["archive", "АРХИВ"]] as const).map(([key, label]) => (
                 <button
                   key={key}
                   onClick={() => {
@@ -328,7 +380,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                 <QuestGroup isNeo={isNeo} title="АНТИ-АЧИВКИ" meta="выдаются сами, отказаться нельзя" quests={data.anti || []} blood />
                 <p style={{ ...mono, color: "var(--text-muted)", fontSize: 11.5, marginTop: 16 }}>
                   📼 — нужен парс реплея (доезжает через пару минут после катки) ·
-                  ещё есть 12 скрытых пасхалок — узнаешь, когда триггернёшь 🔒
+                  ещё есть 20 скрытых пасхалок — узнаешь, когда триггернёшь; открытые собираются во вкладке БИНГО 🔒
                 </p>
               </>
             )}
@@ -371,10 +423,10 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                           {r.username[0]?.toUpperCase()}
                         </div>
                       )}
-                      <span style={{ ...mono, flex: 1, fontWeight: 700, fontSize: 13.5, color: r.comp_color || "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {r.username}{r.comp_badge && <Gas size={11} style={{ marginLeft: 4 }} />}{r.user_id === currentUser.id ? " (ты)" : ""}
+                      <span style={{ ...mono, flex: 1, fontWeight: 700, fontSize: 13.5, color: r.comp_color || "var(--text-primary)", ...glowStyle(r), overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {r.username}<CompBadge user={r} size={11} /><CompStar user={r} />{r.user_id === currentUser.id ? " (ты)" : ""}
                         {dotaPlaying.has(r.user_id) && <span title="Сейчас в Доте" style={{ marginLeft: 5, color: "var(--accent)" }}><Icon name="pad" size={12} /></span>}
-                        {r.comp_title && <span style={{ color: GOLD, fontWeight: 500, fontSize: 11, marginLeft: 6 }}>«{r.comp_title}»</span>}
+                        {titleOf(r) && <span style={{ color: GOLD, fontWeight: 500, fontSize: 11, marginLeft: 6 }}>«{titleOf(r)}»</span>}
                       </span>
                       <DotaRankBadge rankTier={r.rank_tier} leaderboardRank={r.leaderboard_rank} isNeo={isNeo} size="sm" />
                       <span title="Заданий закрыто" style={{ ...mono, fontSize: 11.5, color: "var(--text-muted)" }}>✓{r.quests_done}</span>
@@ -477,6 +529,8 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                 onSaved={(c) => setData((prev) => (prev ? { ...prev, cosmetics: c } : prev))}
               />
             )}
+
+            {tab === "bingo" && <BingoTab isNeo={isNeo} cells={data.bingo} />}
 
             {tab === "trophies" && (
               <div style={s.panel(isNeo)}>
@@ -752,10 +806,13 @@ function CosmeticsTab({ isNeo, cos, onSaved }: {
   const mono = { fontFamily: "var(--font-mono)" };
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [customTitle, setCustomTitle] = useState(cos.extra?.custom_title ?? "");
   const lvl = cos.max_level;
   const U = cos.unlocks;
+  const ex = cos.extra ?? {};
+  const allColors = [...cos.palette, ...(cos.palette2 ?? [])];
 
-  async function save(patch: { badge?: boolean; title?: string; color?: string; frame?: string }) {
+  async function save(patch: { badge?: boolean; title?: string; color?: string; frame?: string; extra?: Record<string, unknown> }) {
     if (busy) return;
     setBusy(true);
     setErr("");
@@ -853,9 +910,31 @@ function CosmeticsTab({ isNeo, cos, onSaved }: {
             />
           ))}
         </div>
+        {/* Вторая палитра (ур.14) — тыква, кровь, яд, лёд, кость */}
+        {(cos.palette2?.length ?? 0) > 0 && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
+            <span style={{ ...mono, fontSize: 11, color: lvl < (U.palette2 ?? 14) ? "var(--text-muted)" : "var(--accent)" }}>
+              {lvl < (U.palette2 ?? 14) ? <><Icon name="lock" size={10} style={{ marginRight: 3 }} />{U.palette2 ?? 14} · вторая палитра</> : "вторая палитра"}
+            </span>
+            {cos.palette2!.map((c) => (
+              <button
+                key={c}
+                title={lvl < (U.palette2 ?? 14) ? `Откроется на уровне ${U.palette2 ?? 14}` : c}
+                onClick={() => lvl >= (U.palette2 ?? 14) && save({ color: c })}
+                disabled={busy || lvl < (U.palette2 ?? 14)}
+                style={{
+                  width: 26, height: 26, background: c, cursor: lvl < (U.palette2 ?? 14) ? "not-allowed" : "pointer",
+                  opacity: lvl < (U.palette2 ?? 14) ? 0.35 : 1,
+                  border: cos.color === c ? "2.5px solid var(--text-primary)" : "2px solid transparent",
+                  borderRadius: isNeo ? 0 : "50%",
+                }}
+              />
+            ))}
+          </div>
+        )}
       </Row>
 
-      <Row need={U.frame_lime ?? 8} name="Рамка аватарки" desc="Лаймовая — «ветеран сезона»">
+      <Row need={U.frame_lime ?? 8} name="Рамка аватарки" desc="Лаймовая — «ветеран сезона», переливающаяся — 12-й, легендарная — 25-й">
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           <button style={chip(!cos.frame, false)} onClick={() => save({ frame: "" })} disabled={busy}>без рамки</button>
           <button style={chip(cos.frame === "lime", false)} onClick={() => save({ frame: "lime" })} disabled={busy}>лаймовая</button>
@@ -866,6 +945,14 @@ function CosmeticsTab({ isNeo, cos, onSaved }: {
             title={lvl < (U.frame_animated ?? 12) ? `Откроется на уровне ${U.frame_animated ?? 12}` : ""}
           >
             переливающаяся{lvl < (U.frame_animated ?? 12) ? <> <Icon name="lock" size={10} />{U.frame_animated ?? 12}</> : ""}
+          </button>
+          <button
+            style={chip(cos.frame === "legend", lvl < (U.frame_legend ?? 25))}
+            onClick={() => lvl >= (U.frame_legend ?? 25) && save({ frame: "legend" })}
+            disabled={busy || lvl < (U.frame_legend ?? 25)}
+            title={lvl < (U.frame_legend ?? 25) ? `Откроется на уровне ${U.frame_legend ?? 25}` : "Золото и фиолет, пульсирует"}
+          >
+            легендарная{lvl < (U.frame_legend ?? 25) ? <> <Icon name="lock" size={10} />{U.frame_legend ?? 25}</> : ""}
           </button>
         </div>
       </Row>
@@ -899,6 +986,78 @@ function CosmeticsTab({ isNeo, cos, onSaved }: {
 
       <Row need={U.dota_gold ?? 10} name="Золотой /dota" desc="Твой зов «Газуем в дотан» — с короной и золотой рамкой. Включается сам.">
         <span style={{ ...mono, fontSize: 12, color: GOLD }}>👑 активен — просто напиши /dota</span>
+      </Row>
+
+      {/* --- Октябрь 2026: уровни 13–30 --- */}
+      <Row need={U.badge_emoji ?? 13} name="Свой значок у ника" desc="Вместо ⛽ — из набора; виден в чате, списке и таблице сезона">
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <button style={chip(!ex.badge_emoji, false)} onClick={() => save({ extra: { badge_emoji: "" } })} disabled={busy}>
+            {cos.badge ? <>обычный <Gas size={11} /></> : "без значка"}
+          </button>
+          {(cos.badge_emojis ?? []).map((e) => (
+            <button
+              key={e}
+              style={{ ...chip(ex.badge_emoji === e, false), padding: "4px 8px", fontSize: 15 }}
+              onClick={() => save({ extra: { badge_emoji: e } })}
+              disabled={busy}
+            >
+              <Emoji e={e} />
+            </button>
+          ))}
+        </div>
+      </Row>
+
+      <Row need={U.glow ?? 15} name="Свечение ника" desc="Ник светится цветом ника (или акцентом) — в чате и списках">
+        <div style={{ display: "flex", gap: 6 }}>
+          <button style={chip(!!ex.glow, false)} onClick={() => save({ extra: { glow: !ex.glow } })} disabled={busy}>
+            {ex.glow ? (isNeo ? "[ВКЛ]" : "Вкл") : (isNeo ? "[ВЫКЛ]" : "Выкл")}
+          </button>
+        </div>
+      </Row>
+
+      <Row need={U.bubble ?? 17} name="Обводка сообщений" desc="Цветная рамка вокруг твоих пузырей — видят все">
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <button style={chip(!ex.bubble, false)} onClick={() => save({ extra: { bubble: "" } })} disabled={busy}>без обводки</button>
+          {allColors.map((c) => (
+            <button
+              key={c}
+              title={c}
+              onClick={() => save({ extra: { bubble: c } })}
+              disabled={busy}
+              style={{
+                width: 26, height: 26, background: "transparent", cursor: "pointer",
+                border: `2.5px solid ${c}`, boxShadow: ex.bubble === c ? `0 0 0 2px var(--text-primary)` : "none",
+                borderRadius: isNeo ? 0 : "50%",
+              }}
+            />
+          ))}
+        </div>
+      </Row>
+
+      <Row need={U.custom_title ?? 19} name="Свой титул" desc="Любой текст до 20 символов — важнее заработанного">
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <input
+            value={customTitle}
+            maxLength={20}
+            onChange={(e) => setCustomTitle(e.target.value)}
+            placeholder="Тыквенный лорд"
+            style={{ ...mono, background: "var(--bg-input)", color: "var(--text-primary)", border: "1px solid var(--border)", borderRadius: isNeo ? 0 : 6, padding: "6px 10px", fontSize: 12, width: 200 }}
+          />
+          <button style={chip(false, false)} onClick={() => save({ extra: { custom_title: customTitle.trim() } })} disabled={busy || !customTitle.trim()}>
+            {isNeo ? "[НАДЕТЬ]" : "Надеть"}
+          </button>
+          {ex.custom_title && (
+            <button style={chip(false, false)} onClick={() => { setCustomTitle(""); save({ extra: { custom_title: "" } }); }} disabled={busy}>снять</button>
+          )}
+        </div>
+      </Row>
+
+      <Row need={U.star ?? 30} name="Звезда легенды" desc="⭐ после ника — потолок Гандолиума">
+        <div style={{ display: "flex", gap: 6 }}>
+          <button style={chip(!!ex.star, false)} onClick={() => save({ extra: { star: !ex.star } })} disabled={busy}>
+            {ex.star ? (isNeo ? "[ВКЛ]" : "Вкл") : (isNeo ? "[ВЫКЛ]" : "Выкл")}
+          </button>
+        </div>
       </Row>
 
       {err && <p style={{ ...mono, color: BLOOD, fontSize: 12, padding: "10px 14px", margin: 0 }}>{err}</p>}
@@ -1257,7 +1416,7 @@ function QuestGroup({ isNeo, title, meta, quests, pool, blood, accent }: {
               )}
             </div>
             <span style={{ ...mono, fontWeight: 800, fontSize: 12.5, color: blood ? BLOOD : "var(--accent)", whiteSpace: "nowrap" }}>
-              {blood ? "+" : ""}{q.gas} <Gas />
+              {blood && q.gas >= 0 ? "+" : ""}{q.gas} <Gas />
 
             </span>
           </div>

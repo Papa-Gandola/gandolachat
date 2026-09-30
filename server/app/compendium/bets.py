@@ -93,20 +93,29 @@ async def recalc_max_level(db, user_id: int) -> None:
     «вечный» максимум — прошлые сезоны заморожены и не сгорают, но пик
     текущего сезона проигрывается вместе с газом. Несоответствующая
     надетая косметика слетает (кроме наград за МЕСТО: подиумные рамки и
-    чемпионские титулы вечны). Не коммитит."""
-    peak_res = await db.execute(
-        select(func.max(CompendiumProfile.gas))
+    чемпионские титулы вечны). Не коммитит.
+
+    Уровень каждого сезона — по ЕГО шкале (engine.level_for_gas с season):
+    сентябрь-2026 и раньше считались линейкой 100 газа/уровень без потолка,
+    а косметика там кончалась на 12-м — поэтому старые сезоны в зачёт
+    максимума идут не выше 12 (миграция 0016 так же срезала колонку). Всё
+    новое (13–30) зарабатывается по новой кривой с октября."""
+    from app.compendium.engine import level_for_cosmetics
+    prof_res = await db.execute(
+        select(CompendiumProfile.season, CompendiumProfile.gas)
         .where(CompendiumProfile.user_id == user_id, CompendiumProfile.gas > 0)
     )
-    peak = peak_res.scalar() or 0
-    lvl = level_for_gas(peak) if peak > 0 else 0
+    lvl = 0
+    for season, gas in prof_res.all():
+        # Единое правило зачёта (старые сезоны ≤12) — там же, что у поллера
+        lvl = max(lvl, level_for_cosmetics(gas, season))
     await db.execute(
         update(User).where(User.id == user_id).values(comp_max_level=lvl)
     )
 
     # Слетание косметики ниже порога. UNLOCKS живут в api.compendium —
     # рантайм-импорт (модульный сделал бы цикл: api импортирует bets).
-    from app.api.compendium import UNLOCKS
+    from app.api.compendium import UNLOCKS, NAME_PALETTE_2, LEVEL_FRAMES
     user_res = await db.execute(
         select(User).where(User.id == user_id).execution_options(populate_existing=True)
     )
@@ -130,10 +139,25 @@ async def recalc_max_level(db, user_id: int) -> None:
     if user.comp_color and lvl < UNLOCKS["color"]:
         user.comp_color = None
         changed = True
-    if user.comp_frame in ("lime", "animated"):
-        need = UNLOCKS["frame_lime"] if user.comp_frame == "lime" else UNLOCKS["frame_animated"]
-        if lvl < need:
+    if user.comp_color and user.comp_color in NAME_PALETTE_2 and lvl < UNLOCKS["palette2"]:
+        user.comp_color = None
+        changed = True
+    # Рамки за уровень — по той же карте, что валидация в PATCH /cosmetics
+    # (новая рамка = одна правка LEVEL_FRAMES, а не KeyError тут при ставке)
+    if user.comp_frame in LEVEL_FRAMES:
+        if lvl < UNLOCKS[LEVEL_FRAMES[user.comp_frame]]:
             user.comp_frame = None
+            changed = True
+    extra = dict(user.comp_extra or {})
+    drops = (
+        ("badge_emoji", UNLOCKS["badge_emoji"]), ("glow", UNLOCKS["glow"]),
+        ("bubble", UNLOCKS["bubble"]), ("custom_title", UNLOCKS["custom_title"]),
+        ("star", UNLOCKS["star"]),
+    )
+    for key, need in drops:
+        if extra.get(key) and lvl < need:
+            extra.pop(key, None)
+            user.comp_extra = extra
             changed = True
     if changed:
         await db.flush()

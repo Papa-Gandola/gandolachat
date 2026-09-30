@@ -34,7 +34,9 @@ export interface UserOut {
   comp_badge?: boolean;
   comp_title?: string | null;
   comp_color?: string | null;
-  comp_frame?: string | null; // "lime" | "animated" | подиумные
+  comp_frame?: string | null; // "lime" | "animated" | "legend" | подиумные
+  // Косметика уровней 13–30 (октябрь 2026), см. CompExtra
+  comp_extra?: CompExtra | null;
   // «🎮 в Доте сейчас»: показывать себя (невидимка = false)
   dota_presence_visible?: boolean;
 }
@@ -130,6 +132,15 @@ export const userApi = {
 };
 
 // ==== Компендиум (Гандолиум) ====
+// Косметика уровней 13–30: сервер хранит одним JSON (users.comp_extra)
+export interface CompExtra {
+  badge_emoji?: string;   // ур.13 — свой значок у ника вместо ⛽ (из badge_emojis)
+  glow?: boolean;         // ур.15 — свечение ника
+  bubble?: string;        // ур.17 — цвет обводки своих сообщений
+  custom_title?: string;  // ур.19 — свой титул (≤20 символов)
+  star?: boolean;         // ур.30 — звезда легенды
+}
+
 export interface CompendiumQuest {
   id: string;
   num: number;
@@ -155,14 +166,32 @@ export interface CompendiumTrophy {
   title?: string;
 }
 
+// Клетка «Бинго» тайных: закрытая несёт только id/num (пасхалка — тайна),
+// открытая — название, описание, газ, дата первого открытия и сколько раз
+export interface CompendiumBingoCell {
+  id: string;
+  num: number;
+  open: boolean;
+  name?: string;
+  desc?: string;
+  gas?: number;
+  title?: string;
+  first_at?: string;
+  count?: number;
+}
+
 export interface CompendiumCosmetics {
   max_level: number;
+  level_cap?: number;          // потолок уровней (30 с октября 2026)
   badge: boolean;
   title: string | null;
   color: string | null;
   frame: string | null;
+  extra?: CompExtra;           // косметика 13–30
   earned_titles: string[];
   palette: string[];
+  palette2?: string[];         // вторая палитра (ур.14)
+  badge_emojis?: string[];     // набор значков-эмодзи (ур.13)
   unlocks: Record<string, number>;
   // Рамки за подиум финала сезона (место 1/2/3 в любом сезоне)
   podium_frames?: { gold: boolean; silver: boolean; bronze: boolean };
@@ -189,10 +218,15 @@ export interface CompendiumMe {
   linked: boolean;
   cosmetics?: CompendiumCosmetics;
   season: string;
+  // Тема сезона ("halloween" в октябре) и отпечаток ролика-заставки:
+  // сменился → заставку показать заново, даже кто её отключал
+  theme?: string | null;
+  intro_version?: string;
   gas?: number;
   level?: number;
   level_progress?: number;
   level_target?: number;
+  level_cap?: number;
   matches?: number;
   wins?: number;
   rank_tier?: number | null;
@@ -206,6 +240,7 @@ export interface CompendiumMe {
   team?: CompendiumQuest[];
   anti?: CompendiumQuest[];
   trophies?: CompendiumTrophy[];
+  bingo?: CompendiumBingoCell[];   // «Бинго» тайных — только своё, за всё время
 }
 
 export interface CompendiumSeasonRow {
@@ -222,6 +257,7 @@ export interface CompendiumSeasonRow {
   comp_color?: string | null;
   comp_frame?: string | null;
   comp_badge?: boolean;
+  comp_extra?: CompExtra | null;
 }
 
 // === Ставки Гандолиума ===
@@ -299,8 +335,9 @@ export const compendiumApi = {
   updatePrize: (id: number, data: SeasonPrizeIn) => api.patch<SeasonPrize>(`/api/compendium/prizes/${id}`, data),
   deletePrize: (id: number) => api.delete<{ ok: boolean }>(`/api/compendium/prizes/${id}`),
   drawPrize: () => api.post<SeasonPrizeTeaser>("/api/compendium/prize/draw"),
-  // ""/false = снять; надеть можно только открытое уровнем
-  updateCosmetics: (data: { badge?: boolean; title?: string; color?: string; frame?: string }) =>
+  // ""/false = снять; надеть можно только открытое уровнем. extra — частичное
+  // обновление косметики 13–30 (пустое значение ключа = снять)
+  updateCosmetics: (data: { badge?: boolean; title?: string; color?: string; frame?: string; extra?: Partial<CompExtra> }) =>
     api.patch<CompendiumCosmetics>("/api/compendium/cosmetics", data),
   season: () => api.get<{ season: string; rows: CompendiumSeasonRow[]; me: number }>("/api/compendium/season"),
   seasons: () => api.get<SeasonArchive[]>("/api/compendium/seasons"),

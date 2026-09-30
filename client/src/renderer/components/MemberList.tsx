@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { ChatOut, UserOut, userApi, chatApi } from "../services/api";
-import { CompBadge, CompTitle } from "./cosmetics";
+import { CompBadge, CompStar, CompTitle, glowStyle } from "./cosmetics";
 import { useTheme } from "../services/theme";
 import { useDotaPlaying } from "../services/presence";
 import Icon from "./Icon";
@@ -48,10 +48,11 @@ export default function MemberList({ chat, currentUser, onChatUpdate, onDeleteCh
           <div key={m.id} style={{ ...s.member, ...(isNeo ? { borderRadius: 0 } : {}) }}>
             <Avatar name={m.username} url={m.avatar_url} isNeo={isNeo} />
             <div style={{ minWidth: 0, flex: 1 }}>
-              <span style={{ ...s.name, ...mono, display: "block", ...(m.comp_color ? { color: m.comp_color } : {}) }}>
+              <span style={{ ...s.name, ...mono, display: "block", ...(m.comp_color ? { color: m.comp_color } : {}), ...glowStyle(m) }}>
                 {isNeo ? `@${m.username}` : m.username}
                 {m.id === currentUser.id ? (isNeo ? "_you" : " (вы)") : ""}
                 <CompBadge user={m} size={10} />
+                <CompStar user={m} size={10} />
                 {dotaPlaying.has(m.id) && (
                   <span title="Сейчас в Доте" style={{ marginLeft: 4, color: "var(--accent)", display: "inline-flex", verticalAlign: "-0.05em" }}><Icon name="pad" size={12} /></span>
                 )}

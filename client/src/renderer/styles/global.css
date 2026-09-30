@@ -423,6 +423,16 @@ body.theme-neo .date-divider .label {
 .comp-frame-animated {
   animation: comp-frame-hue 4s linear infinite;
 }
+/* Легендарная рамка (ур.25, октябрь 2026): золото ↔ фиолет, медленный пульс */
+@keyframes comp-frame-legend {
+  0%   { border-color: #ffd24a; box-shadow: 0 0 10px rgba(255, 210, 74, 0.55), 0 0 22px rgba(178, 60, 255, 0.25); }
+  50%  { border-color: #b23cff; box-shadow: 0 0 14px rgba(178, 60, 255, 0.6), 0 0 26px rgba(255, 210, 74, 0.25); }
+  100% { border-color: #ffd24a; box-shadow: 0 0 10px rgba(255, 210, 74, 0.55), 0 0 22px rgba(178, 60, 255, 0.25); }
+}
+.comp-frame-legend {
+  animation: comp-frame-legend 3s ease-in-out infinite;
+}
 @media (prefers-reduced-motion: reduce) {
   .comp-frame-animated { animation: none; }
+  .comp-frame-legend { animation: none; box-shadow: 0 0 12px rgba(255, 210, 74, 0.5); }
 }

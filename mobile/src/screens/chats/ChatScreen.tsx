@@ -1860,7 +1860,7 @@ function QuestCardMobile({ theme, mine, payload }: {
           }}
         >
           <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "800", color: GOLD, letterSpacing: 0.5 }}>
-            🏆 ИТОГИ СЕЗОНА
+            🏆 ИТОГИ СЕЗОНА{payload.theme === "halloween" ? " 🎃" : ""}
           </Text>
           <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.colors.inkDim, marginTop: 1 }}>
             Сезон {payload.season_name || payload.season} закрыт · игроков: {payload.players ?? podium.length}
@@ -1918,7 +1918,7 @@ function QuestCardMobile({ theme, mine, payload }: {
                 {secret ? "🔓 " : ""}{it.name}
               </Text>
               <Text style={{ fontFamily: theme.fonts.mono, fontSize: 12, fontWeight: "800", color: isAnti ? BLOOD : secret ? GOLD : theme.colors.accent }}>
-                +{it.gas} ⛽
+                {it.gas < 0 ? "" : "+"}{it.gas} ⛽
               </Text>
             </View>
           );

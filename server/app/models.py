@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import String, Boolean, ForeignKey, DateTime, Text, Integer, BigInteger, Table, Column, UniqueConstraint, Index, text
+from sqlalchemy import String, Boolean, ForeignKey, DateTime, Text, Integer, BigInteger, Table, Column, UniqueConstraint, Index, text, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -50,7 +50,10 @@ class User(Base):
     comp_badge: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")  # ⛽ у ника (ур.2)
     comp_title: Mapped[str | None] = mapped_column(String(40), nullable=True)   # титул из заработанных (ур.4)
     comp_color: Mapped[str | None] = mapped_column(String(7), nullable=True)    # цвет ника из палитры (ур.6)
-    comp_frame: Mapped[str | None] = mapped_column(String(16), nullable=True)   # рамка: lime (ур.8) | animated (ур.12)
+    comp_frame: Mapped[str | None] = mapped_column(String(16), nullable=True)   # рамка: lime (ур.8) | animated (ур.12) | legend (ур.25) | gold/silver/bronze (подиум)
+    # Косметика октября-2026 (уровни 13–30) одним JSON, чтобы не плодить колонки:
+    # {badge_emoji, glow, bubble, custom_title, star} — см. api.compendium.UNLOCKS
+    comp_extra: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     messages: Mapped[list["Message"]] = relationship(back_populates="sender", cascade="all, delete-orphan")
     chats: Mapped[list["Chat"]] = relationship(secondary=chat_members, back_populates="members")

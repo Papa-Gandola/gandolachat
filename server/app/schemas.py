@@ -33,6 +33,8 @@ class UserOut(BaseModel):
     comp_title: str | None = None
     comp_color: str | None = None
     comp_frame: str | None = None
+    # Косметика уровней 13–30 (октябрь 2026): badge_emoji, glow, bubble, custom_title, star
+    comp_extra: dict | None = None
 
     model_config = {"from_attributes": True}
 

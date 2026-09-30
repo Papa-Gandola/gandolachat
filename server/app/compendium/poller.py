@@ -28,9 +28,10 @@ from app import opendota
 from app.compendium import engine
 from app.compendium.engine import (
     UserCtx, TeamCtx, Completion,
-    season_of, day_key_of, week_key_of, current_season, level_for_gas, to_msk, MSK,
+    season_of, day_key_of, week_key_of, current_season, level_for_gas, level_for_cosmetics, to_msk, MSK,
 )
 from app.compendium.quests import BY_ID, QUESTS
+from app.compendium.halloween import quest_name
 from app.ws.manager import manager
 
 QUEST_CARD_MARKER = "/quest_card"
@@ -188,13 +189,18 @@ async def _apply_and_announce(db, user: User, comps: list[Completion], season: s
             period_key=c.period_key, gas=c.gas, match_id=c.match_id,
         ))
     prof = await _get_or_create_profile(db, user.id, season)
-    level_before = level_for_gas(prof.gas)
-    prof.gas += sum(c.gas for c in comps)
-    level_after = level_for_gas(prof.gas)
+    level_before = level_for_gas(prof.gas, season)
+    # Штрафные анти («Чел, ну это жесть», «Ливер») уносят газ, но не ниже нуля
+    prof.gas = max(0, prof.gas + sum(c.gas for c in comps))
+    level_after = level_for_gas(prof.gas, season)
     gas_total = prof.gas
-    # Разблокировки косметики — по высшему уровню за всё время
-    if level_after > (user.comp_max_level or 0):
-        user.comp_max_level = level_after
+    # Разблокировки косметики — по высшему уровню за всё время, но в зачёт
+    # идёт КАПНУТЫЙ уровень (старые сезоны ≤12): level_after остаётся честным
+    # для карточки, а comp_max_level не обходит срез миграции 0016 поздним
+    # парсом сентябрьской катки (ревью 01.10)
+    cos_lvl = level_for_cosmetics(prof.gas, season)
+    if cos_lvl > (user.comp_max_level or 0):
+        user.comp_max_level = cos_lvl
     await db.commit()
 
     # 2) карточки: обычные+пасхалки одной, анти — отдельной (прожарка),
@@ -209,7 +215,8 @@ async def _apply_and_announce(db, user: User, comps: list[Completion], season: s
         out = []
         for c in lst:
             q = BY_ID[c.quest_id]
-            item = {"name": q.name, "gas": c.gas, "cat": q.category}
+            # Название — с сезонной шкуркой (октябрь — хеллоуин)
+            item = {"name": quest_name(q, season), "gas": c.gas, "cat": q.category}
             if q.title:
                 item["title"] = q.title
             out.append(item)
@@ -300,7 +307,7 @@ async def _handle_team(db, row: DotaMatch, user: User) -> None:
             ))
         prof = await _get_or_create_profile(db, uid, season)
         prof.gas += sum(c.gas for c in comps)
-        lvl = level_for_gas(prof.gas)
+        lvl = level_for_cosmetics(prof.gas, season)  # в зачёт — капнутый (см. _apply_and_announce)
         member = users.get(uid)
         if member is not None and lvl > (member.comp_max_level or 0):
             member.comp_max_level = lvl
@@ -321,7 +328,7 @@ async def _handle_team(db, row: DotaMatch, user: User) -> None:
                 "v": 1, "kind": "team",
                 "user_id": user.id, "username": user.username,
                 "names": names, "who": who,
-                "items": [{"name": q.name, "gas": q.gas, "cat": "team"}],
+                "items": [{"name": quest_name(q, season), "gas": q.gas, "cat": "team"}],
             }
             push_title = push_body = None
             if q.special == "fullstack":
