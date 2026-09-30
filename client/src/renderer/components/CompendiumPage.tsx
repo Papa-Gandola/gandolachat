@@ -13,6 +13,7 @@ import { useDotaPlaying } from "../services/presence";
 import Icon, { Gas } from "./Icon";
 import type { IconName } from "./icons";
 import { BingoTab } from "./BingoTab";
+import { CARD_BACKS, CardBackFace } from "./CardBack";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 const BLOOD = "#ff6a5e";
@@ -41,9 +42,22 @@ const INTRO_OFF_KEY = "gandolium.introOff";
 // ?v=<отпечаток>, новый файл на сервере = новый URL, старая копия из
 // HTTP-кэша Electron не подсунется.
 const INTRO_VERSION_KEY = "gandolium.introVersion";
+// Громкость заставки, 0..1; по умолчанию 50% — ролик на всю после запуска
+// приложения бил по ушам (хозяин, 02.10)
+const INTRO_VOLUME_KEY = "gandolium.introVolume";
+const INTRO_VOLUME_DEFAULT = 0.5;
 
 function readIntroVersion(): string | null {
   try { return localStorage.getItem(INTRO_VERSION_KEY); } catch { return null; }
+}
+
+function readIntroVolume(): number {
+  try {
+    const raw = localStorage.getItem(INTRO_VOLUME_KEY);
+    if (raw === null) return INTRO_VOLUME_DEFAULT;
+    const v = Number(raw);
+    return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : INTRO_VOLUME_DEFAULT;
+  } catch { return INTRO_VOLUME_DEFAULT; }
 }
 
 function readIntroOffRaw(): string | null {
@@ -96,6 +110,16 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
   const [introVersion, setIntroVersion] = useState<string | null>(readIntroVersion);
   const introRef = useRef<HTMLVideoElement>(null);
   const introSrc = introVersion ? `${INTRO_URL}?v=${encodeURIComponent(introVersion)}` : INTRO_URL;
+  const [introVolume, setIntroVolumeState] = useState(readIntroVolume);
+  const introVolumeRef = useRef(introVolume);
+
+  function setIntroVolume(v: number) {
+    const vol = Math.min(1, Math.max(0, v));
+    introVolumeRef.current = vol;
+    setIntroVolumeState(vol);
+    if (introRef.current) introRef.current.volume = vol;
+    try { localStorage.setItem(INTRO_VOLUME_KEY, String(vol)); } catch { /* ок */ }
+  }
 
   function introDone() {
     setShowIntro(false);
@@ -133,6 +157,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
     if (!showIntro) return;
     const v = introRef.current;
     if (!v) return;
+    v.volume = introVolumeRef.current;
     v.play().catch(() => {
       v.muted = true;
       v.play().catch(() => setShowIntro(false));
@@ -260,6 +285,15 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                 style={{ accentColor: "var(--accent)", width: 14, height: 14, cursor: "pointer" }}
               />
               больше не показывать
+            </label>
+            <label title="Громкость заставки" style={{ ...mono, display: "flex", alignItems: "center", gap: 7, color: "rgba(255,255,255,0.75)", fontSize: 12, userSelect: "none" }}>
+              <Icon name="volume" size={14} />
+              <input
+                type="range" min={0} max={100} value={Math.round(introVolume * 100)}
+                onChange={(e) => setIntroVolume(Number(e.target.value) / 100)}
+                style={{ width: 110, accentColor: "var(--accent)", cursor: "pointer" }}
+              />
+              <span style={{ minWidth: 34 }}>{Math.round(introVolume * 100)}%</span>
             </label>
           </div>
         </div>
@@ -656,8 +690,13 @@ function BetsTab({ isNeo, refreshTick, currentUserId }: {
     padding: "6px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer",
   });
 
-  const place = async () => {
+  const place = async (allIn: boolean) => {
     if (!target || busy) return;
+    if (allIn) {
+      const who = target.is_me ? "себя" : target.username;
+      const ok = window.confirm(`Поставить ВЕСЬ газ сезона (${ov.my_gas}⛽) на ${who}? Отмены нет, а в чат уйдёт объявление.`);
+      if (!ok) return;
+    }
     setBusy(true);
     setPlaceErr("");
     setPlacedOk("");
@@ -665,16 +704,19 @@ function BetsTab({ isNeo, refreshTick, currentUserId }: {
       const res = await compendiumApi.placeBet({
         target_id: target.user_id, market, side: effSide,
         ...(market === "streak" ? { line: streakLen } : {}),
-        stake: Math.round(Number(stake) || 0),
+        stake: allIn ? ov.my_gas : Math.round(Number(stake) || 0),
+        ...(allIn ? { all_in: true } : {}),
       });
       setOv((prev) => prev ? { ...prev, my_gas: res.data.my_gas, open: [res.data.bet, ...prev.open] } : prev);
-      setPlacedOk(`Принято! ${res.data.bet.label} · ${res.data.bet.stake}⛽ (выплата ×${mult})`);
+      setPlacedOk(`${allIn ? "Ва-банк принят!" : "Принято!"} ${res.data.bet.label} · ${res.data.bet.stake}⛽ (выплата ×${mult})`);
     } catch (e: any) {
       setPlaceErr(e.response?.data?.detail || "Не получилось поставить");
     } finally {
       setBusy(false);
     }
   };
+  // Ва-банк: весь газ сезона мимо потолка, на стрик нельзя (у него свой потолок и ×2^K)
+  const canAllIn = market !== "streak" && ov.my_gas >= ov.stake_min;
 
   const betLine = (b: BetOut, showOutcome: boolean) => (
     <div key={b.id} style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "7px 12px", borderBottom: "1px solid var(--border)" }}>
@@ -753,12 +795,22 @@ function BetsTab({ isNeo, refreshTick, currentUserId }: {
                   />
                   <span style={{ ...mono, fontSize: 11, color: "var(--text-muted)" }}>от {ov.stake_min} до {cap}<Gas size={10} /> · выплата ×{mult}</span>
                   <button
-                    onClick={place}
+                    onClick={() => place(false)}
                     disabled={busy}
                     style={{ ...mono, background: "var(--accent)", color: "var(--accent-text)", border: "none", borderRadius: isNeo ? 0 : 6, padding: "8px 18px", fontSize: 12.5, fontWeight: 800, cursor: "pointer", opacity: busy ? 0.6 : 1 }}
                   >
                     ПОСТАВИТЬ
                   </button>
+                  {market !== "streak" && (
+                    <button
+                      onClick={() => place(true)}
+                      disabled={busy || !canAllIn}
+                      title="Весь газ сезона одной ставкой: потолок не действует, в компендиум-чаты уйдёт объявление"
+                      style={{ ...mono, background: "transparent", color: BLOOD, border: `1px solid ${BLOOD}`, borderRadius: isNeo ? 0 : 6, padding: "7px 14px", fontSize: 12.5, fontWeight: 800, cursor: "pointer", opacity: busy || !canAllIn ? 0.5 : 1, display: "inline-flex", alignItems: "center", gap: 4 }}
+                    >
+                      ВА-БАНК · {ov.my_gas}<Gas size={11} />
+                    </button>
+                  )}
                 </div>
                 {onSelf && (
                   <p style={{ ...mono, fontSize: 11, color: "var(--text-muted)", margin: 0 }}>
@@ -1007,6 +1059,22 @@ function CosmeticsTab({ isNeo, cos, onSaved }: {
         </div>
       </Row>
 
+      <Row need={U.card_back ?? 16} name="Рубашка карт в покере" desc="Соперники видят твои закрытые карты с ней — за столом на компе и в телефоне">
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <button style={chip(!ex.card_back, false)} onClick={() => save({ extra: { card_back: "" } })} disabled={busy}>обычная</button>
+          {(cos.card_backs ?? []).map((b) => (
+            <button
+              key={b}
+              title={CARD_BACKS[b]?.label ?? b}
+              disabled={busy}
+              onClick={() => save({ extra: { card_back: b } })}
+              style={{ padding: 3, background: "transparent", border: `2px solid ${ex.card_back === b ? "var(--accent)" : "transparent"}`, borderRadius: isNeo ? 0 : 8, cursor: "pointer", opacity: busy ? 0.7 : 1 }}
+            >
+              <CardBackFace back={b} w={40} h={56} radius={isNeo ? 0 : 5} />
+            </button>
+          ))}
+        </div>
+      </Row>
       <Row need={U.glow ?? 15} name="Свечение ника" desc="Ник светится цветом ника (или акцентом) — в чате и списках">
         <div style={{ display: "flex", gap: 6 }}>
           <button style={chip(!!ex.glow, false)} onClick={() => save({ extra: { glow: !ex.glow } })} disabled={busy}>

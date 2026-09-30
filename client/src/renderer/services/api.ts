@@ -116,6 +116,9 @@ export interface TokenResponse {
 
 export const userApi = {
   me: () => api.get<TokenResponse>("/api/users/me"),
+  // «Нашёл баг»: описание + хвост логов → файл в ЛС админу (services/logbuffer.ts)
+  sendBugReport: (data: { note: string; log: string; meta: Record<string, unknown> }) =>
+    api.post<{ ok: boolean; chat_ids: number[]; file_name: string }>("/api/users/bug-report", data),
   search: (q: string) => api.get<UserOut[]>(`/api/users/search?q=${encodeURIComponent(q)}`),
   updateProfile: (data: { username?: string; status?: string; about?: string; dota_presence_visible?: boolean }) =>
     api.patch<UserOut>("/api/users/me", data),
@@ -139,6 +142,7 @@ export interface CompExtra {
   bubble?: string;        // ур.17 — цвет обводки своих сообщений
   custom_title?: string;  // ур.19 — свой титул (≤20 символов)
   star?: boolean;         // ур.30 — звезда легенды
+  card_back?: string;     // ур.16 — рубашка карт в покере (из card_backs)
 }
 
 export interface CompendiumQuest {
@@ -192,6 +196,7 @@ export interface CompendiumCosmetics {
   palette: string[];
   palette2?: string[];         // вторая палитра (ур.14)
   badge_emojis?: string[];     // набор значков-эмодзи (ур.13)
+  card_backs?: string[];       // рубашки карт в покере (ур.16)
   unlocks: Record<string, number>;
   // Рамки за подиум финала сезона (место 1/2/3 в любом сезоне)
   podium_frames?: { gold: boolean; silver: boolean; bronze: boolean };
@@ -342,8 +347,9 @@ export const compendiumApi = {
   season: () => api.get<{ season: string; rows: CompendiumSeasonRow[]; me: number }>("/api/compendium/season"),
   seasons: () => api.get<SeasonArchive[]>("/api/compendium/seasons"),
   bets: () => api.get<BetsOverview>("/api/compendium/bets"),
-  placeBet: (data: { target_id: number; market: string; side: string; line?: number; stake: number }) =>
-    api.post<{ bet: BetOut; my_gas: number }>("/api/compendium/bets", data),
+  // all_in: весь газ сезона одной ставкой (stake сервер берёт сам), в чат уходит объявление
+  placeBet: (data: { target_id: number; market: string; side: string; line?: number; stake: number; all_in?: boolean }) =>
+    api.post<{ bet: BetOut; my_gas: number; all_in?: boolean }>("/api/compendium/bets", data),
   user: (userId: number) =>
     api.get<{ user_id: number; username: string; season: string; gas: number; level: number; trophies: CompendiumTrophy[]; rank_tier: number | null; leaderboard_rank: number | null }>(
       `/api/compendium/user/${userId}`
@@ -457,6 +463,7 @@ export interface PokerSeatOut {
   is_active: boolean;
   reentries: number;
   gas_paid: number;
+  card_back?: string | null;   // рубашка карт хозяина места (косметика ур.16)
 }
 
 export interface PokerTableOut {

@@ -208,6 +208,8 @@ from app import notes as _notes
 app.include_router(_notes.router)
 from app.api import polls as _polls
 app.include_router(_polls.router)
+from app.api import bugreport as _bugreport  # «Нашёл баг» — логи файлом в ЛС админу
+app.include_router(_bugreport.router)
 
 
 @app.websocket("/ws")

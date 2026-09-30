@@ -71,7 +71,13 @@ UNLOCKS = {
     "custom_title": 19,   # свой титул, любой текст до 20 символов
     "frame_legend": 25,   # легендарная рамка
     "star": 30,           # звезда легенды у ника
+    # --- фаза 2, первая ласточка (хозяин спросил «где рубашки», 02.10) ---
+    "card_back": 16,      # рубашка карт в покере (из CARD_BACKS) — видят все за столом
 }
+# Рубашки карт в покере (ур.16): рисуют клиенты по имени (десктоп
+# components/CardBack.tsx, мобилка components/CardBack.tsx), сервер только
+# хранит имя и раздаёт его в местах стола (PokerSeatOut.card_back)
+CARD_BACKS = ["lime", "blood", "gold", "pumpkin", "ice", "void"]
 # Палитра Гандолы для цветных ников
 NAME_PALETTE = [
     "#c6ff3d", "#57f287", "#fee75c", "#faa61a", "#ff6a5e",
@@ -141,6 +147,7 @@ def _cosmetics_dict(user: User, earned: list[str], podium: dict | None = None) -
         "palette": NAME_PALETTE,
         "palette2": NAME_PALETTE_2,
         "badge_emojis": BADGE_EMOJI,
+        "card_backs": CARD_BACKS,
         "unlocks": UNLOCKS,
         # Рамки за подиум сезона: заработано местом, не уровнем.
         "podium_frames": podium or {"gold": False, "silver": False, "bronze": False},
@@ -448,6 +455,15 @@ async def update_cosmetics(
                 ex["star"] = True
             else:
                 ex.pop("star", None)
+        if "card_back" in e:
+            v = str(e.get("card_back") or "").strip()
+            if v:
+                _need("card_back", "Рубашка карт")
+                if v not in CARD_BACKS:
+                    raise HTTPException(400, "Такой рубашки нет в наборе")
+                ex["card_back"] = v
+            else:
+                ex.pop("card_back", None)
         current_user.comp_extra = ex or None
 
     await db.commit()
@@ -493,6 +509,10 @@ class BetIn(BaseModel):
     side: str
     line: int | None = None  # только для streak (2/3/5); линии kills/kda считает сервер
     stake: int
+    # Ва-банк (хозяин, 02.10): весь газ сезона одной ставкой, потолок 500 не
+    # действует; в компендиум-чаты уходит объявление с пушем всем. stake при
+    # этом игнорируется — сервер сам берёт остаток.
+    all_in: bool = False
 
 
 def _bet_dict(b: Bet, names: dict[int, str]) -> dict:
@@ -613,9 +633,26 @@ async def place_bet(
     else:
         line = 0
 
-    cap = bets_mod.STREAK_STAKE_MAX[line] if data.market == "streak" else bets_mod.STAKE_MAX
-    if not (bets_mod.STAKE_MIN <= data.stake <= cap):
-        raise HTTPException(400, f"Ставка от {bets_mod.STAKE_MIN} до {cap}⛽ на этот рынок")
+    season = current_season()
+    stake = data.stake
+    if data.all_in:
+        # Ва-банк: весь газ сезона, мимо потолка. На стрик нельзя — там
+        # выплата ×2^K и свой потолок стейка, джекпот бы улетел в космос.
+        if data.market == "streak":
+            raise HTTPException(400, "Ва-банк — только на исход, убийства, KDA или рошанов")
+        gas_res = await db.execute(
+            select(CompendiumProfile.gas).where(
+                CompendiumProfile.user_id == current_user.id,
+                CompendiumProfile.season == season,
+            )
+        )
+        stake = int(gas_res.scalar_one_or_none() or 0)
+        if stake < bets_mod.STAKE_MIN:
+            raise HTTPException(400, f"Для ва-банка нужно хотя бы {bets_mod.STAKE_MIN}⛽")
+    else:
+        cap = bets_mod.STREAK_STAKE_MAX[line] if data.market == "streak" else bets_mod.STAKE_MAX
+        if not (bets_mod.STAKE_MIN <= stake <= cap):
+            raise HTTPException(400, f"Ставка от {bets_mod.STAKE_MIN} до {cap}⛽ на этот рынок")
 
     existing = await db.execute(
         select(Bet.id).where(
@@ -627,8 +664,7 @@ async def place_bet(
     if existing.first() is not None:
         raise HTTPException(400, "У тебя уже есть открытая ставка на этого игрока — дождись развязки")
 
-    season = current_season()
-    ok = await bets_mod.try_debit(db, current_user.id, season, data.stake)
+    ok = await bets_mod.try_debit(db, current_user.id, season, stake)
     if not ok:
         raise HTTPException(400, "Не хватает газа в этом сезоне — катай и закрывай задания")
     # Проигранный (поставленный) газ опускает и «вечный» максимум — решение
@@ -637,7 +673,7 @@ async def place_bet(
 
     bet = Bet(
         bettor_id=current_user.id, target_id=target.id, season=season,
-        market=data.market, side=data.side, line=line, stake=data.stake,
+        market=data.market, side=data.side, line=line, stake=stake,
     )
     db.add(bet)
     try:
@@ -654,6 +690,9 @@ async def place_bet(
     await db.refresh(current_user)
     await _broadcast_profile(db, current_user)
 
+    if data.all_in:
+        await _announce_all_in(db, current_user, target, bet)
+
     prof_res = await db.execute(
         select(CompendiumProfile.gas).where(
             CompendiumProfile.user_id == current_user.id,
@@ -661,7 +700,42 @@ async def place_bet(
         )
     )
     names = {current_user.id: current_user.username, target.id: target.username}
-    return {"bet": _bet_dict(bet, names), "my_gas": prof_res.scalar_one_or_none() or 0}
+    return {"bet": _bet_dict(bet, names), "my_gas": prof_res.scalar_one_or_none() or 0, "all_in": data.all_in}
+
+
+ALL_IN_ROAST = "Чел реально еб*нутый, поверил в себя. Ну верим верим"
+
+
+async def _announce_all_in(db: AsyncSession, bettor: User, target: User, bet: Bet) -> None:
+    """Ва-банк — событие для всех: текст от имени ставящего в его
+    компендиум-чаты + пуш остальным участникам (просьба хозяина 02.10,
+    фраза его же). Ошибка объявления ставку не откатывает — она уже
+    закоммичена."""
+    from app.compendium.poller import _compendium_chats_for
+    from app.models import chat_members
+    from app.push import send_push
+    from app.ws.handler import post_chat_text
+
+    label = bets_mod.describe({"market": bet.market, "side": bet.side, "line": bet.line})
+    who = "себя" if target.id == bettor.id else target.username
+    text = f"🎰 ВА-БАНК: {bettor.username} поставил всё — {bet.stake}⛽ на {who}: {label}.\n{ALL_IN_ROAST}"
+    body = f"{bettor.username} поставил всё ({bet.stake}⛽) на {who}: {label}. {ALL_IN_ROAST}"
+    for chat in await _compendium_chats_for(db, bettor.id):
+        try:
+            await post_chat_text(db, chat.id, bettor, text)
+            member_res = await db.execute(
+                select(chat_members.c.user_id).where(chat_members.c.chat_id == chat.id)
+            )
+            recipients = [r[0] for r in member_res.all() if r[0] != bettor.id]
+            if recipients:
+                await send_push(
+                    db, recipients, title="🎰 Ва-банк!", body=body,
+                    data={"type": "message", "chat_id": chat.id, "is_group": chat.is_group,
+                          "chat_name": chat.name, "notification_tag": f"allin-{chat.id}"},
+                    channel_id="messages", priority="high",
+                )
+        except Exception as e:
+            print(f"[bets] all-in announce failed in chat {chat.id}: {type(e).__name__}: {e}")
 
 
 @router.get("/season")

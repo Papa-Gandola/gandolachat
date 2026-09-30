@@ -15,6 +15,7 @@ import { useDotaPlaying } from "../../services/dotaPresence";
 import { wsService } from "../../services/ws";
 import { useTheme } from "../../theme";
 import { BingoGrid } from "./BingoGrid";
+import { CARD_BACK_LABELS, CardBackFace } from "../../components/CardBack";
 
 type ThemeT = ReturnType<typeof useTheme>;
 type TabKey = "quests" | "season" | "bets" | "archive" | "trophies" | "bingo" | "cosmetics";
@@ -625,7 +626,7 @@ function BetsTab({ theme, refreshTick, myId }: { theme: ThemeT; refreshTick: num
     color: active ? theme.colors.accentText : theme.colors.ink,
   }) as const;
 
-  const place = async () => {
+  const place = async (allIn: boolean) => {
     if (!target || busy) return;
     setBusy(true);
     setPlaceErr("");
@@ -634,15 +635,32 @@ function BetsTab({ theme, refreshTick, myId }: { theme: ThemeT; refreshTick: num
       const res = await compendiumApi.placeBet({
         target_id: target.user_id, market, side: effSide,
         ...(market === "streak" ? { line: streakLen } : {}),
-        stake: Math.round(Number(stake) || 0),
+        stake: allIn ? ov.my_gas : Math.round(Number(stake) || 0),
+        ...(allIn ? { all_in: true } : {}),
       });
       setOv((prev) => prev ? { ...prev, my_gas: res.data.my_gas, open: [res.data.bet, ...prev.open] } : prev);
-      setPlacedOk(`Принято! ${res.data.bet.label} · ${res.data.bet.stake}⛽ (×${mult})`);
+      setPlacedOk(`${allIn ? "Ва-банк принят!" : "Принято!"} ${res.data.bet.label} · ${res.data.bet.stake}⛽ (×${mult})`);
     } catch (e) {
       setPlaceErr(apiErrorMessage(e));
     } finally {
       setBusy(false);
     }
+  };
+  // Ва-банк: весь газ сезона мимо потолка, на стрик нельзя. Подтверждение:
+  // в PWA Alert react-native-web — пустышка, там window.confirm
+  const canAllIn = market !== "streak" && ov.my_gas >= ov.stake_min;
+  const placeAllIn = () => {
+    if (!target || busy || !canAllIn) return;
+    const who = target.is_me ? "себя" : target.username;
+    const q = `Поставить весь газ сезона (${ov.my_gas}⛽) на ${who}? Отмены нет, в чат уйдёт объявление.`;
+    if (Platform.OS === "web") {
+      if (typeof window !== "undefined" && window.confirm(q)) void place(true);
+      return;
+    }
+    Alert.alert("Ва-банк", q, [
+      { text: "Отмена", style: "cancel" },
+      { text: "Ставлю всё", style: "destructive", onPress: () => void place(true) },
+    ]);
   };
 
   const outcome = (b: BetOut) =>
@@ -726,9 +744,19 @@ function BetsTab({ theme, refreshTick, myId }: { theme: ThemeT; refreshTick: num
                   <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: theme.colors.inkMuted }}>
                     {ov.stake_min}–{cap}⛽ · выплата ×{mult}
                   </Text>
-                  <Pressable onPress={place} disabled={busy} style={{ backgroundColor: theme.colors.accent, borderRadius: theme.radius.sm, paddingHorizontal: 16, paddingVertical: 9, opacity: busy ? 0.6 : 1 }}>
+                  <Pressable onPress={() => void place(false)} disabled={busy} style={{ backgroundColor: theme.colors.accent, borderRadius: theme.radius.sm, paddingHorizontal: 16, paddingVertical: 9, opacity: busy ? 0.6 : 1 }}>
                     <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11.5, fontWeight: "800", color: theme.colors.accentText }}>ПОСТАВИТЬ</Text>
                   </Pressable>
+                  {market !== "streak" ? (
+                    <Pressable
+                      onPress={placeAllIn}
+                      disabled={busy || !canAllIn}
+                      accessibilityLabel="Ва-банк"
+                      style={{ borderWidth: 1, borderColor: BLOOD, borderRadius: theme.radius.sm, paddingHorizontal: 12, paddingVertical: 8, opacity: busy || !canAllIn ? 0.5 : 1 }}
+                    >
+                      <Text style={{ fontFamily: theme.fonts.mono, fontSize: 11.5, fontWeight: "800", color: BLOOD }}>ВА-БАНК · {ov.my_gas}⛽</Text>
+                    </Pressable>
+                  ) : null}
                 </View>
                 {onSelf ? (
                   <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: theme.colors.inkMuted }}>
@@ -977,6 +1005,24 @@ function CosmeticsTab({ theme, cos, onSaved }: {
         </View>
       </Row>
 
+      <Row need={U.card_back ?? 16} name="Рубашка карт в покере" desc="Соперники видят твои закрытые карты с ней — за столом на компе и в телефоне">
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+          <Pressable onPress={() => save({ extra: { card_back: "" } })} disabled={busy} style={chip(!ex.card_back)}>
+            <Text style={chipText(!ex.card_back)}>обычная</Text>
+          </Pressable>
+          {(cos.card_backs ?? []).map((b) => (
+            <Pressable
+              key={b}
+              onPress={() => save({ extra: { card_back: b } })}
+              disabled={busy}
+              accessibilityLabel={`Рубашка ${CARD_BACK_LABELS[b] ?? b}`}
+              style={{ padding: 3, borderWidth: 2, borderColor: ex.card_back === b ? theme.colors.accent : "transparent", borderRadius: theme.radius.sm, opacity: busy ? 0.7 : 1 }}
+            >
+              <CardBackFace back={b} w={36} h={50} radius={4} />
+            </Pressable>
+          ))}
+        </View>
+      </Row>
       <Row need={U.glow ?? 15} name="Свечение ника" desc="Ник светится цветом ника в чате на компе и в списках">
         <Pressable onPress={() => save({ extra: { glow: !ex.glow } })} disabled={busy} style={chip(!!ex.glow)}>
           <Text style={chipText(!!ex.glow)}>{ex.glow ? "Вкл" : "Выкл"}</Text>

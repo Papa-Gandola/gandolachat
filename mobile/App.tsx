@@ -14,6 +14,7 @@ import { WhatsNewModal } from "./src/components/WhatsNewModal";
 import { RootNavigator } from "./src/navigation/RootNavigator";
 import { AuthProvider } from "./src/services/AuthContext";
 import { registerCallForegroundRunner } from "./src/services/callForegroundService";
+import { installLogBuffer } from "./src/services/logBuffer";
 import { CallProvider } from "./src/services/CallContext";
 import { initWebPwa } from "./src/services/webPwa";
 import { ThemeProvider } from "./src/theme/ThemeProvider";
@@ -25,6 +26,8 @@ import { ThemeProvider } from "./src/theme/ThemeProvider";
 // успевает «предъявиться» за отведённые 5 секунд, и Андроид рисует «Гандола
 // не отвечает». Вызов идемпотентен.
 registerCallForegroundRunner();
+// Буфер логов для «Нашёл баг» — раньше всех компонентов, чтобы поймать ранние падения
+installLogBuffer();
 
 export default function App() {
   const [interLoaded] = useInter({ Inter_400Regular, Inter_500Medium });

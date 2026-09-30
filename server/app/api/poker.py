@@ -25,6 +25,9 @@ class PokerSeatOut(BaseModel):
     is_active: bool
     reentries: int = 0
     gas_paid: int = 0
+    # Рубашка карт хозяина места (косметика ур.16, users.comp_extra.card_back):
+    # соперники видят его закрытые карты с ней. Обновляется вместе со столом.
+    card_back: str | None = None
 
     class Config:
         from_attributes = True
@@ -149,6 +152,8 @@ async def _table_to_out(db: AsyncSession, table: PokerTable) -> PokerTableOut:
             is_active=s.is_active,
             reentries=s.reentries,
             gas_paid=s.gas_paid,
+            card_back=((users_by_id.get(s.user_id).comp_extra or {}).get("card_back")
+                       if users_by_id.get(s.user_id) else None),
         )
         for s in sorted(table.seats, key=lambda x: x.seat_index)
     ]

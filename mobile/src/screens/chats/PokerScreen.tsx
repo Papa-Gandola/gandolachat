@@ -22,6 +22,7 @@ import {
 import { useAuth } from "../../services/AuthContext";
 import { wsService } from "../../services/ws";
 import { useTheme } from "../../theme";
+import { CardBackFace, hasCardBack } from "../../components/CardBack";
 import { PokerAssist } from "./PokerAssist";
 
 type Props = NativeStackScreenProps<ChatsStackParamList, "Poker">;
@@ -844,7 +845,7 @@ function PokerTable({
                 {player ? (
                   <View style={{ flexDirection: "row", gap: 2, marginBottom: 2 }}>
                     {player.hole.map((c, i) => (
-                      <CardView key={i} code={c === "?" ? null : c} theme={theme} small />
+                      <CardView key={i} code={c === "?" ? null : c} theme={theme} small back={seat?.card_back} />
                     ))}
                   </View>
                 ) : null}
@@ -887,10 +888,14 @@ function PokerTable({
   );
 }
 
-function CardView({ code, theme, small }: { code: string | null; theme: ThemeT; small?: boolean }) {
+function CardView({ code, theme, small, back }: { code: string | null; theme: ThemeT; small?: boolean; back?: string | null }) {
   // Подросли на ~15% по просьбе Гандолы («увеличить карты немного»)
   const w = small ? 30 : 40;
   const h = small ? 42 : 56;
+  // Закрытая карта соперника с его рубашкой (косметика ур.16)
+  if (!code && hasCardBack(back)) {
+    return <CardBackFace back={back} w={w} h={h} radius={theme.id === "neo" ? 0 : 4} />;
+  }
   if (!code) {
     return (
       <View

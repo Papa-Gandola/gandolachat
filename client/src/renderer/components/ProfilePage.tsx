@@ -5,6 +5,7 @@ import DotaRankBadge from "./DotaRankBadge";
 import { CompBadge, CompStar, CompTitle, frameStyle, frameClass, glowStyle, titleOf } from "./cosmetics";
 import Icon, { Gas } from "./Icon";
 import QRCode from "qrcode";
+import { bugReportMeta, getLogText } from "../services/logbuffer";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "https://2-26-117-77.sslip.io";
 
@@ -221,6 +222,8 @@ export default function ProfilePage({ user: initialUser, currentUser, onClose, o
           onUser={(u) => { setUser(u); onUpdate(u); }}
         />
 
+        {isOwn && <BugReportSection isNeo={isNeo} />}
+
         {user.last_seen && (
           <div style={s.field}>
             <label style={{ ...s.label, ...mono, ...(isNeo ? { color: "var(--accent)" } : {}) }}>{neoLabel("ПОСЛЕДНИЙ ВИЗИТ")}</label>
@@ -320,6 +323,73 @@ function MobileAppSection({ isNeo }: { isNeo: boolean }) {
           <div style={qrBox}><QrImg text={`${BASE_URL}/app/`} alt="QR: открыть веб-версию" /></div>
           <span style={hint}>Открой в Safari, дальше «Поделиться» → «На экран „Домой“».</span>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// «Нашёл баг, отправить логи» (просьба хозяина 02.10): описание + хвост
+// консоли (services/logbuffer.ts) уходят на сервер, тот кладёт файл в ЛС
+// админу (хозяину). Только в своём профиле; ничего выкачивать не надо.
+function BugReportSection({ isNeo }: { isNeo: boolean }) {
+  const mono = isNeo ? { fontFamily: "var(--font-mono)" } : {};
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const send = async () => {
+    if (busy) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await userApi.sendBugReport({
+        note: note.trim(),
+        log: getLogText(),
+        meta: bugReportMeta({ mode: localStorage.getItem("gandola-mode") || "chat" }),
+      });
+      setDone(res.data.file_name);
+      setNote("");
+    } catch (e: any) {
+      setErr(e.response?.data?.detail || "Не отправилось — проверь связь");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={s.field}>
+      <label style={{ ...s.label, ...mono, ...(isNeo ? { color: "var(--accent)" } : {}) }}>
+        {isNeo ? "// НАШЁЛ_БАГ" : "НАШЁЛ БАГ"}
+      </label>
+      <div style={{ background: "var(--bg-secondary)", borderRadius: isNeo ? 0 : 6, padding: 12, display: "flex", flexDirection: "column", gap: 8, ...(isNeo ? { border: "1px solid var(--border)" } : {}) }}>
+        <span style={{ ...mono, color: "var(--text-muted)", fontSize: 11.5, lineHeight: 1.5 }}>
+          Что случилось и что делал перед этим? Хвост логов приложения приложится сам и уйдёт файлом хозяину в личку — ничего выкачивать не надо.
+        </span>
+        {done ? (
+          <span style={{ ...mono, color: "#57f287", fontSize: 12 }}>Ушло: {done} лежит у хозяина в личке. Спасибо!</span>
+        ) : (
+          <>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              maxLength={500}
+              rows={3}
+              placeholder={isNeo ? "> нажал_присоединиться_а_звука_нет" : "Например: нажал «Присоединиться» к звонку, а звука нет"}
+              style={{ ...mono, width: "100%", boxSizing: "border-box", background: "var(--bg-input)", color: "var(--text-primary)", border: "1px solid var(--border)", borderRadius: isNeo ? 0 : 6, padding: 8, fontSize: 13, resize: "vertical" }}
+            />
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <button
+                onClick={send}
+                disabled={busy}
+                style={{ ...mono, background: "var(--accent)", color: "var(--accent-text)", border: "none", borderRadius: isNeo ? 0 : 6, padding: "8px 14px", fontSize: 12.5, fontWeight: 800, cursor: "pointer", opacity: busy ? 0.6 : 1, display: "inline-flex", alignItems: "center", gap: 6 }}
+              >
+                <Icon name="bug" size={14} />{busy ? "ОТПРАВЛЯЮ…" : "ОТПРАВИТЬ ЛОГИ"}
+              </button>
+              {err && <span style={{ ...mono, color: "#ff6a5e", fontSize: 12 }}>{err}</span>}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
