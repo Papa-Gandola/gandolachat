@@ -369,7 +369,14 @@ print-логи видны в `docker compose logs` с опозданием (не
   `DAILY_ACTIVE`), weekly (22, **7/нед**, `WEEKLY_ACTIVE`, сброс Пн),
   season (14 марафонов с progress), team (8), anti (16), secret (20, в UI
   скрыты до выполнения). `repeat`: period/match/day/week → period_key;
-  уникальность `(user, quest, period_key)` в БД. Титулы у громких (Рампага,
+  уникальность `(user, quest, period_key)` в БД. **Ключ недели
+  (`engine.week_key_of`) — С СЕЗОНОМ: «2026-10-W40»**: неделя на стыке
+  месяцев (28.09–04.10) в новом сезоне начинается заново — по чистому
+  ISO-ключу «2026-W40» сентябрьские недельные висели «выполненными» в
+  октябре и не давали закрыть их снова, а `week_rows` мешал сентябрьские
+  катки в октябрьский «за неделю» (заметил хозяин 01.10). Старые строки со
+  старым форматом ключа новым не мешают; `weekly_roast` считает ключ той
+  же функцией от понедельника прошлой недели. Титулы у громких (Рампага,
   Безупречный, Фулл-стак, Доминатор, Восходящий, Кальянщик, Некромант,
   Виверна, Тыквенный король + позорные a49/a50/a53/a56/a58/Жесть/Ливер/
   Тильт). Детекция ролей: саппорт = 5+ вардов (📼), кор = 120+ ластхитов.
@@ -543,7 +550,8 @@ print-логи видны в `docker compose logs` с опозданием (не
   Dotabuff/OpenDota-ссылки, голый steamID64 или Friend ID. Лимит free:
   2000/день, 60/мин — при >20 привязанных поднять DOTA_POLL_MINUTES.
 - Тизер: `server/assets/compendium/intro.mp4` (в репо, H.264+AAC) — lifespan
-  копирует в uploads-том → `/uploads/compendium/intro.mp4`. Замена видео =
+  копирует в uploads-том → `/uploads/compendium/intro.mp4` (сверка по
+  размеру И sha256 — ролик того же размера тоже доедет). Замена видео =
   замена файла в репо + деплой сервера; `intro_version` меняется сам, и
   заставка снова показывается каждому по разу (просьба хозяина 30.09 —
   обещал прислать новый ролик).
@@ -653,7 +661,9 @@ print-логи видны в `docker compose logs` с опозданием (не
   «отключить заставку» = localStorage gandolium.introOff — хранится JSON
   `{"v": intro_version}` (старое "1" мигрирует молча), `reconcileIntro` в
   load(): отпечаток с сервера другой → флаг стирается и ролик играет
-  снова; по умолчанию показывается), шапка уровня/газа (на потолке «МАКС ·
+  снова; src ролика несёт `?v=<отпечаток>` (последний известный —
+  localStorage gandolium.introVersion), чтобы HTTP-кэш Electron не
+  подсунул старый файл; по умолчанию показывается), шапка уровня/газа (на потолке «МАКС ·
   30-й уровень»; в октябре — `<HalloweenDecor>`: SVG-паутина в углах +
   паук на нити поверх шапки, 🎃 у сезона, по `/me.theme === "halloween"`),
   вкладки ЗАДАНИЯ/СЕЗОН/ТРОФЕИ/КОСМЕТИКА (косметика: палитра 2, рамка
@@ -1053,8 +1063,10 @@ WhatsNewModal, тот его переиспользует). `components/Settings
   TestClient + `create_access_token(id)` (login не нужен). Контейнер
   сессии пересоздают — venv/кластер/scratchpad пропадают (30.09 всё
   ставил заново): `su nobody -s /bin/sh -c "initdb -D /tmp/gandola-pgtest/
-  data --auth=trust -U gandola"` → `pg_ctl start -o "-p 5433"` →
-  `createdb -h localhost -p 5433 -U gandola gandola`; env для тестов
+  data --auth=trust -U gandola"` → `pg_ctl start -o "-p 5433 -k
+  /tmp/gandola-pgtest"` (без `-k` сокет лезет в /var/run/postgresql и
+  падает по правам) → `createdb -h localhost -p 5433 -U gandola gandola`;
+  env для тестов
   `SECRET_KEY=test-secret UPLOAD_DIR=/tmp/gandola-uploads-test`; тесты
   запускать ИЗ `server/` (alembic.ini); в TestClient-тестах БД дёргать
   через `c.portal.call(coro)`, а после любого `asyncio.run` перед
@@ -1284,6 +1296,15 @@ main = публикация в mobile-latest, куда смотрит «обно
 анти), косметика 13–30 фаза 1, заставка снова у всех при новом ролике.
 Хозяин обещал новое интро-видео — заменить файл в репо, деплой сервера.
 Фаза 2 косметики — в описании api/compendium.py, ждёт отдельного «давай».
+**Иконка на хеллоуин** (просьба хозяина 01.10): черновики А (лайм + G +
+паутина/паук/тыква) и Б (ночь, тыква с лаймовой G) — scratchpad
+`icon-halloween.html` → `pw/render_icons.js` (Playwright, PNG 1024 с
+прозрачными углами + лист сравнения), ждёт выбора хозяина. Куда класть:
+десктоп `client/assets/icon.png` + `icon.ico` (electron-builder win/linux,
+main.ts окно и трей — .ico собрать из PNG самому, ImageMagick в контейнере
+нет), PWA `mobile/public/icon-192/512.png` + `apple-touch-icon.png`
+(уезжает с веб-деплоем), натив `mobile/assets/icon.png` +
+`adaptive-icon.png` — ТОЛЬКО новым APK (и обратно в ноябре тоже APK).
 Осталось:
 1. По желанию: тот же шрифт Twemoji в PWA (web-сборка мобилки) — на
    нативном андроиде эмодзи всё равно системные.

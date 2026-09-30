@@ -33,13 +33,33 @@ async def lifespan(app: FastAPI):
     # uploads — это docker-том, и файлов образа в нём нет. Синхронизируем
     # при старте: положил новый intro.mp4 в репо → задеплоил → он на месте.
     def _sync_compendium_assets():
+        import hashlib
         import shutil
         src = Path(__file__).parent.parent / "assets" / "compendium" / "intro.mp4"
         dst = Path(settings.UPLOAD_DIR) / "compendium" / "intro.mp4"
+
+        def _digest(p: Path) -> str:
+            h = hashlib.sha256()
+            with open(p, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+            return h.hexdigest()
+
         try:
-            if src.is_file() and (not dst.exists() or dst.stat().st_size != src.stat().st_size):
+            if not src.is_file():
+                return
+            # Новый ролик того же размера — редкость, но сравниваем честно:
+            # хозяин ждёт, что замена файла в репо = заставка снова у всех
+            # (api.compendium.intro_version считается по файлу в uploads).
+            same = (
+                dst.exists()
+                and dst.stat().st_size == src.stat().st_size
+                and _digest(dst) == _digest(src)
+            )
+            if not same:
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(src, dst)
+                print("[compendium] intro.mp4 обновлён в uploads")
         except Exception as e:
             print(f"[compendium] intro sync failed: {type(e).__name__}: {e}")
 

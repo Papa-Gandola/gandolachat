@@ -33,6 +33,14 @@ const INTRO_URL = `${BASE_URL}/uploads/compendium/intro.mp4`;
 // (/me.intro_version) другой → флаг слетает, заставка крутится ещё раз
 // (просьба хозяина 30.09).
 const INTRO_OFF_KEY = "gandolium.introOff";
+// Последний известный отпечаток ролика — им же бьём кэш: src ролика несёт
+// ?v=<отпечаток>, новый файл на сервере = новый URL, старая копия из
+// HTTP-кэша Electron не подсунется.
+const INTRO_VERSION_KEY = "gandolium.introVersion";
+
+function readIntroVersion(): string | null {
+  try { return localStorage.getItem(INTRO_VERSION_KEY); } catch { return null; }
+}
 
 function readIntroOffRaw(): string | null {
   try { return localStorage.getItem(INTRO_OFF_KEY); } catch { return null; }
@@ -81,8 +89,9 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
   const [error, setError] = useState("");
   const [introOff, setIntroOffState] = useState(readIntroOff);
   const [showIntro, setShowIntro] = useState(() => !readIntroOff());
-  const [introVersion, setIntroVersion] = useState<string | null>(null);
+  const [introVersion, setIntroVersion] = useState<string | null>(readIntroVersion);
   const introRef = useRef<HTMLVideoElement>(null);
+  const introSrc = introVersion ? `${INTRO_URL}?v=${encodeURIComponent(introVersion)}` : INTRO_URL;
 
   function introDone() {
     setShowIntro(false);
@@ -102,6 +111,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
   function reconcileIntro(v: string | undefined) {
     if (!v) return;
     setIntroVersion(v);
+    try { localStorage.setItem(INTRO_VERSION_KEY, v); } catch { /* ок */ }
     const raw = readIntroOffRaw();
     if (!raw) return;
     let stored: string | null = null;
@@ -226,7 +236,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
           {/* Крутится по кругу — выход только по кнопке (по просьбе Гандолы) */}
           <video
             ref={introRef}
-            src={INTRO_URL}
+            src={introSrc}
             playsInline
             loop
             onError={() => setShowIntro(false)}
