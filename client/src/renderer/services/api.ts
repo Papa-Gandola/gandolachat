@@ -166,6 +166,20 @@ export interface CompendiumTrophy {
   title?: string;
 }
 
+// Клетка «Бинго» тайных: закрытая несёт только id/num (пасхалка — тайна),
+// открытая — название, описание, газ, дата первого открытия и сколько раз
+export interface CompendiumBingoCell {
+  id: string;
+  num: number;
+  open: boolean;
+  name?: string;
+  desc?: string;
+  gas?: number;
+  title?: string;
+  first_at?: string;
+  count?: number;
+}
+
 export interface CompendiumCosmetics {
   max_level: number;
   level_cap?: number;          // потолок уровней (30 с октября 2026)
@@ -226,6 +240,7 @@ export interface CompendiumMe {
   team?: CompendiumQuest[];
   anti?: CompendiumQuest[];
   trophies?: CompendiumTrophy[];
+  bingo?: CompendiumBingoCell[];   // «Бинго» тайных — только своё, за всё время
 }
 
 export interface CompendiumSeasonRow {

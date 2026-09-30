@@ -147,6 +147,39 @@ def _cosmetics_dict(user: User, earned: list[str], podium: dict | None = None) -
     }
 
 
+SECRET_QUESTS = sorted((q for q in QUESTS if q.category == "secret"), key=lambda q: q.num)
+
+
+async def _bingo(db: AsyncSession, user_id: int, season: str) -> list[dict]:
+    """«Бинго» тайных (просьба хозяина 01.10): клетка на каждую пасхалку,
+    открытые — за ВСЁ время (коллекция, не сезон), с датой первого открытия
+    и числом повторов. Закрытые клетки несут только id/num — ни названия,
+    ни описания: они тайные. Таблица только своя — в /user/{id} не отдаётся."""
+    ids = [q.id for q in SECRET_QUESTS]
+    res = await db.execute(
+        select(
+            QuestCompletion.quest_id,
+            func.min(QuestCompletion.completed_at),
+            func.count(QuestCompletion.id),
+        )
+        .where(QuestCompletion.user_id == user_id, QuestCompletion.quest_id.in_(ids))
+        .group_by(QuestCompletion.quest_id)
+    )
+    opened = {qid: (first_at, int(n or 0)) for qid, first_at, n in res.all()}
+    cells = []
+    for q in SECRET_QUESTS:
+        cell: dict = {"id": q.id, "num": q.num, "open": q.id in opened}
+        if cell["open"]:
+            first_at, n = opened[q.id]
+            cell.update({
+                "name": quest_name(q, season), "desc": q.desc, "gas": q.gas,
+                "first_at": first_at.isoformat() if first_at else None, "count": n,
+                **({"title": q.title} if q.title else {}),
+            })
+        cells.append(cell)
+    return cells
+
+
 def _quest_dict(q, done: bool = False, progress: tuple | None = None, season: str | None = None) -> dict:
     d = {
         # Название — с сезонной шкуркой (октябрь: хеллоуин), id/газ/предикат те же
@@ -288,6 +321,8 @@ async def my_compendium(
         "team": team,
         "anti": anti,
         "trophies": trophies,
+        # «Бинго» тайных — только своё, за всё время
+        "bingo": await _bingo(db, current_user.id, season),
     }
 
 

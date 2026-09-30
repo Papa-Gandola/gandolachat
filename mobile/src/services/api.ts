@@ -120,6 +120,21 @@ export interface CompendiumMe {
   team?: CompendiumQuest[];
   anti?: CompendiumQuest[];
   trophies?: CompendiumTrophy[];
+  bingo?: CompendiumBingoCell[];   // «Бинго» тайных — только своё, за всё время
+}
+
+// Клетка «Бинго» тайных: закрытая несёт только id/num (пасхалка — тайна),
+// открытая — название, описание, газ, дата первого открытия и сколько раз
+export interface CompendiumBingoCell {
+  id: string;
+  num: number;
+  open: boolean;
+  name?: string;
+  desc?: string;
+  gas?: number;
+  title?: string;
+  first_at?: string;
+  count?: number;
 }
 
 export interface CompendiumSeasonRow {

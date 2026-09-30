@@ -12,6 +12,7 @@ import { Emoji } from "./Emoji";
 import { useDotaPlaying } from "../services/presence";
 import Icon, { Gas } from "./Icon";
 import type { IconName } from "./icons";
+import { BingoTab } from "./BingoTab";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 const BLOOD = "#ff6a5e";
@@ -73,7 +74,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
   const isNeo = theme === "neo";
   const mono = { fontFamily: "var(--font-mono)" };
   const [data, setData] = useState<CompendiumMe | null>(null);
-  const [tab, setTab] = useState<"quests" | "season" | "bets" | "archive" | "trophies" | "cosmetics">("quests");
+  const [tab, setTab] = useState<"quests" | "season" | "bets" | "archive" | "trophies" | "bingo" | "cosmetics">("quests");
   const [betsTick, setBetsTick] = useState(0);
   // Панель приза перечитывается по финальной карточке и в полночь МСК
   // (подсказки открываются 8/15/22-го — на открытом экране иначе не появятся)
@@ -330,7 +331,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
 
             {/* --- вкладки --- */}
             <div style={{ display: "flex", gap: 6, margin: "18px 0 14px", flexWrap: "wrap" }}>
-              {([["quests", "ЗАДАНИЯ"], ["season", "СЕЗОН"], ["bets", "СТАВКИ"], ["trophies", "ТРОФЕИ"], ["cosmetics", "КОСМЕТИКА"], ["archive", "АРХИВ"]] as const).map(([key, label]) => (
+              {([["quests", "ЗАДАНИЯ"], ["season", "СЕЗОН"], ["bets", "СТАВКИ"], ["trophies", "ТРОФЕИ"], ["bingo", "БИНГО"], ["cosmetics", "КОСМЕТИКА"], ["archive", "АРХИВ"]] as const).map(([key, label]) => (
                 <button
                   key={key}
                   onClick={() => {
@@ -377,7 +378,7 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                 <QuestGroup isNeo={isNeo} title="АНТИ-АЧИВКИ" meta="выдаются сами, отказаться нельзя" quests={data.anti || []} blood />
                 <p style={{ ...mono, color: "var(--text-muted)", fontSize: 11.5, marginTop: 16 }}>
                   📼 — нужен парс реплея (доезжает через пару минут после катки) ·
-                  ещё есть 20 скрытых пасхалок — узнаешь, когда триггернёшь 🔒
+                  ещё есть 20 скрытых пасхалок — узнаешь, когда триггернёшь; открытые собираются во вкладке БИНГО 🔒
                 </p>
               </>
             )}
@@ -526,6 +527,8 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
                 onSaved={(c) => setData((prev) => (prev ? { ...prev, cosmetics: c } : prev))}
               />
             )}
+
+            {tab === "bingo" && <BingoTab isNeo={isNeo} cells={data.bingo} />}
 
             {tab === "trophies" && (
               <div style={s.panel(isNeo)}>

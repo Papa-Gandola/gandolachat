@@ -14,9 +14,10 @@ import { useAuth } from "../../services/AuthContext";
 import { useDotaPlaying } from "../../services/dotaPresence";
 import { wsService } from "../../services/ws";
 import { useTheme } from "../../theme";
+import { BingoGrid } from "./BingoGrid";
 
 type ThemeT = ReturnType<typeof useTheme>;
-type TabKey = "quests" | "season" | "bets" | "archive" | "trophies" | "cosmetics";
+type TabKey = "quests" | "season" | "bets" | "archive" | "trophies" | "bingo" | "cosmetics";
 
 const BLOOD = "#ff6a5e";
 const GOLD = "#ffd24a";
@@ -251,6 +252,7 @@ export function CompendiumScreen() {
                   ["season", "СЕЗОН"],
                   ["bets", "СТАВКИ"],
                   ["trophies", "ТРОФЕИ"],
+                  ["bingo", "БИНГО"],
                   ["cosmetics", "КОСМЕТИКА"],
                   ["archive", "АРХИВ"],
                 ] as [TabKey, string][]
@@ -288,7 +290,7 @@ export function CompendiumScreen() {
                   <QuestGroup theme={theme} title="КОМАНДНЫЕ" meta="катки с людьми из чата" quests={data.team ?? []} accent />
                   <QuestGroup theme={theme} title="АНТИ-АЧИВКИ" meta="выдаются сами" quests={data.anti ?? []} blood />
                   <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10.5, color: theme.colors.inkMuted, lineHeight: 15 }}>
-                    📼 — нужен парс реплея (доезжает чуть позже катки) · ещё есть 20 скрытых пасхалок — узнаешь, когда триггернёшь 🔒
+                    📼 — нужен парс реплея (доезжает чуть позже катки) · ещё есть 20 скрытых пасхалок — узнаешь, когда триггернёшь; открытые собираются во вкладке БИНГО 🔒
                   </Text>
                 </>
               )}
@@ -411,6 +413,8 @@ export function CompendiumScreen() {
                   ) : null}
                 </View>
               )}
+
+              {tab === "bingo" && <BingoGrid cells={data.bingo} />}
 
               {tab === "trophies" && (
                 <View style={{ gap: 6 }}>
