@@ -4,7 +4,7 @@ import { wsService } from "../services/ws";
 import { playMessageSound } from "../services/sounds";
 import EmojiPicker from "./EmojiPicker";
 import FormattedText from "./FormattedText";
-import { CompBadge } from "./cosmetics";
+import { CompBadge, CompStar, glowStyle, bubbleStyle } from "./cosmetics";
 import { filePreview, markerPreview } from "../services/markers";
 import { useTheme } from "../services/theme";
 import { VoicePlayer } from "./VoicePlayer";
@@ -1229,6 +1229,8 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
               const neoBubble = isNeo ? {
                 maxWidth: "68%",
                 padding: "9px 13px",
+                // Косметика ур.17: цветная обводка сообщений автора (видна всем)
+                ...bubbleStyle(senderMember),
                 background: isMine ? "var(--bubble-mine)" : "var(--bg-message)",
                 color: isMine ? "var(--accent-text)" : "var(--text-primary)",
                 border: isMine ? "none" : "1px solid var(--border)",
@@ -1241,6 +1243,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
               const discordBubble = !isNeo ? {
                 maxWidth: "68%",
                 padding: "8px 12px",
+                ...bubbleStyle(senderMember),
                 background: isMine ? "var(--accent)" : "var(--bg-message)",
                 color: isMine ? "#fff" : "var(--text-primary)",
                 borderRadius: 16,
@@ -1299,6 +1302,8 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
                                   // Косметика Гандолиума: цвет ника (ур.6) — только
                                   // на чужих сообщениях, свой пузырь и так цветной
                                   : (senderMember?.comp_color || "var(--text-header)"))),
+                            // Косметика ур.15: свечение ника — тоже только на чужих
+                            ...(!isMine ? glowStyle(senderMember) : {}),
                             cursor: isMine ? "default" : "pointer",
                             ...(isNeo ? mono : {}),
                           }}
@@ -1309,7 +1314,7 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
                           }}
                         >
                           {isMine ? "Вы" : msg.sender_username}
-                          {!isMine && <CompBadge user={senderMember} />}
+                          {!isMine && <><CompBadge user={senderMember} /><CompStar user={senderMember} /></>}
                         </span>
                         <span style={{
                           ...s.msgTime,
@@ -2485,7 +2490,7 @@ function QuestCardMsg({ payload, isNeo, isMine, senderName }: {
                 {it.title && <span style={{ color: titleGold, fontSize: 11, marginLeft: 6 }}>титул «{it.title}»</span>}
               </span>
               <span style={{ ...mono, fontSize: 12.5, fontWeight: 800, color: secret ? titleGold : gasColor, whiteSpace: "nowrap" }}>
-                +{it.gas} <Gas />
+                {it.gas < 0 ? "" : "+"}{it.gas} <Gas />
               </span>
             </div>
           );
