@@ -68,10 +68,13 @@ export default function Main({ token, user, onLogout }: Props) {
   // кликали чаты в надежде попасть в переписку и получали столы. Теперь
   // столы — часть чата: открываются кнопкой «Столы» в шапке переписки или
   // карточкой стола, а клик по чату ВСЕГДА открывает переписку.
-  // Сохранённый «poker» старых версий читаем как «chat».
+  // Режим НЕ запоминается между запусками (решение хозяина 02.10): раньше
+  // закрыл приложение в Гандолиуме — при следующем старте сразу играла
+  // заставка на всю. Теперь старт всегда в чате с пустым «Выбери чат»;
+  // старый ключ localStorage стираем, чтобы не вводил в заблуждение.
   const [appMode, setAppMode] = useState<"chat" | "compendium">(() => {
-    const saved = localStorage.getItem("gandola-mode");
-    return saved === "compendium" ? "compendium" : "chat";
+    try { localStorage.removeItem("gandola-mode"); } catch { /* ок */ }
+    return "chat";
   });
   const [showModeMenu, setShowModeMenu] = useState(false);
   // Чаты, в которых сейчас открыты столы вместо переписки. На сессию, НЕ
@@ -279,11 +282,7 @@ export default function Main({ token, user, onLogout }: Props) {
 
   // Из Гандолиума нет чатов на экране — любой «открой чат» возвращает в chat-режим
   function leaveCompendiumForChat() {
-    setAppMode((m) => {
-      if (m !== "compendium") return m;
-      localStorage.setItem("gandola-mode", "chat");
-      return "chat";
-    });
+    setAppMode((m) => (m !== "compendium" ? m : "chat"));
   }
 
   // Switch to a chat when a notification is clicked (dispatched from ChatArea)
@@ -347,7 +346,6 @@ export default function Main({ token, user, onLogout }: Props) {
       // В Гандолиуме Escape закрывает сам Гандолиум, не трогая выбранный чат
       if (appMode === "compendium") {
         setAppMode("chat");
-        localStorage.setItem("gandola-mode", "chat");
         return;
       }
       // Открыты столы — Escape возвращает в переписку, чат не сбрасывает
@@ -552,7 +550,7 @@ export default function Main({ token, user, onLogout }: Props) {
                 {(["chat", "compendium"] as const).map((m) => (
                   <button
                     key={m}
-                    onClick={() => { setAppMode(m); localStorage.setItem("gandola-mode", m); setShowModeMenu(false); }}
+                    onClick={() => { setAppMode(m); setShowModeMenu(false); }}
                     style={{
                       display: "block",
                       width: "100%",
@@ -666,7 +664,7 @@ export default function Main({ token, user, onLogout }: Props) {
           <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
             <CompendiumPage
               currentUser={currentUser}
-              onClose={() => { setAppMode("chat"); localStorage.setItem("gandola-mode", "chat"); }}
+              onClose={() => setAppMode("chat")}
               onOpenProfile={() => setViewingProfile(currentUser)}
             />
           </div>
