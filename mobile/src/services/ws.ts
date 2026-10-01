@@ -1,9 +1,13 @@
 import { AppState, Platform } from "react-native";
 
+import { logEvent } from "./logBuffer";
+
 import { WS_URL } from "./config";
 
 type Handler = (data: Record<string, unknown>) => void;
 type Quality = "good" | "ok" | "bad" | "offline";
+// Что НЕ писать в буфер «Нашёл баг»: шумные и бесполезные для разбора типы
+const QUIET_TYPES = new Set(["ping", "pong", "typing"]);
 
 // Mirrors client/src/renderer/services/ws.ts — single WebSocket connection,
 // exponential backoff reconnect, ping/pong every 5s. The mobile WebSocket
@@ -81,6 +85,7 @@ class WSService {
     }
 
     this.ws.onopen = () => {
+      logEvent(`ws open (attempt ${this.reconnectAttempts})`);
       this.reconnectAttempts = 0;
       this.missedPongs = 0;
       this.quality = "good";
@@ -114,6 +119,11 @@ class WSService {
         }
         const type = data.type as string | undefined;
         if (type) {
+          if (!QUIET_TYPES.has(type)) {
+            // В буфер «Нашёл баг»: тип события + чат/юзер, без тела
+            const sig = (data.signal as { type?: string } | undefined)?.type;
+            logEvent(`ws ← ${type}${data.chat_id ? ` chat=${data.chat_id}` : ""}${data.user_id ? ` user=${data.user_id}` : ""}${sig ? ` signal=${sig}` : ""}`);
+          }
           this.handlers.get(type)?.forEach((h) => h(data));
         }
       } catch {
@@ -122,10 +132,12 @@ class WSService {
     };
 
     this.ws.onclose = () => {
+      logEvent("ws close");
       this._scheduleReconnect();
     };
 
     this.ws.onerror = () => {
+      logEvent("ws error");
       this.ws?.close();
     };
   }
@@ -157,10 +169,14 @@ class WSService {
   }
 
   send(data: object): boolean {
+    const d = data as { type?: string; chat_id?: number; signal?: { type?: string } };
+    const loud = !!d.type && !QUIET_TYPES.has(d.type);
+    if (loud) logEvent(`ws → ${d.type}${d.chat_id ? ` chat=${d.chat_id}` : ""}${d.signal?.type ? ` signal=${d.signal.type}` : ""}`);
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data));
       return true;
     }
+    if (loud) logEvent(`ws → ${d.type} DROPPED (socket ${this.ws?.readyState ?? "none"})`);
     return false;
   }
 

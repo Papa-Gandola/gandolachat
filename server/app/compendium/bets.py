@@ -34,7 +34,7 @@ from app.compendium.engine import current_season, level_for_gas
 
 MARKETS = ("match", "kills", "kda", "roshan", "streak")
 STAKE_MIN = 10
-STAKE_MAX = 100          # match/kills/kda/roshan
+STAKE_MAX = 500          # match/kills/kda/roshan (было 100; хозяин поднял 02.10)
 STREAK_STAKE_MAX = {2: 50, 3: 30, 5: 10}  # выплата ×4/×8/×32 — джекпот ≤ 320⛽
 ROSHAN_LINE = 2
 MATCHES_FOR_LINE = 20
@@ -152,7 +152,7 @@ async def recalc_max_level(db, user_id: int) -> None:
     drops = (
         ("badge_emoji", UNLOCKS["badge_emoji"]), ("glow", UNLOCKS["glow"]),
         ("bubble", UNLOCKS["bubble"]), ("custom_title", UNLOCKS["custom_title"]),
-        ("star", UNLOCKS["star"]),
+        ("card_back", UNLOCKS["card_back"]), ("star", UNLOCKS["star"]),
     )
     for key, need in drops:
         if extra.get(key) and lvl < need:
@@ -220,6 +220,19 @@ async def _finish(db, bet: Bet, won: bool, match_season: str) -> dict:
         bet.payout = bet.stake * payout_mult(bet)
         await _credit(db, bet.bettor_id, match_season, bet.payout)
         delta = bet.payout - bet.stake
+    else:
+        # Проигранный газ опускает «вечный» максимум (решение хозяина) —
+        # именно ЗДЕСЬ, при проигрыше, а не при размещении: ва-банк на
+        # размещении обнулял бы газ и снимал всю косметику сразу, а выигрыш
+        # её не возвращал (ревью 02.10). Чат видит обновку живьём.
+        await recalc_max_level(db, bet.bettor_id)
+        try:
+            from app.api.users import _broadcast_profile
+            user = await db.get(User, bet.bettor_id)
+            if user is not None:
+                await _broadcast_profile(db, user)
+        except Exception as e:
+            print(f"[bets] profile broadcast after loss failed: {type(e).__name__}: {e}")
     return {"outcome": bet.status, "delta": delta}
 
 

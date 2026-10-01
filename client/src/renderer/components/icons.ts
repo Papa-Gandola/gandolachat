@@ -50,6 +50,8 @@ export const ICON_PATHS = {
   cards: '<rect x="4" y="6" width="10" height="14" rx="2" transform="rotate(-10 9 13)"/><rect x="10" y="4" width="10" height="14" rx="2" transform="rotate(10 15 11)"/>',
   swords: '<path d="M14.5 17.5 3 6V3h3l11.5 11.5M13 19l6-6M16 16l4 4M19 21l2-2M14.5 6.5 18 3h3v3l-3.5 3.5M5 14l4 4M7 17l-4 4M3 19l2 2"/>',
   dice: '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8.5 8.5h.01M15.5 8.5h.01M12 12h.01M8.5 15.5h.01M15.5 15.5h.01" stroke-width="2.5"/>',
+  volume: '<path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>',
+  bug: '<rect x="8" y="6" width="8" height="12" rx="4"/><path d="M12 6V3M9 4l-1.5-1.5M15 4l1.5-1.5M8 10H4M8 14H4M16 10h4M16 14h4M9 18l-2 3M15 18l2 3"/>',
   trophy: '<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0zM7 6H4v2a3 3 0 0 0 3 3M17 6h3v2a3 3 0 0 1-3 3"/>',
   gift: '<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M5 12v9h14v-9M12 8v13M12 8c-1.5-3-5-3-5-1s3 1 5 1c2 0 5-1 5-3s-3.5-2-5 1"/>',
   bulb: '<path d="M9.5 18h5M10.5 21h3M12 3a6 6 0 0 0-3.5 10.9c.9.7 1.5 1.7 1.5 2.9v1.2h4v-1.2c0-1.2.6-2.2 1.5-2.9A6 6 0 0 0 12 3z"/>',

@@ -5,6 +5,7 @@ import { useTheme } from "../services/theme";
 import { playCardSound, playChipSound, playTurnSound } from "../services/sounds";
 import PokerAssistPanel from "./PokerAssistPanel";
 import Icon, { Gas } from "./Icon";
+import { CardBackFace, hasCardBack } from "./CardBack";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -959,7 +960,7 @@ function LiveTableLayout({ table, game, currentUserId, isNeo }: {
                 position: "relative",
               }}>
                 <div style={{ display: "flex", gap: 3, justifyContent: "center", marginBottom: 4, height: 60 }}>
-                  {player.hole.map((c, i) => <CardView key={i} code={c === "?" ? null : c} isNeo={isNeo} small />)}
+                  {player.hole.map((c, i) => <CardView key={i} code={c === "?" ? null : c} isNeo={isNeo} small back={tableSeat?.card_back} />)}
                 </div>
                 <div style={{ textAlign: "center", color: "#fff", fontSize: 12, fontFamily: isNeo ? "var(--font-mono)" : undefined }}>
                   {tableSeat?.username || "?"}
@@ -996,7 +997,7 @@ function LiveTableLayout({ table, game, currentUserId, isNeo }: {
   );
 }
 
-function CardView({ code, isNeo, small, large }: { code: string | null; isNeo: boolean; small?: boolean; large?: boolean }) {
+function CardView({ code, isNeo, small, large, back }: { code: string | null; isNeo: boolean; small?: boolean; large?: boolean; back?: string | null }) {
   // Three size buckets. small = player hole cards in tile, normal = pre-game placeholder,
   // large = community cards on the felt where suits need to be clearly visible.
   // Подросли на ~15% по просьбе Гандолы («увеличить карты немного»)
@@ -1004,6 +1005,11 @@ function CardView({ code, isNeo, small, large }: { code: string | null; isNeo: b
   const h = large ? 104 : small ? 66 : 80;
   const rankSize = large ? 24 : small ? 16 : 20;
   const suitSize = large ? 30 : small ? 20 : 24;
+  // Закрытая карта соперника с его рубашкой (косметика ур.16) — в полный цвет,
+  // без полупрозрачности заглушки: это его понты, пусть видно
+  if (!code && hasCardBack(back)) {
+    return <CardBackFace back={back} w={w} h={h} radius={isNeo ? 0 : 5} />;
+  }
   if (!code) {
     return (
       <div style={{

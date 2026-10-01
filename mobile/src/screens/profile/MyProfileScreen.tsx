@@ -11,6 +11,7 @@ import { IconBtn } from "../../components/IconBtn";
 import { NeoButton } from "../../components/NeoButton";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import { Section } from "../../components/Section";
+import { BugReportModal } from "../../components/BugReportModal";
 import { SettingsRow as NavRow } from "../../components/SettingsRow";
 import { ProfileStackParamList } from "../../navigation/types";
 import { apiErrorMessage, authApi, userApi } from "../../services/api";
@@ -28,6 +29,7 @@ export function MyProfileScreen({ navigation }: Props) {
   const u = auth.user;
   const initial = (u?.username?.[0] ?? "?").toUpperCase();
   const [avatarBusy, setAvatarBusy] = useState(false);
+  const [bugOpen, setBugOpen] = useState(false);
   // Бейдж у «Обновления»: скачанный код и/или новая сборка APK.
   const updateBadge = useUpdateBadge();
 
@@ -141,6 +143,9 @@ export function MyProfileScreen({ navigation }: Props) {
           badge={updateBadge || null}
           onPress={() => navigation.navigate("Updates")}
         />
+        {/* «Нашёл баг»: описание + хвост логов уходят файлом хозяину в личку */}
+        <NavRow label="Нашёл баг" value="отправить логи" onPress={() => setBugOpen(true)} />
+        <BugReportModal visible={bugOpen} onClose={() => setBugOpen(false)} />
 
         <View style={{ padding: 16, paddingTop: 24 }}>
           <NeoButton variant="secondary" onPress={() => auth.signOut()}>
