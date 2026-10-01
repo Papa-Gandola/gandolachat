@@ -25,8 +25,26 @@ class WSService {
     this._connect();
   }
 
+  // Отцепить сокет от сервиса и закрыть: его onclose/onmessage больше не
+  // наши — иначе закрытый на «Выйти» сокет своим onclose ставил реконнект
+  // через 1с, и при входе в течение этой секунды открывался ВТОРОЙ сокет:
+  // каждое событие прилетало дважды, оффер звонка применялся дважды и
+  // ломал peer (нашлось сквозным тестом перелогина 02.10).
+  private _detachAndClose(ws: WebSocket | null) {
+    if (!ws) return;
+    ws.onopen = null;
+    ws.onmessage = null;
+    ws.onclose = null;
+    ws.onerror = null;
+    try { ws.close(); } catch {}
+  }
+
   private _connect() {
     if (!this.token) return;
+    // Один живой сокет на сервис: старый (если вдруг ещё открыт) — долой.
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      this._detachAndClose(this.ws);
+    }
     this.ws = new WebSocket(`${WS_URL}/ws?token=${this.token}`);
 
     this.ws.onopen = () => {
@@ -113,11 +131,14 @@ class WSService {
   }
 
   disconnect() {
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.ws?.close();
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+    if (this.pingInterval) { clearInterval(this.pingInterval); this.pingInterval = null; }
+    if (this.ws) logEvent("ws closed by app (logout)");
+    this._detachAndClose(this.ws);
     this.ws = null;
     this.token = null;
     this.reconnectAttempts = 0;
+    this.quality = "offline";
     this.handlers.clear();
   }
 }

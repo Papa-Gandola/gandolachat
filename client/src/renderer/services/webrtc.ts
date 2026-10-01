@@ -49,15 +49,27 @@ class WebRTCService {
 
   init(myUserId: number) {
     this.myUserId = myUserId;
-    if (this._initialized) return;
-    this._initialized = true;
+    // WS-подписки перевешиваем при КАЖДОМ init() (off перед on —
+    // идемпотентно): wsService.disconnect() на «Выйти» стирает ВСЕ хендлеры
+    // разом, а Main при следующем входе зовёт init() снова. Раньше гард
+    // _initialized пропускал повтор, и после «Выйти → Войти» без перезапуска
+    // сервис звонков был глухим: ансвер собеседника и чужие офферы доходили
+    // до ws.ts, но не сюда — звонки в обе стороны висели в «подключении»
+    // (баг-репорт хозяина 02.10; тот же класс бага, что presence.ts и
+    // webrtc.init на мобилке).
+    wsService.off("call_signal", this._handleSignal);
     wsService.on("call_signal", this._handleSignal);
+    wsService.off("call_end", this._handleCallEnd);
     wsService.on("call_end", this._handleCallEnd);
     // Group calls: server broadcasts the participant list on every
     // call_signal. Use it to ensure every pair of participants has a peer
     // connection, not just (caller, callee). Without this, in a 3-way call
     // the two callees can't see/hear each other — only the initiator.
+    wsService.off("call_active", this._handleCallActive);
     wsService.on("call_active", this._handleCallActive);
+    // Дальше — однократное на жизнь окна (слушатель window, не WS).
+    if (this._initialized) return;
+    this._initialized = true;
     // When the OS reports network back (VPN flip, WiFi switch), force-restart ICE
     // on every active peer instead of waiting for the per-peer disconnect debounce.
     window.addEventListener("online", () => {

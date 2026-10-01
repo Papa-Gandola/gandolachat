@@ -426,37 +426,9 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                         })
                     # If this was the very first signal of the call, schedule a 60-sec
                     # "missed" timeout — finalises the call as missed if nobody picks up.
+                    # Таймер привязан к ЗАПИСИ ЭТОГО звонка — см. _missed_call_timeout.
                     if just_created_meta:
-                        async def _missed_timeout(_chat_id: int, _db: AsyncSession):
-                            await asyncio.sleep(60)
-                            m = manager.call_meta.get(_chat_id)
-                            if not m:
-                                return  # call already ended for another reason
-                            if m.get("answered"):
-                                return  # someone picked up before the timeout
-                            # Force-end the call as missed
-                            for uid in list(manager.active_calls.get(_chat_id, set())):
-                                await manager.send_to_user(uid, {
-                                    "type": "call_end",
-                                    "from_user_id": m["initiator"],
-                                    "chat_id": _chat_id,
-                                    "timeout": True,
-                                })
-                            manager.end_call(_chat_id)
-                            # Плашки «в созвоне» у всего чата должны погаснуть —
-                            # иначе неотвеченный звонок «висит» в шапке вечно.
-                            await manager.broadcast_to_chat(_chat_id, {
-                                "type": "call_active",
-                                "chat_id": _chat_id,
-                                "participants": [],
-                            })
-                            await _persist_call_record(_chat_id, _db, ended_by=m["initiator"], declined=False)
-                        # Use a fresh session — the handler's `db` may close before 60s
-                        from app.database import AsyncSessionLocal as _ASL
-                        async def _wrap():
-                            async with _ASL() as session:
-                                await _missed_timeout(chat_id, session)
-                        _spawn(_wrap())
+                        _spawn(_missed_call_timeout(chat_id, manager.call_meta[chat_id]))
                     # call_active — только когда СОСТАВ изменился (не на каждый
                     # ICE-кандидат: это десятки рассылок за первые секунды
                     # звонка и лишние ререндеры у всех участников чата).
@@ -1189,6 +1161,47 @@ async def resume_after_reentry(table_id: int, g) -> None:
         g.reentry_open_until = None
         start_hand(g)
     await _broadcast_state(table_id, g)
+
+
+# Сколько ждать ответа на звонок, прежде чем закрыть его как пропущенный.
+MISSED_CALL_SECONDS = 60
+
+
+async def _missed_call_timeout(chat_id: int, meta: dict) -> None:
+    """60с никто не взял → закрыть звонок как пропущенный.
+
+    `meta` — запись ТОГО звонка, под который ставился таймер. Сверяем по
+    identity, а не просто «в чате есть звонок»: за минуту первый звонок мог
+    кончиться, а в том же чате начаться СЛЕДУЮЩИЙ, ещё не отвеченный — и
+    старый таймер закрывал его через пару секунд после начала, с карточкой
+    «пропущенный» в чат (баг-репорт хозяина 02.10: таймеры двух его звонков
+    по очереди прибили два встречных звонка друга). Сессия БД — своя: `db`
+    хендлера за 60с закрывается."""
+    await asyncio.sleep(MISSED_CALL_SECONDS)
+    m = manager.call_meta.get(chat_id)
+    if m is None or m is not meta:
+        return  # тот звонок уже кончился (в чате, возможно, идёт другой)
+    if m.get("answered"):
+        return  # someone picked up before the timeout
+    # Force-end the call as missed
+    for uid in list(manager.active_calls.get(chat_id, set())):
+        await manager.send_to_user(uid, {
+            "type": "call_end",
+            "from_user_id": m["initiator"],
+            "chat_id": chat_id,
+            "timeout": True,
+        })
+    manager.end_call(chat_id)
+    # Плашки «в созвоне» у всего чата должны погаснуть —
+    # иначе неотвеченный звонок «висит» в шапке вечно.
+    await manager.broadcast_to_chat(chat_id, {
+        "type": "call_active",
+        "chat_id": chat_id,
+        "participants": [],
+    })
+    from app.database import AsyncSessionLocal as _ASL
+    async with _ASL() as session:
+        await _persist_call_record(chat_id, session, ended_by=m["initiator"], declined=False)
 
 
 async def _persist_call_record(chat_id: int, db: AsyncSession, ended_by: int, declined: bool):
