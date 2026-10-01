@@ -6,9 +6,10 @@
 uploads/files и ОТ ИМЕНИ репортёра постит его файловым сообщением в ЛС
 каждому получателю (если получатель сам репортит — в его Заметки).
 Получатели — `BUG_REPORT_TO` из env (ники/id через запятую; просьба
-хозяина 02.10: админов два, репорты нужны только ему), пусто = все
-админы; никто из списка не найден — лог и фолбэк на админов (опечатка в
-.env не должна молча глотать репорты). Ничего выкачивать с устройства не
+хозяина 02.10: админов два, репорты нужны только ему — в
+docker-compose.yml по умолчанию «Papa Gandola», .env переопределяет),
+пусто = все админы; никто из списка не найден — лог и фолбэк на админов
+(опечатка не должна молча глотать репорты). Ничего выкачивать с устройства не
 надо: файл лежит в чате, хозяин скачивает и пересылает Клоду. Пуш
 получателю — без троттлинга.
 
@@ -26,7 +27,7 @@ from pathlib import Path
 import aiofiles
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import func, or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -56,42 +57,43 @@ def _clean(s: str) -> str:
     return s.encode("utf-8", "replace").decode("utf-8")
 
 
-def _wanted() -> tuple[list[str], list[int]]:
-    """BUG_REPORT_TO → (ники в нижнем регистре, числовые id)."""
-    names: list[str] = []
-    ids: list[int] = []
+def _norm(s: str) -> str:
+    """Ник из настройки сравниваем с ником в базе без учёта регистра,
+    пробелов, подчёркиваний и дефисов: хозяин назвал себя «Papa Gandola» по
+    памяти, в базе может стоять «Papa_Gandola» — из-за такой мелочи репорты
+    не должны уходить обоим админам."""
+    return re.sub(r"[\s_\-]+", "", s).casefold()
+
+
+def _wanted() -> tuple[set[str], set[int]]:
+    """BUG_REPORT_TO → (нормализованные ники, числовые id)."""
+    names: set[str] = set()
+    ids: set[int] = set()
     for part in (settings.BUG_REPORT_TO or "").split(","):
         part = part.strip()
         if not part:
             continue
         if part.isdigit():
-            ids.append(int(part))
+            ids.add(int(part))
         else:
-            names.append(part.lower())
+            names.add(_norm(part))
     return names, ids
 
 
 async def _recipients(db: AsyncSession) -> list[User]:
     """Кому слать: список из BUG_REPORT_TO (только одобренные), иначе — или
-    если никто из списка не нашёлся — все одобренные админы."""
+    если никто из списка не нашёлся — все одобренные админы. Юзеров ≤50,
+    фильтруем в Python ради `_norm`."""
     names, ids = _wanted()
+    approved = list((await db.execute(
+        select(User).where(User.is_approved.is_(True)).order_by(User.id)
+    )).scalars().all())
     if names or ids:
-        conds = []
-        if names:
-            conds.append(func.lower(User.username).in_(names))
-        if ids:
-            conds.append(User.id.in_(ids))
-        res = await db.execute(
-            select(User).where(User.is_approved.is_(True), or_(*conds)).order_by(User.id)
-        )
-        found = list(res.scalars().all())
+        found = [u for u in approved if u.id in ids or _norm(u.username) in names]
         if found:
             return found
         print(f"[bugreport] BUG_REPORT_TO={settings.BUG_REPORT_TO!r}: никто не найден — шлю всем админам")
-    res = await db.execute(
-        select(User).where(User.is_admin.is_(True), User.is_approved.is_(True)).order_by(User.id)
-    )
-    return list(res.scalars().all())
+    return [u for u in approved if u.is_admin]
 
 
 @router.post("/bug-report")
