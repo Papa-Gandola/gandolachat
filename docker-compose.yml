@@ -36,6 +36,11 @@ services:
       BACKUP_WEBDAV_URL: "${BACKUP_WEBDAV_URL:-}"
       BACKUP_WEBDAV_USER: "${BACKUP_WEBDAV_USER:-}"
       BACKUP_WEBDAV_PASSWORD: "${BACKUP_WEBDAV_PASSWORD:-}"
+      # «Нашёл баг»: кому из АДМИНОВ слать репорты (ники/id через запятую;
+      # регистр, пробелы и подчёркивания в нике не важны; не-админ в списке
+      # игнорируется). По умолчанию — хозяину; строка BUG_REPORT_TO в .env
+      # переопределяет, пустая = всем админам (см. app/api/bugreport.py).
+      BUG_REPORT_TO: "${BUG_REPORT_TO-Papa Gandola}"
     volumes:
       - uploads:/app/uploads
       # Ночные дампы БД (app/backups.py). ОТДЕЛЬНЫЙ том, НЕ uploads:

@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     BACKUP_WEBDAV_URL: str | None = None
     BACKUP_WEBDAV_USER: str | None = None
     BACKUP_WEBDAV_PASSWORD: str | None = None
+    # «Нашёл баг»: кому слать репорты — ники (регистр не важен) и/или
+    # числовые id через запятую. Пусто = всем админам. Никто из списка не
+    # найден (опечатка) — лог и фолбэк на всех админов, репорт не пропадает.
+    BUG_REPORT_TO: str = ""
 
     class Config:
         env_file = ".env"

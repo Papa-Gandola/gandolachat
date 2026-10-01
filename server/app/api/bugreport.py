@@ -4,9 +4,15 @@
 на десктопе, services/logBuffer.ts на мобилке) + мету (версия, платформа).
 Сервер кладёт всё в текстовый файл `bugreport_<ник>_<время>.txt` в
 uploads/files и ОТ ИМЕНИ репортёра постит его файловым сообщением в ЛС
-каждому админу (обычно хозяин один; если админ сам репортит — в его
-Заметки). Ничего выкачивать с устройства не надо: файл лежит в чате,
-хозяин скачивает и пересылает Клоду. Пуш админу — без троттлинга.
+каждому получателю (если получатель сам репортит — в его Заметки).
+Получатели — АДМИНЫ из `BUG_REPORT_TO` (env; ники/id через запятую;
+просьба хозяина 02.10: админов два, репорты нужны только ему — в
+docker-compose.yml по умолчанию «Papa Gandola», .env переопределяет;
+условие «ник И админ» — тоже его), пусто = все админы; никто из списка не
+админ — лог и фолбэк на всех админов (опечатка не должна молча глотать
+репорты). Ничего выкачивать с устройства не
+надо: файл лежит в чате, хозяин скачивает и пересылает Клоду. Пуш
+получателю — без троттлинга.
 
 ЛС ищется/создаётся общей chats.get_or_create_dm; репортёру тоже летит
 new_chat (ревью 02.10: десктоп узнаёт о чатах только по этому событию, без
@@ -52,6 +58,46 @@ def _clean(s: str) -> str:
     return s.encode("utf-8", "replace").decode("utf-8")
 
 
+def _norm(s: str) -> str:
+    """Ник из настройки сравниваем с ником в базе без учёта регистра,
+    пробелов, подчёркиваний и дефисов: хозяин назвал себя «Papa Gandola» по
+    памяти, в базе может стоять «Papa_Gandola» — из-за такой мелочи репорты
+    не должны уходить обоим админам."""
+    return re.sub(r"[\s_\-]+", "", s).casefold()
+
+
+def _wanted() -> tuple[set[str], set[int]]:
+    """BUG_REPORT_TO → (нормализованные ники, числовые id)."""
+    names: set[str] = set()
+    ids: set[int] = set()
+    for part in (settings.BUG_REPORT_TO or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if part.isdigit():
+            ids.add(int(part))
+        else:
+            names.add(_norm(part))
+    return names, ids
+
+
+async def _recipients(db: AsyncSession) -> list[User]:
+    """Кому слать: АДМИНЫ из BUG_REPORT_TO (ник/id + is_admin — условие
+    хозяина 02.10: чужой «papa_gandola», одобренный вторым админом, репорты
+    получать не должен), иначе — или если никто из списка не админ — все
+    одобренные админы. Юзеров ≤50, фильтруем в Python ради `_norm`."""
+    names, ids = _wanted()
+    admins = list((await db.execute(
+        select(User).where(User.is_admin.is_(True), User.is_approved.is_(True)).order_by(User.id)
+    )).scalars().all())
+    if names or ids:
+        found = [u for u in admins if u.id in ids or _norm(u.username) in names]
+        if found:
+            return found
+        print(f"[bugreport] BUG_REPORT_TO={settings.BUG_REPORT_TO!r}: среди админов никто не найден — шлю всем админам")
+    return admins
+
+
 @router.post("/bug-report")
 async def send_bug_report(
     data: BugReportIn,
@@ -60,12 +106,9 @@ async def send_bug_report(
 ):
     from app.api.chats import _message_out, get_or_create_dm
 
-    admins_res = await db.execute(
-        select(User).where(User.is_admin.is_(True), User.is_approved.is_(True)).order_by(User.id)
-    )
-    admins = list(admins_res.scalars().all())
-    if not admins:
-        raise HTTPException(503, "Некому отправить: админов нет")
+    recipients = await _recipients(db)
+    if not recipients:
+        raise HTTPException(503, "Некому отправить: получателей нет")
 
     note = _clean(data.note.strip()[:NOTE_MAX])
     log = _clean((data.log or "")[-LOG_MAX_CHARS:])
@@ -93,13 +136,13 @@ async def send_bug_report(
 
     content = f"🐞 Баг-репорт: {note}" if note else "🐞 Баг-репорт"
     chat_ids: list[int] = []
-    for admin in admins:
-        if admin.id == current_user.id:
+    for rcpt in recipients:
+        if rcpt.id == current_user.id:
             from app.notes import _get_or_create_notes_chat
             chat = await _get_or_create_notes_chat(db, current_user)
             fresh = True  # лениво созданные Заметки десктоп мог ещё не видеть
         else:
-            chat, fresh = await get_or_create_dm(db, current_user, admin)
+            chat, fresh = await get_or_create_dm(db, current_user, rcpt)
         msg = Message(
             chat_id=chat.id, sender_id=current_user.id, content=content,
             file_url=f"/uploads/files/{stored}", file_name=file_name,
@@ -117,11 +160,11 @@ async def send_bug_report(
             await manager.send_to_user(current_user.id, {"type": "new_chat", "chat_id": chat.id})
         await manager.broadcast_to_chat(chat.id, {"type": "message", **_message_out(msg).model_dump(mode="json")})
         chat_ids.append(chat.id)
-        if admin.id != current_user.id:
+        if rcpt.id != current_user.id:
             try:
                 from app.push import send_push
                 await send_push(
-                    db, [admin.id],
+                    db, [rcpt.id],
                     title=f"🐞 Баг-репорт от {current_user.username}",
                     body=note or "Логи приложены — файл в личке",
                     data={"type": "message", "chat_id": chat.id, "message_id": msg.id,
