@@ -34,12 +34,55 @@ async function ensurePermissions(video: boolean) {
 // Масштаб захвата экрана телефона (см. startScreenShare).
 const SCREEN_SCALE = 0.6;
 
+// Тип ICE-кандидата из строки SDP: host (своя сеть), srflx (за NAT, через
+// STUN), relay (через TURN) + udp/tcp. Копия десктопного candKind.
+export function candKind(c: unknown): string {
+  const s = typeof c === "string" ? c : (c as { candidate?: string } | null)?.candidate;
+  if (!s) return "?";
+  const typ = /\btyp (\w+)/.exec(s)?.[1] ?? "?";
+  const proto = /^candidate:\S+ \d+ (udp|tcp)\b/i.exec(s)?.[1]?.toLowerCase() ?? "";
+  return proto ? `${typ}/${proto}` : typ;
+}
+
+// Каким путём пошло соединение (напрямую или через TURN) — в консоль, то
+// есть в баг-репорт. getStats у rn-webrtc отдаёт RTCStatsReport с forEach.
+async function logSelectedPath(pc: RTCPeerConnection, uid: number): Promise<void> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const stats: any = await (pc as any).getStats();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const byId = new Map<string, any>();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const each = (fn: (r: any) => void) => {
+      if (typeof stats?.forEach === "function") stats.forEach(fn);
+      else if (stats && typeof stats === "object") Object.values(stats).forEach(fn);
+    };
+    each((r) => { if (r?.id) byId.set(r.id, r); });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let pair: any = null;
+    each((r) => { if (r?.type === "transport" && r.selectedCandidatePairId) pair = byId.get(r.selectedCandidatePairId) ?? pair; });
+    if (!pair) each((r) => { if (r?.type === "candidate-pair" && r.state === "succeeded" && (r.nominated || !pair)) pair = r; });
+    if (!pair) return;
+    const loc = byId.get(pair.localCandidateId);
+    const rem = byId.get(pair.remoteCandidateId);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fmt = (c: any) => (c ? `${c.candidateType ?? "?"}/${String(c.protocol ?? "?").toLowerCase()}${c.relayProtocol ? `(turn-${c.relayProtocol})` : ""}` : "?");
+    console.log(`[webrtc] path to ${uid}: local=${fmt(loc)} ↔ remote=${fmt(rem)}`);
+  } catch {
+    // статистика не обязательна
+  }
+}
+
 // Mirror the desktop ICE config so calls traverse the same STUN/TURN servers.
 const ICE_CONFIG = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "turn:2.26.117.77:3478", username: "gandola", credential: "gandolapass" },
+    // Тот же coturn по TCP — для сетей, где UDP наружу режут (мобильные
+    // операторы, гостевые Wi-Fi). Если ufw на VPS не пускает 3478/tcp,
+    // кандидат просто не соберётся (02.10, «звонок не доходит до друга»).
+    { urls: "turn:2.26.117.77:3478?transport=tcp", username: "gandola", credential: "gandolapass" },
     { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
   ],
 };
@@ -332,6 +375,9 @@ class WebRTCService {
     pc.addEventListener("icecandidate", (e: any) => {
       const c = e.candidate;
       if (c) {
+        // Тип кандидата (host/srflx/relay + udp/tcp) — в баг-репорт: видно,
+        // собрался ли у человека путь через TURN.
+        console.log(`[webrtc] candidate out → ${uid} ${candKind(c.candidate)}`);
         this._send(uid, {
           type: "candidate",
           candidate: { candidate: c.candidate, sdpMLineIndex: c.sdpMLineIndex, sdpMid: c.sdpMid },
@@ -381,8 +427,10 @@ class WebRTCService {
     //   closed       → соединение закрыто явно, участник ушёл.
     pc.addEventListener("iceconnectionstatechange", () => {
       const st = pc.iceConnectionState as string;
+      console.log(`[webrtc] ICE ${uid}: ${st}`);
       if (st === "connected" || st === "completed") {
         this._clearTimers(uid);
+        void logSelectedPath(pc, uid);
         return;
       }
       if (st === "disconnected") this._scheduleRestart(uid, pc, 2000, "ice=disconnected");
@@ -1029,6 +1077,7 @@ class WebRTCService {
           this.earlyCandidates.set(uid, q);
           return;
         }
+        console.log(`[webrtc] candidate in ← ${uid} ${candKind(signal.candidate)}`);
         await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
       }
     } catch (err) {
