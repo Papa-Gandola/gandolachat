@@ -36,6 +36,9 @@ services:
       BACKUP_WEBDAV_URL: "${BACKUP_WEBDAV_URL:-}"
       BACKUP_WEBDAV_USER: "${BACKUP_WEBDAV_USER:-}"
       BACKUP_WEBDAV_PASSWORD: "${BACKUP_WEBDAV_PASSWORD:-}"
+      # «Нашёл баг»: кому слать репорты (ник или id, через запятую).
+      # Пусто = всем админам (см. app/api/bugreport.py).
+      BUG_REPORT_TO: "${BUG_REPORT_TO:-}"
     volumes:
       - uploads:/app/uploads
       # Ночные дампы БД (app/backups.py). ОТДЕЛЬНЫЙ том, НЕ uploads:

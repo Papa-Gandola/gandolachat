@@ -4,9 +4,13 @@
 на десктопе, services/logBuffer.ts на мобилке) + мету (версия, платформа).
 Сервер кладёт всё в текстовый файл `bugreport_<ник>_<время>.txt` в
 uploads/files и ОТ ИМЕНИ репортёра постит его файловым сообщением в ЛС
-каждому админу (обычно хозяин один; если админ сам репортит — в его
-Заметки). Ничего выкачивать с устройства не надо: файл лежит в чате,
-хозяин скачивает и пересылает Клоду. Пуш админу — без троттлинга.
+каждому получателю (если получатель сам репортит — в его Заметки).
+Получатели — `BUG_REPORT_TO` из env (ники/id через запятую; просьба
+хозяина 02.10: админов два, репорты нужны только ему), пусто = все
+админы; никто из списка не найден — лог и фолбэк на админов (опечатка в
+.env не должна молча глотать репорты). Ничего выкачивать с устройства не
+надо: файл лежит в чате, хозяин скачивает и пересылает Клоду. Пуш
+получателю — без троттлинга.
 
 ЛС ищется/создаётся общей chats.get_or_create_dm; репортёру тоже летит
 new_chat (ревью 02.10: десктоп узнаёт о чатах только по этому событию, без
@@ -22,7 +26,7 @@ from pathlib import Path
 import aiofiles
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -52,6 +56,44 @@ def _clean(s: str) -> str:
     return s.encode("utf-8", "replace").decode("utf-8")
 
 
+def _wanted() -> tuple[list[str], list[int]]:
+    """BUG_REPORT_TO → (ники в нижнем регистре, числовые id)."""
+    names: list[str] = []
+    ids: list[int] = []
+    for part in (settings.BUG_REPORT_TO or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if part.isdigit():
+            ids.append(int(part))
+        else:
+            names.append(part.lower())
+    return names, ids
+
+
+async def _recipients(db: AsyncSession) -> list[User]:
+    """Кому слать: список из BUG_REPORT_TO (только одобренные), иначе — или
+    если никто из списка не нашёлся — все одобренные админы."""
+    names, ids = _wanted()
+    if names or ids:
+        conds = []
+        if names:
+            conds.append(func.lower(User.username).in_(names))
+        if ids:
+            conds.append(User.id.in_(ids))
+        res = await db.execute(
+            select(User).where(User.is_approved.is_(True), or_(*conds)).order_by(User.id)
+        )
+        found = list(res.scalars().all())
+        if found:
+            return found
+        print(f"[bugreport] BUG_REPORT_TO={settings.BUG_REPORT_TO!r}: никто не найден — шлю всем админам")
+    res = await db.execute(
+        select(User).where(User.is_admin.is_(True), User.is_approved.is_(True)).order_by(User.id)
+    )
+    return list(res.scalars().all())
+
+
 @router.post("/bug-report")
 async def send_bug_report(
     data: BugReportIn,
@@ -60,12 +102,9 @@ async def send_bug_report(
 ):
     from app.api.chats import _message_out, get_or_create_dm
 
-    admins_res = await db.execute(
-        select(User).where(User.is_admin.is_(True), User.is_approved.is_(True)).order_by(User.id)
-    )
-    admins = list(admins_res.scalars().all())
-    if not admins:
-        raise HTTPException(503, "Некому отправить: админов нет")
+    recipients = await _recipients(db)
+    if not recipients:
+        raise HTTPException(503, "Некому отправить: получателей нет")
 
     note = _clean(data.note.strip()[:NOTE_MAX])
     log = _clean((data.log or "")[-LOG_MAX_CHARS:])
@@ -93,13 +132,13 @@ async def send_bug_report(
 
     content = f"🐞 Баг-репорт: {note}" if note else "🐞 Баг-репорт"
     chat_ids: list[int] = []
-    for admin in admins:
-        if admin.id == current_user.id:
+    for rcpt in recipients:
+        if rcpt.id == current_user.id:
             from app.notes import _get_or_create_notes_chat
             chat = await _get_or_create_notes_chat(db, current_user)
             fresh = True  # лениво созданные Заметки десктоп мог ещё не видеть
         else:
-            chat, fresh = await get_or_create_dm(db, current_user, admin)
+            chat, fresh = await get_or_create_dm(db, current_user, rcpt)
         msg = Message(
             chat_id=chat.id, sender_id=current_user.id, content=content,
             file_url=f"/uploads/files/{stored}", file_name=file_name,
@@ -117,11 +156,11 @@ async def send_bug_report(
             await manager.send_to_user(current_user.id, {"type": "new_chat", "chat_id": chat.id})
         await manager.broadcast_to_chat(chat.id, {"type": "message", **_message_out(msg).model_dump(mode="json")})
         chat_ids.append(chat.id)
-        if admin.id != current_user.id:
+        if rcpt.id != current_user.id:
             try:
                 from app.push import send_push
                 await send_push(
-                    db, [admin.id],
+                    db, [rcpt.id],
                     title=f"🐞 Баг-репорт от {current_user.username}",
                     body=note or "Логи приложены — файл в личке",
                     data={"type": "message", "chat_id": chat.id, "message_id": msg.id,
