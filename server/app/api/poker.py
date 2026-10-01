@@ -141,22 +141,22 @@ async def _table_to_out(db: AsyncSession, table: PokerTable) -> PokerTableOut:
         rows = await db.execute(select(User).where(User.id.in_(user_ids)))
         for u in rows.scalars():
             users_by_id[u.id] = u
-    seats = [
-        PokerSeatOut(
+    def _seat_out(s) -> PokerSeatOut:
+        u = users_by_id.get(s.user_id)
+        return PokerSeatOut(
             id=s.id,
             user_id=s.user_id,
-            username=users_by_id.get(s.user_id).username if users_by_id.get(s.user_id) else "?",
-            avatar_url=users_by_id.get(s.user_id).avatar_url if users_by_id.get(s.user_id) else None,
+            username=u.username if u else "?",
+            avatar_url=u.avatar_url if u else None,
             seat_index=s.seat_index,
             stack=s.stack,
             is_active=s.is_active,
             reentries=s.reentries,
             gas_paid=s.gas_paid,
-            card_back=((users_by_id.get(s.user_id).comp_extra or {}).get("card_back")
-                       if users_by_id.get(s.user_id) else None),
+            card_back=(u.comp_extra or {}).get("card_back") if u else None,
         )
-        for s in sorted(table.seats, key=lambda x: x.seat_index)
-    ]
+
+    seats = [_seat_out(s) for s in sorted(table.seats, key=lambda x: x.seat_index)]
     return PokerTableOut(
         id=table.id,
         chat_id=table.chat_id,

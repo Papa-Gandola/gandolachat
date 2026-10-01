@@ -113,57 +113,51 @@ async def create_dm(
     if not target:
         raise HTTPException(404, "User not found")
 
-    # Check if DM already exists
-    result = await db.execute(
-        select(Chat)
-        .options(selectinload(Chat.members))
-        .join(Chat.members)
-        .where(Chat.is_group == False, User.id == current_user.id)
-    )
-    for chat in result.scalars().all():
-        member_ids = {m.id for m in chat.members}
-        if member_ids == {current_user.id, target_user_id}:
-            return ChatOut(
-                id=chat.id,
-                name=chat.name,
-                is_group=False,
-                created_by=chat.created_by,
-                members=[UserOut.model_validate(m) for m in chat.members],
-                last_message=await _get_last_message(chat.id, db),
-                allow_all_write=chat.allow_all_write, compendium_enabled=chat.compendium_enabled,
-                avatar_url=chat.avatar_url,
-                description=chat.description,
-                admin_ids=_parse_admin_ids(chat),
-            )
-
-    chat = Chat(is_group=False, created_by=current_user.id)
-    chat.members = [current_user, target]
-    db.add(chat)
-    await db.commit()
-    await db.refresh(chat)
-
-    # Notify the target user
-    manager.join_chat(target_user_id, chat.id)
-    manager.join_chat(current_user.id, chat.id)
-    await manager.send_to_user(target_user_id, {
-        "type": "new_chat",
-        "chat_id": chat.id,
-    })
-
-    result2 = await db.execute(
-        select(Chat).options(selectinload(Chat.members)).where(Chat.id == chat.id)
-    )
-    chat = result2.scalar_one()
+    chat, created = await get_or_create_dm(db, current_user, target)
     return ChatOut(
         id=chat.id,
         name=chat.name,
         is_group=False,
         created_by=chat.created_by,
         members=[UserOut.model_validate(m) for m in chat.members],
-        last_message=None,
+        last_message=None if created else await _get_last_message(chat.id, db),
         allow_all_write=chat.allow_all_write, compendium_enabled=chat.compendium_enabled,
         avatar_url=chat.avatar_url,
+        description=chat.description,
+        admin_ids=_parse_admin_ids(chat),
     )
+
+
+async def get_or_create_dm(db: AsyncSession, me: User, other: User) -> tuple[Chat, bool]:
+    """ЛС между двумя: найти по составу или создать. ОДНА логика на /dm и на
+    баг-репорты (api/bugreport.py): поиск по множеству участников,
+    join_chat обоим и new_chat ВТОРОЙ стороне (инициатор получает чат
+    ответом ручки — или шлёт себе new_chat сам, как баг-репорт). Возвращает
+    чат с подгруженными members и флаг «только что создан»."""
+    result = await db.execute(
+        select(Chat)
+        .options(selectinload(Chat.members))
+        .join(Chat.members)
+        .where(Chat.is_group == False, User.id == me.id)  # noqa: E712
+    )
+    for chat in result.scalars().all():
+        if {m.id for m in chat.members} == {me.id, other.id}:
+            return chat, False
+
+    chat = Chat(is_group=False, created_by=me.id)
+    chat.members = [me, other]
+    db.add(chat)
+    await db.commit()
+    await db.refresh(chat)
+
+    manager.join_chat(other.id, chat.id)
+    manager.join_chat(me.id, chat.id)
+    await manager.send_to_user(other.id, {"type": "new_chat", "chat_id": chat.id})
+
+    result2 = await db.execute(
+        select(Chat).options(selectinload(Chat.members)).where(Chat.id == chat.id)
+    )
+    return result2.scalar_one(), True
 
 
 @router.post("/group", response_model=ChatOut)

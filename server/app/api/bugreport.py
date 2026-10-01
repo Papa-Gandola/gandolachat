@@ -7,6 +7,10 @@ uploads/files и ОТ ИМЕНИ репортёра постит его файл
 каждому админу (обычно хозяин один; если админ сам репортит — в его
 Заметки). Ничего выкачивать с устройства не надо: файл лежит в чате,
 хозяин скачивает и пересылает Клоду. Пуш админу — без троттлинга.
+
+ЛС ищется/создаётся общей chats.get_or_create_dm; репортёру тоже летит
+new_chat (ревью 02.10: десктоп узнаёт о чатах только по этому событию, без
+него новое ЛС и ответ хозяина в нём не появлялись до перезапуска).
 """
 from __future__ import annotations
 
@@ -25,7 +29,7 @@ from sqlalchemy.orm import selectinload
 from app.auth import get_current_user
 from app.config import settings
 from app.database import get_db
-from app.models import Chat, Message, User
+from app.models import Message, User
 from app.ws.manager import manager
 
 router = APIRouter(prefix="/api/users", tags=["bugreport"])
@@ -41,25 +45,11 @@ class BugReportIn(BaseModel):
     meta: dict = {}             # версия, платформа, юзер-агент — собирает клиент
 
 
-async def _dm_with(db: AsyncSession, me: User, other: User) -> Chat:
-    """ЛС между двумя (как chats.create_dm), при отсутствии создаётся и
-    второй стороне летит new_chat."""
-    res = await db.execute(
-        select(Chat).options(selectinload(Chat.members)).join(Chat.members)
-        .where(Chat.is_group.is_(False), User.id == me.id)
-    )
-    for chat in res.scalars().all():
-        if {m.id for m in chat.members} == {me.id, other.id}:
-            return chat
-    chat = Chat(is_group=False, created_by=me.id)
-    chat.members = [me, other]
-    db.add(chat)
-    await db.commit()
-    await db.refresh(chat)
-    manager.join_chat(me.id, chat.id)
-    manager.join_chat(other.id, chat.id)
-    await manager.send_to_user(other.id, {"type": "new_chat", "chat_id": chat.id})
-    return chat
+def _clean(s: str) -> str:
+    """Клиенты режут строки по UTF-16 (slice), и в JSON может приехать
+    половинка эмодзи — одинокий суррогат. Postgres и запись файла в UTF-8
+    на нём падают, поэтому заменяем на «?» (ревью 02.10)."""
+    return s.encode("utf-8", "replace").decode("utf-8")
 
 
 @router.post("/bug-report")
@@ -68,6 +58,8 @@ async def send_bug_report(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    from app.api.chats import _message_out, get_or_create_dm
+
     admins_res = await db.execute(
         select(User).where(User.is_admin.is_(True), User.is_approved.is_(True)).order_by(User.id)
     )
@@ -75,8 +67,8 @@ async def send_bug_report(
     if not admins:
         raise HTTPException(503, "Некому отправить: админов нет")
 
-    note = data.note.strip()[:NOTE_MAX]
-    log = (data.log or "")[-LOG_MAX_CHARS:]
+    note = _clean(data.note.strip()[:NOTE_MAX])
+    log = _clean((data.log or "")[-LOG_MAX_CHARS:])
     now = datetime.now(timezone.utc)
     # \w в Python юникодный — кириллический ник остаётся в имени файла
     safe_user = re.sub(r"[^\w-]+", "_", current_user.username)[:24].strip("_") or f"u{current_user.id}"
@@ -94,9 +86,9 @@ async def send_bug_report(
     for i, (k, v) in enumerate((data.meta or {}).items()):
         if i >= META_MAX_KEYS:
             break
-        header.append(f"{str(k)[:40]}: {str(v)[:300]}")
+        header.append(_clean(f"{str(k)[:40]}: {str(v)[:300]}"))
     header += ["", "=== log ===", ""]
-    async with aiofiles.open(upload_dir / stored, "w", encoding="utf-8") as f:
+    async with aiofiles.open(upload_dir / stored, "w", encoding="utf-8", errors="replace") as f:
         await f.write("\n".join(header) + log)
 
     content = f"🐞 Баг-репорт: {note}" if note else "🐞 Баг-репорт"
@@ -105,32 +97,25 @@ async def send_bug_report(
         if admin.id == current_user.id:
             from app.notes import _get_or_create_notes_chat
             chat = await _get_or_create_notes_chat(db, current_user)
+            fresh = True  # лениво созданные Заметки десктоп мог ещё не видеть
         else:
-            chat = await _dm_with(db, current_user, admin)
+            chat, fresh = await get_or_create_dm(db, current_user, admin)
         msg = Message(
             chat_id=chat.id, sender_id=current_user.id, content=content,
             file_url=f"/uploads/files/{stored}", file_name=file_name,
         )
         db.add(msg)
         await db.commit()
-        await db.refresh(msg)
-        await manager.broadcast_to_chat(chat.id, {
-            "type": "message",
-            "id": msg.id,
-            "chat_id": chat.id,
-            "sender_id": current_user.id,
-            "sender_username": current_user.username,
-            "sender_avatar": current_user.avatar_url,
-            "content": content,
-            "file_url": msg.file_url,
-            "file_name": file_name,
-            "is_edited": False,
-            "created_at": msg.created_at.isoformat(),
-            "reply_to_id": None,
-            "reply_to_username": None,
-            "reply_to_content": None,
-            "reactions": [],
-        })
+        msg = (await db.execute(
+            select(Message)
+            .options(selectinload(Message.sender), selectinload(Message.reply_to).selectinload(Message.sender),
+                     selectinload(Message.reactions))
+            .where(Message.id == msg.id)
+        )).scalar_one()
+        if fresh:
+            # Десктоп добавляет чаты в сайдбар только по new_chat (chatApi.list)
+            await manager.send_to_user(current_user.id, {"type": "new_chat", "chat_id": chat.id})
+        await manager.broadcast_to_chat(chat.id, {"type": "message", **_message_out(msg).model_dump(mode="json")})
         chat_ids.append(chat.id)
         if admin.id != current_user.id:
             try:

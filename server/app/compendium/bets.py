@@ -220,6 +220,19 @@ async def _finish(db, bet: Bet, won: bool, match_season: str) -> dict:
         bet.payout = bet.stake * payout_mult(bet)
         await _credit(db, bet.bettor_id, match_season, bet.payout)
         delta = bet.payout - bet.stake
+    else:
+        # Проигранный газ опускает «вечный» максимум (решение хозяина) —
+        # именно ЗДЕСЬ, при проигрыше, а не при размещении: ва-банк на
+        # размещении обнулял бы газ и снимал всю косметику сразу, а выигрыш
+        # её не возвращал (ревью 02.10). Чат видит обновку живьём.
+        await recalc_max_level(db, bet.bettor_id)
+        try:
+            from app.api.users import _broadcast_profile
+            user = await db.get(User, bet.bettor_id)
+            if user is not None:
+                await _broadcast_profile(db, user)
+        except Exception as e:
+            print(f"[bets] profile broadcast after loss failed: {type(e).__name__}: {e}")
     return {"outcome": bet.status, "delta": delta}
 
 

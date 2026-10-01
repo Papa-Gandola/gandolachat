@@ -2,6 +2,7 @@ import axios, { AxiosError, AxiosInstance } from "axios";
 import * as SecureStore from "./secureStorage";
 
 import { API_URL } from "./config";
+import { logEvent } from "./logBuffer";
 
 export interface UserOut {
   id: number;
@@ -226,6 +227,19 @@ function getInstance(): AxiosInstance {
     }
     return config;
   });
+  // Неудачные запросы — в буфер «Нашёл баг» (метод, путь, статус, detail)
+  api.interceptors.response.use(
+    (r) => r,
+    (err: AxiosError<{ detail?: string }>) => {
+      try {
+        const m = (err?.config?.method || "?").toUpperCase();
+        const u = err?.config?.url || "?";
+        const st = err?.response?.status ?? err?.code ?? "ERR";
+        logEvent(`api ${m} ${u} → ${st}`, err?.response?.data?.detail);
+      } catch { /* лог не должен ломать ошибку */ }
+      return Promise.reject(err);
+    },
+  );
   instance = api;
   return api;
 }

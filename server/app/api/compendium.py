@@ -667,9 +667,10 @@ async def place_bet(
     ok = await bets_mod.try_debit(db, current_user.id, season, stake)
     if not ok:
         raise HTTPException(400, "Не хватает газа в этом сезоне — катай и закрывай задания")
-    # Проигранный (поставленный) газ опускает и «вечный» максимум — решение
-    # хозяина; несоответствующая косметика слетает внутри recalc.
-    await bets_mod.recalc_max_level(db, current_user.id)
+    # «Проигранные ставки могут опустить уровень» (решение хозяина) — но
+    # опускаем при ПРОИГРЫШЕ (bets._finish), не при размещении: ва-банк на
+    # размещении обнулял бы газ и снимал всю косметику сразу, а выигрыш её
+    # не возвращал (ревью 02.10). Эскроу уровень не трогает.
 
     bet = Bet(
         bettor_id=current_user.id, target_id=target.id, season=season,
@@ -684,11 +685,6 @@ async def place_bet(
         await db.rollback()
         raise HTTPException(400, "У тебя уже есть открытая ставка на этого игрока — дождись развязки")
     await db.refresh(bet)
-
-    # Уровень/косметика могли измениться — чат должен увидеть живьём
-    from app.api.users import _broadcast_profile
-    await db.refresh(current_user)
-    await _broadcast_profile(db, current_user)
 
     if data.all_in:
         await _announce_all_in(db, current_user, target, bet)
@@ -716,11 +712,19 @@ async def _announce_all_in(db: AsyncSession, bettor: User, target: User, bet: Be
     from app.push import send_push
     from app.ws.handler import post_chat_text
 
-    label = bets_mod.describe({"market": bet.market, "side": bet.side, "line": bet.line})
+    try:
+        chats = await _compendium_chats_for(db, bettor.id)
+        label = bets_mod.describe({"market": bet.market, "side": bet.side, "line": bet.line})
+    except Exception as e:
+        # Сессия после ошибки в pending-rollback — чистим, иначе ответ ручки
+        # (чтение газа) упадёт при уже закоммиченной ставке (грабля №2)
+        await db.rollback()
+        print(f"[bets] all-in announce prep failed: {type(e).__name__}: {e}")
+        return
     who = "себя" if target.id == bettor.id else target.username
     text = f"🎰 ВА-БАНК: {bettor.username} поставил всё — {bet.stake}⛽ на {who}: {label}.\n{ALL_IN_ROAST}"
     body = f"{bettor.username} поставил всё ({bet.stake}⛽) на {who}: {label}. {ALL_IN_ROAST}"
-    for chat in await _compendium_chats_for(db, bettor.id):
+    for chat in chats:
         try:
             await post_chat_text(db, chat.id, bettor, text)
             member_res = await db.execute(
@@ -735,6 +739,7 @@ async def _announce_all_in(db: AsyncSession, bettor: User, target: User, bet: Be
                     channel_id="messages", priority="high",
                 )
         except Exception as e:
+            await db.rollback()
             print(f"[bets] all-in announce failed in chat {chat.id}: {type(e).__name__}: {e}")
 
 

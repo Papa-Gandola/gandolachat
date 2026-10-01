@@ -1,8 +1,11 @@
 // Production fallback over wss:// — see api.ts for the why. Override in
 // client/.env for local dev.
 const WS_URL = import.meta.env.VITE_WS_URL || "wss://2-26-117-77.sslip.io";
+import { logEvent } from "./logbuffer";
 
 type Handler = (data: any) => void;
+// Что НЕ писать в буфер «Нашёл баг»: шумные и бесполезные для разбора типы
+const QUIET_TYPES = new Set(["ping", "pong", "typing"]);
 
 class WSService {
   private ws: WebSocket | null = null;
@@ -27,6 +30,7 @@ class WSService {
     this.ws = new WebSocket(`${WS_URL}/ws?token=${this.token}`);
 
     this.ws.onopen = () => {
+      logEvent(`ws open (attempt ${this.reconnectAttempts})`);
       this.reconnectAttempts = 0;
       this.quality = "good";
       this.onQualityChange?.("good", 0);
@@ -59,6 +63,10 @@ class WSService {
             this.seenEids.delete(oldest);
           }
         }
+        if (!QUIET_TYPES.has(data.type)) {
+          // В буфер «Нашёл баг»: тип события + чат/юзер, без тела (там могут быть тексты)
+          logEvent(`ws ← ${data.type}${data.chat_id ? ` chat=${data.chat_id}` : ""}${data.user_id ? ` user=${data.user_id}` : ""}${data.signal?.type ? ` signal=${data.signal.type}` : ""}`);
+        }
         const listeners = this.handlers.get(data.type) || [];
         listeners.forEach((h) => h(data));
       } catch {}
@@ -70,10 +78,12 @@ class WSService {
       if (this.pingInterval) { clearInterval(this.pingInterval); this.pingInterval = null; }
       const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
       this.reconnectAttempts++;
+      logEvent(`ws close → reconnect in ${delay}ms`);
       this.reconnectTimer = setTimeout(() => this._connect(), delay);
     };
 
     this.ws.onerror = () => {
+      logEvent("ws error");
       this.ws?.close();
     };
   }
@@ -89,10 +99,16 @@ class WSService {
   }
 
   send(data: object): boolean {
+    const t = (data as { type?: string; chat_id?: number; signal?: { type?: string } }).type;
+    if (t && !QUIET_TYPES.has(t)) {
+      const d = data as { chat_id?: number; signal?: { type?: string } };
+      logEvent(`ws → ${t}${d.chat_id ? ` chat=${d.chat_id}` : ""}${d.signal?.type ? ` signal=${d.signal.type}` : ""}`);
+    }
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data));
       return true;
     }
+    if (t && !QUIET_TYPES.has(t)) logEvent(`ws → ${t} DROPPED (socket ${this.ws?.readyState ?? "none"})`);
     return false;
   }
 
