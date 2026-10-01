@@ -5,11 +5,12 @@
 Сервер кладёт всё в текстовый файл `bugreport_<ник>_<время>.txt` в
 uploads/files и ОТ ИМЕНИ репортёра постит его файловым сообщением в ЛС
 каждому получателю (если получатель сам репортит — в его Заметки).
-Получатели — `BUG_REPORT_TO` из env (ники/id через запятую; просьба
-хозяина 02.10: админов два, репорты нужны только ему — в
-docker-compose.yml по умолчанию «Papa Gandola», .env переопределяет),
-пусто = все админы; никто из списка не найден — лог и фолбэк на админов
-(опечатка не должна молча глотать репорты). Ничего выкачивать с устройства не
+Получатели — АДМИНЫ из `BUG_REPORT_TO` (env; ники/id через запятую;
+просьба хозяина 02.10: админов два, репорты нужны только ему — в
+docker-compose.yml по умолчанию «Papa Gandola», .env переопределяет;
+условие «ник И админ» — тоже его), пусто = все админы; никто из списка не
+админ — лог и фолбэк на всех админов (опечатка не должна молча глотать
+репорты). Ничего выкачивать с устройства не
 надо: файл лежит в чате, хозяин скачивает и пересылает Клоду. Пуш
 получателю — без троттлинга.
 
@@ -81,19 +82,20 @@ def _wanted() -> tuple[set[str], set[int]]:
 
 
 async def _recipients(db: AsyncSession) -> list[User]:
-    """Кому слать: список из BUG_REPORT_TO (только одобренные), иначе — или
-    если никто из списка не нашёлся — все одобренные админы. Юзеров ≤50,
-    фильтруем в Python ради `_norm`."""
+    """Кому слать: АДМИНЫ из BUG_REPORT_TO (ник/id + is_admin — условие
+    хозяина 02.10: чужой «papa_gandola», одобренный вторым админом, репорты
+    получать не должен), иначе — или если никто из списка не админ — все
+    одобренные админы. Юзеров ≤50, фильтруем в Python ради `_norm`."""
     names, ids = _wanted()
-    approved = list((await db.execute(
-        select(User).where(User.is_approved.is_(True)).order_by(User.id)
+    admins = list((await db.execute(
+        select(User).where(User.is_admin.is_(True), User.is_approved.is_(True)).order_by(User.id)
     )).scalars().all())
     if names or ids:
-        found = [u for u in approved if u.id in ids or _norm(u.username) in names]
+        found = [u for u in admins if u.id in ids or _norm(u.username) in names]
         if found:
             return found
-        print(f"[bugreport] BUG_REPORT_TO={settings.BUG_REPORT_TO!r}: никто не найден — шлю всем админам")
-    return [u for u in approved if u.is_admin]
+        print(f"[bugreport] BUG_REPORT_TO={settings.BUG_REPORT_TO!r}: среди админов никто не найден — шлю всем админам")
+    return admins
 
 
 @router.post("/bug-report")
