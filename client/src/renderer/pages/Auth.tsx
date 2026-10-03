@@ -7,6 +7,27 @@ interface Props {
   onLogin: (token: string, user: any) => void;
 }
 
+// Человеческий текст ошибки входа. Раньше всё, что без `detail` от сервера,
+// показывалось как «Ошибка. Попробуй снова» — и человек с правильным
+// паролем, у которого просто нет связи с сервером (DNS, провайдер, VPN,
+// антивирус), думал, что ошибся в пароле (02.10: у одного друга «иногда
+// не пускает с правильным паролем», у него же не доходят звонки — одна
+// и та же сеть). Код ошибки (ERR_NETWORK, ECONNABORTED) — для баг-репорта.
+export function describeAuthError(err: any): string {
+  const res = err?.response;
+  if (!res) {
+    const code = err?.code ? ` (${err.code})` : "";
+    return `Нет связи с сервером${code}. Пароль тут ни при чём — проверь интернет, VPN или антивирус и попробуй ещё раз`;
+  }
+  const detail = typeof res.data?.detail === "string" ? res.data.detail : "";
+  const st: number = res.status ?? 0;
+  if (st === 401) return detail || "Неверное имя или пароль";
+  if (st === 403) return detail || "Аккаунт ещё не одобрен админом";
+  if (st === 429) return detail || "Слишком много попыток — подожди минуту";
+  if (st >= 500) return `Сервер ответил ошибкой ${st} — он перезапускается или перегружен, попробуй через минуту`;
+  return detail || `Ошибка ${st || ""}. Попробуй снова`.replace("  ", " ");
+}
+
 export default function Auth({ onLogin }: Props) {
   const theme = useTheme();
   const isNeo = theme === "neo";
@@ -44,7 +65,7 @@ export default function Auth({ onLogin }: Props) {
       }
       onLogin(access_token, user);
     } catch (err: any) {
-      setError(err.response?.data?.detail || "Ошибка. Попробуй снова.");
+      setError(describeAuthError(err));
     } finally {
       setLoading(false);
     }

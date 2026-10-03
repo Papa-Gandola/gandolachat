@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ChatOut, UserOut, chatApi, notesApi } from "../services/api";
 import { wsService } from "../services/ws";
+import { closeChatNotifications } from "../services/notify";
 import { initPresence } from "../services/presence";
 import { webrtcService } from "../services/webrtc";
 import { playCallRing, playMessageSound } from "../services/sounds";
@@ -259,6 +260,13 @@ export default function Main({ token, user, onLogout }: Props) {
     // играет фоном весь разговор.
     wsService.on("call_taken", (data) => {
       setIncomingCalls((prev) => prev.filter((c) => c.chatId !== data.chat_id));
+    });
+
+    // Сквозное гашение уведомлений (03.10): чат прочитан на телефоне (или
+    // здесь же) — системные уведомления этого чата закрываем. Сервер шлёт
+    // message_read и нашим сокетам, без exclude_user.
+    wsService.on("message_read", (data) => {
+      if (data.user_id === user.id && data.chat_id) closeChatNotifications(Number(data.chat_id));
     });
 
     // Реконнект: реестр звонков мог протухнуть (звонок кончился, пока мы
