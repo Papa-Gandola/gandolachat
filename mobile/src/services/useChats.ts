@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChatRowData } from "../components/ChatRow";
 import { apiErrorMessage, chatApi, ChatOut } from "./api";
 import { useAuth } from "./AuthContext";
+import { dismissChatNotifications, pruneReadNotifications } from "./notifications";
 import { wsService } from "./ws";
 
 // Deterministic palette per chat id — same chat keeps the same avatar tint
@@ -118,7 +119,12 @@ export function useChats(): ChatsState {
     ]);
     if (chatsRes.status === "fulfilled") setRaw(chatsRes.value.data);
     else if (!silent) setError(apiErrorMessage(chatsRes.reason));
-    if (unreadRes.status === "fulfilled") setUnread(unreadRes.value.data);
+    if (unreadRes.status === "fulfilled") {
+      setUnread(unreadRes.value.data);
+      // Уведомления чатов, прочитанных с другого устройства, пока нас не
+      // было (холодный старт, возврат из фона → _ws_open) — снимаем.
+      void pruneReadNotifications(unreadRes.value.data);
+    }
     if (onlineRes.status === "fulfilled") setOnline(new Set(onlineRes.value.data.online_user_ids));
     if (!silent) setLoading(false);
   }, [user]);
@@ -187,6 +193,8 @@ export function useChats(): ChatsState {
         setUnread((prev) =>
           prev[String(m.chat_id)] ? { ...prev, [String(m.chat_id)]: 0 } : prev,
         );
+        // …и уведомление этого чата в шторке (прочитали на компе — или тут)
+        void dismissChatNotifications(Number(m.chat_id));
       }
     };
     wsService.on("message_read", onReadSync);

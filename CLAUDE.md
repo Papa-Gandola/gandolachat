@@ -162,7 +162,30 @@ print-логи видны в `docker compose logs` с опозданием (не
   uploads/vapid/, pywebpush в тредпуле, мёртвые подписки 404/410
   вычищаются; подписки в web_push_subscriptions, миграция 0006; ручки
   /api/users/web-push*). Троттлинг 15с/чат для обычных сообщений; /dota и
-  рампага/фулл-стак — без троттлинга.
+  рампага/фулл-стак — без троттлинга. **Сквозное гашение уведомлений**
+  (просьба хозяина 03.10, 2.3.18): прочитал чат на одном устройстве —
+  на остальных уведомление о сообщении пропадает. Живые устройства гасят
+  САМИ по WS `message_read` своего юзера (он и так летит всем сокетам
+  читателя): десктоп — `services/notify.ts` (реестр Notification по
+  chat_id, `closeChatNotifications` из Main.tsx), мобилка —
+  `services/notifications.ts` `dismissChatNotifications` (натив:
+  `getPresentedNotificationsAsync` + `dismissNotificationAsync` по
+  `data.chat_id`, тип `call` не трогаем; веб: `serviceWorker.ready →
+  getNotifications()`), плюс `pruneReadNotifications` по `/chats/unread`
+  в `useChats.doRefresh` (холодный старт, `_ws_open`) — снимает
+  уведомления чатов, прочитанных пока приложения не было. Для PWA/айфона
+  с ЗАКРЫТОЙ страницей — сервер: `push.send_read_sync` из `mark_read`
+  шлёт ТИХИЙ Web Push `{type:"read", chat_id}` (title/body пустые), sw.js
+  закрывает уведомления этого чата по `data.chat_id` и ничего не
+  показывает (Chrome на тихий пуш может изредка нарисовать «сайт
+  обновлён в фоне» — приняли). Чтобы не слать на каждый mark_read:
+  `_note_pushed` в `send_push` помнит `(user, chat) → время` последнего
+  пуша типа `message`, тихий пуш уходит один раз после него и не позже
+  `READ_SYNC_WINDOW_SEC` (12ч). Expo data-only пуш для убитого
+  нативного приложения НЕ шлём: без expo-task-manager (нативный модуль =
+  новый APK) он не обрабатывается — уведомление там пропадёт при
+  следующем запуске (прунинг). Тест: scratchpad `test_read_sync.py`
+  (TestClient, два сокета).
 - `app/apk_mirror.py` — зеркало Android APK: джоба (старт + каждые 30 мин)
   качает свежий `gandolachat.apk` из релиза mobile-latest в `uploads/apk/`
   (сравнение по updated_at в meta.json, .part + atomic rename, sync-httpx
@@ -1511,8 +1534,11 @@ nginx; сервер попыток входа не лимитирует (auth.py
 (2.3.18); в буфер репорта axios-перехватчик пишет `api POST
 /api/auth/login → ERR_NETWORK|401` — репорт после удачного входа покажет,
 сеть это или пароль (буфер живёт весь запуск, приложение не перезапускать).
-Деплой после мержа #86: сервер по таблице + тег v2.3.18; мобилка — OTA
-(TURN tcp + логи пути, CHANGELOG_ID не поднимал — только диагностика).
+Туда же (03.10) — **сквозное гашение уведомлений** («прочитал на компе,
+а на телефоне висит»): см. app/push.py `send_read_sync`, mobile
+`notifications.ts`, десктоп `services/notify.ts`, sw.js. Деплой после
+мержа #86: сервер по таблице + тег v2.3.18 + **PWA по команде из таблицы
+(sw.js изменился!)**; натив — OTA сам (CHANGELOG_ID 2026-10-03).
 Фаза 2 косметики — остаток в описании api/compendium.py, ждёт «давай».
 **«Бинго» тайных** (просьба хозяина 01.10, в том же PR #83): вкладка
 БИНГО на десктопе и мобилке, `/me.bingo` — см. api/compendium.py.

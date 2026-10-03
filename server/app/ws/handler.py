@@ -273,6 +273,14 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, db: AsyncSessio
                         "user_id": user_id,
                         "last_read_message_id": msg_id,
                     })
+                    # Сквозное гашение уведомлений (03.10): PWA/айфону с
+                    # закрытой страницей — тихий Web Push «прочитано», если
+                    # туда недавно уходил пуш о сообщении (см. push.py).
+                    try:
+                        from app.push import send_read_sync
+                        await send_read_sync(db, user_id, chat_id)
+                    except Exception as e:
+                        print(f"[push][read-sync] {type(e).__name__}: {e}")
 
             elif event == "video_status":
                 chat_id = data.get("chat_id")
