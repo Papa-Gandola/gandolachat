@@ -225,7 +225,408 @@ gandolachat/
 <!-- SECTION:6-server -->
 ## 6. Сервер
 
-_(раздел заполняется)_
+Код: `server/app/`. Стек: Python 3.12, FastAPI 0.111 (starlette 0.37
+прибит им), SQLAlchemy 2.0 async + asyncpg, PostgreSQL 16, Alembic,
+APScheduler 3 (AsyncIOScheduler), python-jose (JWT), bcrypt, httpx,
+pywebpush, pillow. Запуск: `uvicorn app.main:app --host 0.0.0.0 --port
+8000` (CMD в Dockerfile). **Один процесс uvicorn** — всё in-memory
+состояние (сокеты, составы звонков, покерные раздачи, присутствие в Доте,
+троттлинг пушей) живёт в нём; второй воркер всё сломает.
+
+### 6.1 Старт приложения (`main.py`)
+
+`lifespan`:
+
+1. `alembic upgrade head` в тредпуле (миграции только добавляющие, см.
+   §6.4).
+2. Синк `assets/compendium/intro.mp4` → `uploads/compendium/intro.mp4`
+   (сверка по размеру и sha256).
+3. Регистрация джоб планировщика (таблица ниже), `scheduler.start()`.
+4. Логи здоровья: `backups.log_health()` (возраст свежего дампа),
+   `backups.log_uploads_health()` (возраст синка вложений),
+   `disk.log_health()` (размер uploads и свободное место; «МЕСТО
+   КОНЧАЕТСЯ» при <2 ГБ).
+5. Дополнительный прогон `finalize_season` при каждом старте (джобстор
+   in-memory — рестарт поверх крона иначе терял запуск).
+
+Остальное в `main.py`: CORS `*`; `GET /health`; роутер `/uploads/{path}`
+(`uploads_static.py`, см. §6.6); REST-роутеры (порядок: auth, users,
+chats, poker, dota, compendium, apk_mirror, notes, polls, bugreport);
+`app.mount("/app", StaticFiles(directory="web", html=True))` — PWA; WS-роут
+`/ws?token=<jwt>`.
+
+В Dockerfile `PYTHONUNBUFFERED=1` — без него `print`-логи появляются в
+`docker compose logs` с опозданием. Все логи — `print` с префиксами вида
+`[ws]`, `[push]`, `[steam-link]`, `[compendium]`, `[bugreport]`, `[disk]`,
+`[backup]`.
+
+**Джобы планировщика** (все UTC; МСК = UTC+3):
+
+| Джоба | Расписание | Что делает |
+|---|---|---|
+| `cleanup_expired_messages` | каждый час | удаляет только сообщения с выставленным `expires_at` — таких давно не создаётся, фактически no-op |
+| `finale.finalize_season` | cron 1-го числа 09:00 UTC (12:00 МСК), misfire 20ч + прогон на старте | закрытие прошлых сезонов Гандолиума (§7.6) |
+| `backups.run_backup` | cron 01:00 UTC (04:00 МСК) | `pg_dump -Fc` в том `backups`, ротация 14, офсайт WebDAV |
+| `backups.run_uploads_backup` | cron 01:20 UTC | инкрементальный офсайт вложений |
+| `weekly.week_recap` | cron Вс 18:00 UTC (21:00 МСК), misfire 2ч | карточка «Итоги недели» |
+| `steam_presence.poll_presence` | каждые 120 с | «🎮 в Доте сейчас» через Steam API |
+| `notes.fire_due_reminders` | каждые 30 с | срабатывание напоминаний |
+| `apk_mirror.sync_apk` | каждые 30 мин, первый сразу | зеркало APK с GitHub |
+| `poker.close_stale_tables` | каждые 30 мин, первый через 90 с | снос столов старше 6 ч |
+| `poller.poll_matches` | каждые `max(5, DOTA_POLL_MINUTES)` мин | новые катки → задания, ставки |
+| `poller.recheck_parses` | каждые 20 мин | дотягивает парс 📼 |
+| `poller.refresh_ranks` | каждый час | звания, «Восхождение» |
+| `poller.weekly_roast` | cron 00:25 UTC ежедневно, работает только по понедельникам, misfire 20ч | «Дно недели», «Якорь сезона» |
+
+Все джобы компендиума — под общим `asyncio.Lock` (`poller._JOB_LOCK`),
+иначе гонки за газ и дубли карточек. `max_instances=1, coalesce=True` у
+интервальных.
+
+### 6.2 Конфигурация (`config.py`)
+
+`Settings` (pydantic-settings, читает env и `.env`):
+
+| Поле | Дефолт | Смысл |
+|---|---|---|
+| `DATABASE_URL` | `postgresql+asyncpg://gandola:gandola@localhost:5432/gandolachat` | compose подставляет хост `db` |
+| `SECRET_KEY` | плейсхолдер | подпись JWT. **Менять нельзя** — все токены протухнут |
+| `ALGORITHM` | `HS256` | |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | 10080 (7 дней) | клиенты обновляют токен через `/api/users/me` при каждом старте |
+| `UPLOAD_DIR` | `uploads` | том `uploads` в compose |
+| `MAX_FILE_SIZE_MB` | 50 | лимит для видео; прочие файлы — 10 МБ (захардкожено в chats.py) |
+| `MESSAGE_TTL_DAYS` | 2 | наследие, к сообщениям не применяется |
+| `OPENDOTA_API_KEY` | пусто | опционально, поднимает лимит OpenDota |
+| `STEAM_API_KEY` | пусто | нужен для vanity-ссылок Steam и для «в Доте сейчас» |
+| `VAPID_SUBJECT` | `https://2-26-117-77.sslip.io` | subject Web Push |
+| `DOTA_POLL_MINUTES` | 20 | интервал поллера каток |
+| `BACKUP_WEBDAV_URL/USER/PASSWORD` | None | офсайт бэкапов; пусто = только локальные дампы |
+| `BUG_REPORT_TO` | пусто | кому слать баг-репорты (compose подставляет «Papa Gandola») |
+
+`BACKUP_DIR` берётся из `os.environ` напрямую в `backups.py` (дефолт
+`/app/backups`).
+
+### 6.3 База данных (`database.py`, `models.py`)
+
+Движок `create_async_engine`, `AsyncSessionLocal(expire_on_commit=False)`.
+Из-за `expire_on_commit=False` объекты после коммита не протухают — удобно,
+но после ручного INSERT повторный `select` вернёт **стейл-объект** из
+identity map; перечитка — только с
+`.execution_options(populate_existing=True)` (ловушка №1). После `rollback`
+в async-сессии обращение к любому атрибуту = `MissingGreenlet` (ловушка
+№2): в джобах держать снапшоты примитивов и перечитывать свежим select.
+
+Таблицы (22):
+
+| Таблица | Назначение | Ключевые колонки / ограничения |
+|---|---|---|
+| `users` | пользователи | `username` unique; `password_hash` (bcrypt); `avatar_url`, `status`(50), `about`(500); `grammar_errors`, `grammar_wk_base`; `is_approved` (регистрация ждёт админа), `is_admin` (только руками в SQL); `last_seen`; Steam: `steam_id64` строкой (не влезает в JS Number), `dota_account_id` BIGINT unique, `dota_rank_tier`, `dota_leaderboard_rank`, `dota_rank_updated_at`, `dota_linked_at`, `dota_presence_visible`; косметика: `comp_max_level`, `comp_badge`, `comp_title`(40), `comp_color`(7), `comp_frame`(16), `comp_extra` JSON |
+| `chats` | ЛС, группы, Заметки | `name` (NULL у ЛС), `is_group`, `created_by`, `allow_all_write` (False = канал), `avatar_url`, `description`(1000), `admin_ids` — JSON-строка списка id, `compendium_enabled`, `is_notes`; частичный unique `uq_chats_notes_owner` (одни Заметки на юзера) |
+| `chat_members` | состав чата | `(chat_id, user_id)` PK, `joined_at` |
+| `messages` | сообщения | `chat_id`, `sender_id`, `content` Text (NULL у чисто файловых), `file_url`, `file_name`, `is_edited`, `reply_to_id` (SET NULL), `created_at` index, `expires_at` (не используется), `media_group_id` (альбом до 10 файлов) |
+| `reactions` | реакции | `message_id`, `user_id`, `emoji`(10); уникальности нет и сервер дубли не проверяет — клиенты шлют реакцию как тоггл (поставить/снять) |
+| `read_receipts` | прочитанность | `(user_id, chat_id)` PK → `last_read_message_id` |
+| `poker_tables` | столы | `status` lobby/playing/finished, `starting_stack` 30000, `starting_small_blind` 100, `starting_big_blind` 200, `blind_increase_minutes` 7, `max_seats` 6, `mode` chips/gas, `entry_gas`, `max_reentries` 2, `reentry_until_level` 3, `gas_pot`, `started_at`, `finished_at` |
+| `poker_seats` | места | `table_id`, `user_id`, `seat_index`, `stack`, `is_active`, `reentries`, `gas_paid`; unique `uq_poker_seat_user (table_id, user_id)` |
+| `reminders` | напоминания Заметок | `user_id`, `text`(500), `remind_at`, `fired`, `message_id` (карточка `/reminder`) |
+| `push_tokens` | Expo-токены | `token` unique (перерегистрация переезжает к текущему юзеру), `platform` |
+| `web_push_subscriptions` | Web Push | `endpoint` Text unique, `p256dh`, `auth` |
+| `polls`, `poll_options`, `poll_votes` | опросы | `polls.message_id` (носитель `/poll N`), `allow_multi`, `allow_add`, `closed_at`; `poll_options.created_by` (кто дописал); unique `uq_poll_vote (option_id, user_id)` |
+| `pinned_messages` | закрепы | unique `uq_pin (chat_id, message_id)` |
+| `dota_matches` | катки привязанных | unique `uq_dota_match_user (match_id, user_id)`, `season`, статы (`kills`… `net_worth`), парс-факты (`wards_placed`, `camps_stacked`, `runes_picked`, `multi_kill_max`, `kill_streak_max`, `firstblood`, `lane_role`), `team_key`/`team_size`, `is_parsed`, `parse_attempts`, `data` JSON-текст |
+| `compendium_profiles` | кошелёк сезона | unique `(user_id, season)`, `gas`, `start_rank_tier` |
+| `quest_completions` | выполнения | unique `(user_id, quest_id, period_key)`, `gas` со знаком, `match_id` |
+| `season_results` | архив сезонов | unique `(season, user_id)`, `place`, `username`, `gas`, `level`, `quests_done`, `anti_count` |
+| `bets` | ставки | `market`, `side`, `line`, `stake`, `status` open/won/lost/refunded, `match_id`, `progress`, `payout`; частичный unique `uq_bets_open_pair` (одна открытая ставка на пару) |
+| `season_prizes`, `season_prize_draws` | призы | пул (`weight`, `active`, `hint1..3`) и розыгрыш на сезон (`season` unique, снапшот названия/подсказок, `revealed`, `winner_*`) |
+
+Каскады: удаление пользователя сносит его сообщения, членства, реакции,
+токены, катки, выполнения — поэтому `reject-user` удаляет **только**
+неодобренных (гард в `api/auth.py`).
+
+### 6.4 Миграции (`alembic/versions/`)
+
+Только добавляющие, прогоняются сами на старте. 0001 базовая схема; 0002
+push_tokens; 0003 компендиум (dota_matches, compendium_profiles,
+quest_completions, users.dota_*); 0004 косметика (comp_*); 0005 BIGINT и
+unique на `dota_account_id`; 0006 web_push_subscriptions; 0007
+`chats.is_notes` + reminders; 0008 season_results; 0009 bets; 0010
+`dota_presence_visible` + `grammar_wk_base` с бэкфиллом (иначе первая
+карточка «Граммар-наци недели» судила бы по счётчику за всю историю); 0011
+пересчёт `comp_max_level` под «уровень лучшего сезона»; 0012 опросы и
+закрепы; 0013 настройки покерного стола и режим «за газ»; 0014 призы;
+0015 `uq_poker_seat_user` с дедупом; 0016 `users.comp_extra` + срез
+`comp_max_level` до 12 (октябрь-2026: новая шкала, «сороковые» сентября не
+должны получить косметику 13–30 даром).
+
+### 6.5 Аутентификация (`auth.py`, `api/auth.py`)
+
+- bcrypt для паролей, JWT HS256 с `sub = user_id`, срок 7 дней.
+  `get_current_user` — зависимость FastAPI по `Authorization: Bearer`.
+- `POST /api/auth/register {username, password}` → пользователь с
+  `is_approved=False`, `is_admin=False`; админам по WS летит
+  `new_pending_user`. Ответ всегда `{status: "pending", message}` — токена
+  при регистрации не бывает (ветка «сервер вернул токен» в мобильном
+  RegisterScreen мёртвая).
+- `POST /api/auth/login` → 403 до одобрения, 401 при неверном пароле;
+  попыток входа сервер не лимитирует.
+- `GET /api/auth/pending-users`, `POST /api/auth/approve-user/{id}`,
+  `POST /api/auth/reject-user/{id}` — только админ. Reject удаляет только
+  неодобренного (см. каскады).
+- `POST /api/auth/change-password {old_password, new_password}`.
+- Админство — только колонкой `users.is_admin`, ставится руками в SQL.
+- `GET /api/users/me` отдаёт `MeOut`: плоские поля юзера + вложенный
+  `user` + **свежий `access_token`** — клиенты ротируют токен при каждом
+  старте, так семидневный срок на практике не истекает у активных.
+
+### 6.6 REST API
+
+Все пути под `/api/...`, кроме `/health`, `/uploads/...`, `/apk`,
+`/apk/info`, `/app/...`. Ошибки — `HTTPException` с русским `detail`
+(клиенты показывают его как есть).
+
+**users** (`api/users.py`, `api/bugreport.py`):
+
+| Метод и путь | Что |
+|---|---|
+| `GET /api/users/me` | профиль + свежий токен |
+| `GET /api/users/search?q=` | поиск по нику (видны и неодобренные — см. §6.11) |
+| `PATCH /api/users/me` | `username`, `status`, `about`, `dota_presence_visible`; шлёт `profile_updated` |
+| `GET /api/users/{id}` | чужой профиль (`UserOut` несёт косметику и `comp_extra`) |
+| `POST /api/users/avatar` | multipart, пишет в `uploads/avatars/` |
+| `POST /api/users/me/steam {input}` | привязка Steam: `opendota.resolve_link_input` понимает /profiles/id64, /id/vanity (нужен STEAM_API_KEY), ссылки Dotabuff/OpenDota, голый steamID64 или Friend ID. Привязка другого аккаунта удаляет `DotaMatch` юзера; гонка двойной привязки → unique → 400; сетевые ошибки → 502 (`_opendota_error`) |
+| `DELETE /api/users/me/steam` | отвязка (чистит `dota_*`) |
+| `POST /api/users/me/steam/refresh` | обновить звание |
+| `GET /api/users/web-push/key` | публичный VAPID-ключ |
+| `POST/DELETE /api/users/web-push` | подписка Web Push `{endpoint, keys{p256dh, auth}}` |
+| `POST/DELETE /api/users/push-token` | Expo-токен `{token, platform}` |
+| `POST /api/users/bug-report {note, log, meta}` | файл `bugreport_<ник>_<время>.txt` в `uploads/files/` → файловое сообщение от имени репортёра в ЛС каждому получателю (`BUG_REPORT_TO`: ники/id через запятую, сравнение `_norm` без регистра/пробелов/_/-; только одобренные **админы**; пусто или никто не найден → все админы). Лог режется до 1,5 МБ, note до 500, одинокие суррогаты UTF-16 → «?». Пуш получателю без троттлинга |
+
+**chats** (`api/chats.py`, `notes.py`, `api/polls.py`):
+
+| Метод и путь | Что |
+|---|---|
+| `GET /api/chats` | список чатов юзера с последним сообщением и unread; Заметки тоже здесь |
+| `POST /api/chats/dm?target_user_id=` | найти или создать ЛС (`get_or_create_dm`: по составу; второй стороне `new_chat`) |
+| `POST /api/chats/group {name, member_ids, allow_all_write}` | группа ≤7 с создателем |
+| `GET /api/chats/{id}/stats` | `media_count`, `link_count`, `file_count` |
+| `PATCH /api/chats/{id}` | создатель: `name`, `description`, `admin_ids`, `compendium_enabled` → WS `chat_updated` **без** `last_message` |
+| `POST /api/chats/{id}/avatar` | аватар группы → `uploads/group_avatars/` |
+| `POST /api/chats/{id}/members {user_id}` | добавить (создатель/админ, ≤7) |
+| `DELETE /api/chats/{id}/members/{uid}` | кик |
+| `POST /api/chats/{id}/leave`, `DELETE /api/chats/{id}` | выйти; удалить (создатель) → `chat_deleted` |
+| `DELETE /api/chats/admin/messages/old?before_days=` | админ: чистка сообщений старше N дней (единственное удаление «по дате») |
+| `GET /api/chats/{id}/messages?limit=50&before_id=` | история, по возрастанию id |
+| `POST /api/chats/{id}/files?caption=&media_group_id=` | файл потоком кусками по 1 МБ в `uploads/files/`; лимит: видео (`VIDEO_EXTS` mp4/mov/m4v/webm/mkv/3gp или `video/*`) до `MAX_FILE_SIZE_MB`, остальное 10 МБ; перебор → 400 и файл удаляется; caption с `/quest_card`/`/poll` режется; WS `message` всем + пуш с превью (🎤/🖼/🎬/📎) с троттлингом |
+| `GET /api/chats/{id}/search?q=` | поиск по тексту сообщений чата |
+| `GET /api/chats/{id}/read-status` | `[{user_id, last_read_message_id}]` |
+| `GET /api/chats/unread/counts` | `{chat_id: n}` |
+| `GET /api/chats/online/users` | `{online_user_ids}` |
+| `GET /api/chats/notes` | найти или создать Заметки |
+| `POST/GET /api/notes/reminders`, `DELETE /api/notes/reminders/{id}` | напоминания: создание пишет карточку `/reminder {json}` в Заметки |
+| `POST /api/chats/{id}/polls` | опрос: 2..12 вариантов, дедуп; носитель `/poll {id}` создаётся сервером в той же транзакции; в канале — только создатель |
+| `GET /api/polls/{id}`, `POST .../vote {option_id}` (тоггл; одиночный выбор переезжает), `POST .../options {text}` (дописать свой, если `allow_add`), `POST .../close` (автор или админ чата; в ЛС — только автор) | всё под `with_for_update(Poll)`; WS `poll_updated` с полным `PollOut`, `mine` клиенты считают сами из `voter_ids` |
+| `GET /api/chats/{id}/pins`, `POST /api/chats/{id}/pin {message_id}`, `DELETE /api/chats/{id}/pin/{mid}` | закрепы до 20; права в группе — создатель и `admin_ids`, в ЛС — оба; WS `chat_pins` со всем списком |
+
+**dota** (`api/dota.py`): `POST /api/dota/call` — сообщение `/dota_call` в
+чат + пуш всем без троттлинга (`tag dota-{chat}`).
+
+**poker** (`api/poker.py`) — все мутирующие ручки читают стол через
+`_locked_table()` = `SELECT … FOR UPDATE`, замок до commit:
+
+| Метод и путь | Что |
+|---|---|
+| `GET /api/poker/active` | `{chat_id: "lobby" или "playing"}` по чатам юзера (значок стола в сайдбаре) |
+| `GET /api/poker?chat_id=` | столы чата |
+| `POST /api/poker {chat_id, …настройки}` | создать стол (`_apply_settings`: стек ≥ 5 BB, BB = 2×SB, места 2..6 и т.д.) |
+| `PATCH /api/poker/{id}/settings` | создатель, только lobby; режим/цену нельзя менять при любых сидящих |
+| `POST /api/poker/{id}/join` | сесть; в режиме gas — атомарное списание `entry_gas` из профиля текущего сезона (`bets.try_debit`), не хватило → 400 |
+| `POST /api/poker/{id}/leave` | из лобби — возврат газа; из игры — `poker_game.leave_game` (фолд, стек 0, место свободно) |
+| `POST /api/poker/{id}/start` | создатель, ≥2 сидящих → `GameStore`, статус playing |
+| `POST /api/poker/{id}/close` | создатель; до финала возвращает `gas_paid` всем |
+| `POST /api/poker/{id}/reentry` | докупка: `can_reenter` (вылетел, `blind_level < reentry_until_level`, лимит) → списание → `reenter`; гонка с финалом → 409 + возврат |
+| `POST /api/poker/{id}/restart` | «Сыграть ещё»: новый стол с теми же настройками и людьми, старый удаляется (`poker_table_removed` летит раньше ответа) |
+| `GET /api/poker/{id}/history` | история раздач из памяти (свежие сверху) + `names` |
+
+**compendium** (`api/compendium.py`) — см. §7.8: `GET /me`, `PATCH
+/cosmetics`, `GET /seasons`, `GET/POST /bets`, `GET /season`, `GET
+/user/{id}`, `GET /prize`, `GET/POST /prizes`, `PATCH/DELETE
+/prizes/{id}`, `POST /prize/draw`. Порядок роутов важен: `/seasons` и
+`/season` объявлены до `/user/{id}`.
+
+**Прочее**: `GET /apk/info` (имя релиза/дата/размер/`version`/`build` из
+meta.json зеркала, 404 пока зеркала нет), `GET|HEAD /apk` (файл APK с
+правильным mime; 302 на GitHub, пока кэша нет), `GET|HEAD
+/uploads/{path}` — своя раздача файлов (`uploads_static.py`): 206 +
+`Content-Range` на одиночный диапазон (включая суффикс `bytes=-N`), 416,
+`Accept-Ranges` всегда, защита от `..`. Нужна потому, что starlette 0.37
+на Range отвечает 200 целиком, а Chromium тогда не даёт перематывать
+`<audio>` и качает m4a целиком ради moov в хвосте. **Каталог uploads
+публичен целиком** — см. §6.11.
+
+### 6.7 WebSocket (`ws/manager.py`, `ws/handler.py`)
+
+Подключение: `GET /ws?token=<jwt>`. Плохой токен → close 4001. На первом
+сокете юзера всем летит `user_online`; новому сокету — снимок
+`dota_presence` и `call_active` по каждому идущему звонку в его чатах.
+Сервер держит uvicorn-пинги (20 с + таймаут 20 с) — зомби-сокет клиента
+выкидывается примерно через 40 с, клиентам нужен свой сторож (§8, §9).
+
+`ConnectionManager`: `active: user_id → [WebSocket]` (мультисокеты —
+десктоп + телефон одновременно), `chat_users: chat_id → set(user_id)`,
+`active_calls: chat_id → set(user_id)`, `call_sockets: chat_id → user_id →
+set(WebSocket)` (состав по юзеру, но выход из звонка — делом
+**устройства**), `call_meta: chat_id → {initiator, started, answered,
+…}` (для `/call_record` и таймера «не взяли»). Методы:
+`connect/disconnect`, `join_chat`, `join_call/leave_call/end_call/
+drop_call_socket`, `broadcast_to_chat(chat_id, msg, exclude_user)`
+(дедуп по `_eid`; `exclude_user` вырезает **все** сокеты юзера),
+`send_to_user`, `is_online`, `get_online_user_ids`; мёртвые сокеты
+дропаются при ошибке отправки. Дисконнект любого сокета выводит юзера из
+звонков этого сокета и рассылает `call_end` + `call_active` (раньше
+чистка жила под «юзер полностью оффлайн», и умерший телефон висел в
+составе — на компе вечное «вы в звонке с другого устройства»).
+
+**Входящие события** (`{"type": ..., ...}`; `handler.py`, цепочка
+`if event == ...`):
+
+| type | Поля | Поведение |
+|---|---|---|
+| `ping` | | → `pong` (клиенты меряют задержку) |
+| `message` | `chat_id, content, reply_to_id?, _temp_id?` | проверка членства и режима канала; маркеры `/quest_card` и `/poll` в тексте режутся (анти-спуф); счётчик `grammar_errors` по регэкспам; INSERT; WS `message` всем в чате (с `_temp_id` отправителю для замены оптимистичного сообщения); пуш оффлайн-участникам с троттлингом 15 с/чат |
+| `typing` | `chat_id` | бродкаст `typing {chat_id, user_id, username}` остальным |
+| `dota_ready` / `dota_ready_request` | `chat_id, message_id, ready` | эфемерный ready-лист карточки `/dota_call` (TTL 3 ч, в памяти) → `dota_ready_update` |
+| `forward_message` | `target_chat_id, content, original_author, file_url?, file_name?` | новое сообщение `[Переслано от X]` в целевой чат |
+| `reaction` / `remove_reaction` | `message_id, emoji` | → `reaction` / `reaction_removed` всему чату |
+| `dota_client_presence` | | десктоп увидел `dota2.exe`; отметка с TTL 180 с (§6.9) |
+| `mark_read` | `chat_id, message_id` | upsert `read_receipts`; `message_read {chat_id, user_id, message_id}` **всем** сокетам чата, включая другие устройства читателя (кросс-девайс прочитанность и гашение уведомлений); затем `push.send_read_sync` (тихий Web Push, §11) |
+| `video_status` / `screen_share_status` / `mute_status` | `chat_id` + `enabled` / `sharing` / `muted` | ретрансляция участникам звонка |
+| `edit_message` | `message_id, content` | только автор; тоже режет серверные маркеры → `message_edited` |
+| `delete_message` | `message_id` | только автор → `message_deleted`; `read_receipts`, указывавшие на удалённое, переставляются на новое последнее; если был закреплён — `chat_pins` |
+| `poker_action` | `table_id, action, amount?` | ход в раздаче (`poker_game`), затем `broadcast_and_continue` |
+| `poker_request_state` | `table_id` | адресный `poker_game_state` |
+| `call_signal` | `chat_id, target_user_id, signal, purpose?, role?` | WebRTC-сигналинг (оффер/ансвер/кандидат) — пересылка адресату `send_to_user`; первый сигнал юзера в звонке регистрирует его в составе; первый сигнал вообще создаёт `call_meta`, шлёт пуш «Входящий звонок» и ставит таймер `_missed_call_timeout` 60 с (привязан к записи звонка по identity, а не к chat_id — иначе таймер первого звонка закрывал следующий); другим сокетам сигналящего — `call_taken {chat_id}`; `call_active` при смене состава; лог `[ws][call_signal] forward … (sockets=N)` — `sockets=0` значит у адресата нет живого сокета |
+| `call_join` | `chat_id` | вход в идущий звонок: регистрация в составе (повтор игнорируется), `call_active` всем; join в мёртвый звонок → адресный пустой `call_active` |
+| `call_end` | `chat_id, declined?` | выход устройства из звонка; `call_end` остальным участникам (без сокетов отправителя) + адресно своим другим устройствам; `call_active`; когда звонок кончился — запись `/call_record kind\|dur\|n\|initiator` (kind: completed/missed/declined/cancelled) |
+
+**Исходящие события**: `pong`; `message` (варианты с `_temp_id`,
+`reactions`, `media_group_id`, `reminder_fired`), `message_edited`,
+`message_deleted`, `message_read`, `reaction`, `reaction_removed`,
+`typing`; `user_online`, `user_offline`; `new_chat`, `chat_updated`,
+`chat_deleted`, `chat_pins`, `poll_updated`; `profile_updated` (единый
+пейлоад `_broadcast_profile` из users.py: ник/аватар/статус/dota/comp_*/
+`comp_extra`), `new_pending_user`; `dota_presence {playing}`,
+`dota_ready_update`; `video_status`, `screen_share_status`,
+`mute_status`; `call_signal`, `call_active {chat_id, user_ids}`,
+`call_taken`, `call_end {chat_id, user_id, timeout?, declined?}`;
+`poker_table_created/updated/removed`, `poker_game_state`, `poker_error`.
+Клиентская синтетика `_ws_open` (не от сервера) — момент (ре)коннекта.
+
+### 6.8 Покер (`poker_engine.py`, `poker_game.py`, `api/poker.py`)
+
+- `poker_engine.py`: колода, оценка комбинации 7 → лучшие 5.
+- `poker_game.py`: sit-and-go турнир. `GameStore` — **in-memory**
+  (`game_store.get(table_id)`), рестарт сервера убивает раздачу.
+  `GameState`: игроки (`stack`, `bet`, `folded`, `all_in`, `left`),
+  улицы preflop → flop → turn → river → showdown → done, блайнды растут
+  по времени ×1,5 с округлением к шагу по порядку текущего SB
+  (`blind_step`: 10→5, 100→50, 1000→500; 100/200 → 150/300 → 250/500 →
+  400/800…), BB всегда 2×SB; сайд-поты по уровням вложений, нечётная
+  фишка — младшему `seat_index`; таймеры: 5 с шоудаун, 3 с невостребованный
+  банк, фаст-форвард 0,7+0,85 с, пауза докупки `REENTRY_GRACE_SECONDS=30`;
+  часов на ход нет. `hand_log` → `history` (кэп 200): стеки на входе,
+  блайнды, действия с `to`, улицы, вскрытые карты.
+- «Встать» посреди турнира (`leave_game`): фолд в живой раздаче (свой ход
+  → `_advance`, чужой — только пометка), стек 0, `left`, энтри «за газ»
+  остаётся в котле. Ремни: `finalized_hand_no` (раздача доводится один
+  раз), `fast_forwarding` (один `_ff` на раздачу).
+- Финал (`_finish_tournament`): под FOR UPDATE; выходит без выплаты, если
+  стола уже нет или `game_store.get(id) is not g`; котёл «за газ» →
+  `bets._credit` победителю в текущий сезон + текст в чат + `profile_updated`;
+  `poker_table_updated` со `status=finished`. Пауза докупки: фишки
+  остались у одного, но есть кандидаты на докупку → турнир не закрывается
+  до дедлайна (`_grace_watch`); докупка через API зовёт
+  `resume_after_reentry`.
+- `close_stale_tables` (30 мин): лобби по `created_at`, играющие — от
+  `started_at`, старше 6 ч → снос с `poker_table_removed`; «за газ» и не
+  доиграно — возврат `gas_paid`.
+- Рубашки карт: `PokerSeatOut.card_back` из `comp_extra` хозяина места
+  (сервер хранит только имя; рисуют клиенты).
+
+### 6.9 Прочие модули
+
+- **`push.py`, `webpush.py`** — см. §11.
+- **`notes.py`** — Заметки (`Chat.is_notes`, один участник, лениво) +
+  напоминания: карточка `/reminder {json}` в Заметках (клиенты рендерят её
+  **только** в is_notes-чате — анти-спуф), джоба раз в 30 с: срок → «⏰
+  текст» в Заметки + пометка `fired` + Web Push (`tag reminder-{id}`).
+  Expo-пуш не шлём: нативный Android планирует локальное уведомление сам.
+- **`steam_presence.py`** — «🎮 в Доте сейчас»: раз в 2 мин
+  `GetPlayerSummaries` батчами по 100 (IPv4-клиент), in-memory набор, WS
+  `dota_presence {playing}` при смене состава + снимок новому сокету.
+  Невидимка `users.dota_presence_visible`; ошибка Steam — состав не
+  трогаем. Второй источник — десктоп детектит `dota2.exe` и шлёт
+  `dota_client_presence` с хартбитом 60 с (TTL 180 с, `_client_until`),
+  работает при стим-невидимке. Без `STEAM_API_KEY` Steam-часть спит.
+- **`opendota.py`** — httpx-клиент **строго IPv4** (`local_address=
+  "0.0.0.0"`: IPv6 на VPS виснет до таймаута), connect 5 / read 25 с,
+  2 ретрая; `resolve_link_input`. Лимит free: 2000/день, 60/мин.
+- **`apk_mirror.py`** — зеркало APK: качает `gandolachat.apk` из релиза
+  `mobile-latest` в `uploads/apk/` (сравнение по `updated_at` в
+  `meta.json`, `.part` + atomic rename, докачка через Range, 12 попыток,
+  выход сразу по счётчику байт — GitHub-CDN в РФ душат). `_parse_release_name`
+  разбирает «GandolaChat Android 0.9.2 (сборка 11)» — формат имени релиза
+  в Actions менять нельзя.
+- **`backups.py`** — `pg_dump -Fc` (бинарник скопирован из образа
+  `postgres:16-bookworm` в multi-stage Dockerfile с ldd-сбором библиотек;
+  `RUN pg_dump --version` в сборке — страховка от несовместимого glibc),
+  ротация 14, офсайт PUT на WebDAV + удалённая ротация через PROPFIND;
+  вложения — инкрементально по каталогам `files`, `avatars`,
+  `group_avatars`, `vapid` (apk и compendium пропускаются), сверка по
+  имени и размеру, удалённое не удаляем, состояние в
+  `backups/uploads-sync.json`. Восстановление: `pg_restore --clean
+  --if-exists -h db -U gandola -d gandolachat` (затирает базу).
+- **`disk.py`** — лог места при старте.
+- **`schemas.py`** — Pydantic-модели ответов (`UserOut`, `MeOut`,
+  `ChatOut`, `MessageOut`, `PokerTableOut`/`PokerSeatOut`, …).
+
+### 6.10 Служебные маркеры сообщений
+
+Клиенты распознают по началу `content`:
+
+| Маркер | Кто создаёт | Клиентский виджет |
+|---|---|---|
+| `/dota_call` | `POST /api/dota/call` | карточка «газуем в дотан» с ready-листом (десктоп; мобилка показывает текстом) |
+| `/poker_table N` | создание стола | приглашение за стол |
+| `/poll N` | `POST .../polls` | опрос (клиент сверяет `poll.chat_id`) |
+| `/quest_card {json}` | поллер/финал/ставки/итоги недели | карточка Гандолиума (`kind`: quest/anti/team/bet_result/week_recap/season_final; `special`: rampage/fullstack) |
+| `/reminder {json}` | `POST /api/notes/reminders` | карточка напоминания (только в Заметках) |
+| `/call_record kind\|dur\|n\|initiator` | конец звонка | «Звонок: 12:34, 3 участника» |
+| `⏰ текст` | джоба напоминаний | обычный текст |
+| `[Переслано от X]` | `forward_message` | цитата пересылки |
+| `🐞 Баг-репорт`, `🎰 ВА-БАНК…`, `🏆 Покер, стол #…`, `🃏 Ещё партия` | сервер | обычный текст |
+
+Щиты от подделки `/quest_card` и `/poll` стоят в трёх местах: новое
+сообщение, `edit_message`, caption файла. Новый путь создания сообщений
+или новый серверный маркер — добавлять туда же (ловушка №6).
+
+### 6.11 Известные дыры безопасности (не исправлены на момент правки)
+
+Проект на доверенную компанию, но знать надо:
+
+- `uploads/` раздаётся целиком, включая **`uploads/vapid/private.pem`** —
+  приватный VAPID-ключ Web Push доступен по `GET
+  /uploads/vapid/private.pem`; он же уходит в офсайт-бэкап вложений.
+  Лечение: исключить `vapid/` в `uploads_static.py` (и лучше перенести
+  ключи из uploads).
+- Часть WS-событий не проверяет членство в чате: `typing`, `reaction`,
+  `remove_reaction`, `mark_read`, `video_status`, `screen_share_status`,
+  `mute_status`, `call_end`, сторона отправителя `call_signal`.
+- `GET /api/chats/{id}/read-status` без проверки членства.
+- Неодобренные пользователи видны в `GET /api/users/search` и с ними
+  можно создать ЛС.
+- TURN-учётка статическая и зашита в оба клиента (`gandola/gandolapass`);
+  coturn без TLS. Для компании друзей приемлемо, но релей может
+  использовать любой, кто прочитает исходники.
 
 <!-- SECTION:7-compendium -->
 ## 7. Гандолиум (компендиум Dota 2)
@@ -703,32 +1104,959 @@ OpenDota в API привязки переводятся в честные 502 (`
 <!-- SECTION:8-desktop -->
 ## 8. Десктоп-клиент
 
-_(раздел заполняется)_
+Код: `client/`. Стек: Electron 31, React 18, TypeScript 5.4, Vite 5,
+axios, simple-peer 9 (WebRTC), electron-updater 6, qrcode. Версия в
+`client/package.json` (сейчас 2.3.17 на `main`; 2.3.18 — в PR #86) и
+дублируется в `APP_VERSION` в `src/renderer/changelog.ts`, откуда её берёт
+шапка и окно «Что нового».
+
+### 8.1 Сборка и структура
+
+- Скрипты: `dev` (tsc main-процесса + concurrently `vite` и `electron`),
+  `build` (`vite build && tsc -p tsconfig.main.json`), `dist` (`build` +
+  electron-builder), `lint` (eslint не установлен — не работает).
+- `vite.config.ts`: `root: src/renderer`, `base: "./"`, `envDir: ../../`
+  (то есть `client/.env`), `outDir: dist/renderer`, sourcemap в проде
+  (чтобы стек-трейсы из DevTools у людей были читаемыми), плагины `react`
+  и `nodePolyfills` (simple-peer хочет Buffer/process), alias `@` →
+  `src/renderer` (в tsconfig alias не совпадает — не использовать).
+- Main-процесс: `src/main/main.ts` + `preload.ts` → `tsconfig.main.json` →
+  `dist/main/`. `isDev = NODE_ENV==="development" || !app.isPackaged`; в
+  dev грузится `http://localhost:5173`, в проде — `dist/renderer/index.html`.
+- `index.html` подключает Google Fonts (Inter, JetBrains Mono); эмодзи —
+  встроенный шрифт `assets/fonts/TwemojiGandola.ttf` (COLRv1, собран
+  `scripts/build-twemoji-font.py` из @twemoji/svg через nanoemoji; две
+  `@font-face` в `global.css`: с `unicode-range` на Emoji_Presentation для
+  общих стеков и «Any» для класса `.emoji`).
+- electron-builder (`package.json` → `build`): `appId com.gandola.chat`,
+  publish GitHub `releaseType: draft`; Windows NSIS oneClick
+  `GandolaChat-Setup-${version}.exe`; Linux AppImage + deb; macOS нет.
+  Переменные сборки `VITE_API_URL`/`VITE_WS_URL` — из секретов Actions;
+  **фолбэки `https://2-26-117-77.sslip.io` / `wss://…` в `api.ts` и
+  `ws.ts` обязательны** (пустой секрет однажды сломал релиз).
+- Автообновление: electron-updater с GitHub-провайдером;
+  `checkForUpdatesAndNotify` на старте в проде; deb-установка (`linux &&
+  !APPIMAGE`) отключает autoDownload; события `update:status`
+  (available / not-available / downloading / ready / error — error
+  рендерер не показывает) → плашки в Sidebar, «Обновить сейчас» →
+  `update:install` → `quitAndInstall`.
+
+### 8.2 Main-процесс (`main.ts`) и IPC (`preload.ts`)
+
+Single-instance lock; `BrowserWindow` 1280×800 (мин. 900×600), frameless,
+`webSecurity: false`, `backgroundThrottling: false`; закрытие окна
+**прячет в трей** (меню трея: Открыть / Выход); F12 и Ctrl+Shift+I
+открывают DevTools и в проде; `window.open` → `shell.openExternal`.
+Детект Dota: раз в 30 с `tasklist` (только win32) ищет `dota2.exe` →
+событие `dota:running` в рендерер → сервис `presence.ts` шлёт
+`dota_client_presence` с хартбитом 60 с. Бейдж непрочитанных на иконке
+окна/трее рисует рендерер (PNG через canvas) и шлёт в main.
+
+`window.electron` (нетипизированный, везде через `window.electron?.`
+гарды — рендерер живёт и в обычном браузере, так гоняются e2e-тесты):
+
+| Канал | Что |
+|---|---|
+| `window:minimize/maximize/hide/focus` | управление окном |
+| `window:close`, `window:quit` | **выход** из приложения (не скрытие — ✕ на форме входа закрывает приложение) |
+| `update:check`, `update:install`, событие `update:status` | автообновление |
+| `screen:getSources` | источники для шаринга экрана (`desktopCapturer`) |
+| `dota:running-get`, событие `dota:running` | детект Dota |
+| `badge:set(count, png?)`, `tray:getBaseIcon`, `tray:setImage` | бейдж/трей |
+| `app:isDebInstall` | deb → без автозагрузки обновлений |
+| `shell:openExternal(url)` | внешние ссылки |
+| `file:saveAs(buffer, name)` | «Сохранить как» для вложений |
+
+### 8.3 Рендерер: вход, авторизация, Main
+
+- `index.tsx`: `installLogBuffer()` (первым — буфер консоли для
+  «Нашёл баг») → `initTheme()` → render `<App/>` в `ErrorBoundary`.
+- `App.tsx`: токен из `localStorage` («запомнить меня») или
+  `sessionStorage`; на старте `GET /api/users/me` **ротирует токен**
+  (свежий кладётся в то же хранилище); любая ошибка `/me` → оба токена
+  стираются и показывается форма входа (в отличие от мобилки, где сеть
+  не разлогинивает).
+- `pages/Auth.tsx`: вход/регистрация, экран «ждите одобрения». Ошибки
+  на `main`: всё без `detail` — «Ошибка. Попробуй снова»; в PR #86
+  `describeAuthError`: нет ответа → «Нет связи с сервером (КОД)…» (DNS
+  sslip.io / провайдер / VPN / антивирус), 401 / 403 / 429 / 5xx —
+  отдельные тексты.
+- `pages/Main.tsx` — каркас: кастомный тайтлбар с меню режимов
+  **chat / compendium** (режим не сохраняется между запусками — старт
+  всегда в чате; старый ключ `gandola-mode` стирается), версия в шапке,
+  окно «Что нового» (ключ `gandola-last-version`), все WS-подписки
+  приложения, входящие звонки (баннер 20 с, только на `signal.type ===
+  "offer"`), реестр `activeCalls` по `call_active`, `pokerChats:
+  Set<chatId>` (в каких чатах вместо переписки открыты столы — на сессию),
+  ширина сайдбара 180–400. Роутинг по приоритету: Профиль → Инфо группы →
+  Гандолиум → Покер (+ колонка `<ChatArea compact>` 380px того же чата,
+  тумблер «Переписка», ключ `gandola-poker-chat-column`) → ChatArea +
+  MemberList → пустой «Выбери чат». Escape выходит из Гандолиума/покера,
+  не сбрасывая чат; клик по чату/уведомлению выводит из Гандолиума.
+  Правила merge по WS: `chat_updated` **сохраняет `last_message`**
+  (сервер его не шлёт), `profile_updated` мержит в `chat.members` все
+  поля включая `comp_extra`, `new_chat` — единственный способ появления
+  чата в сайдбаре. Глобальные `window`-события между компонентами:
+  `switch-chat`, `chat-last-message-changed`, `set-app-mode`,
+  `open-poker-table`, `focus-add-member` (мёртвое — слушателя нет).
+
+### 8.4 Компоненты (`components/`)
+
+- **`ChatArea.tsx`** (~3000 строк) — переписка одного чата: composer на
+  `contenteditable` (execCommand-форматирование → markdown), оптимистичная
+  отправка с `_temp_id`, команда `/dota` → `POST /api/dota/call`,
+  `typing` не чаще 2 с, `mark_read` через IntersectionObserver, подгрузка
+  истории вверх, поиск по чату, реплаи, пересылка, закрепы (плашка с
+  выпадашкой «ещё N», клик = скролл), 28 реакций в пикере, правка/удаление
+  своих, вложения до 10 с подписями и `media_group_id` (мозаика
+  альбома), лимиты 50 МБ видео / 10 МБ прочее (как на сервере), превью
+  картинок (сохранить/копировать), карточки по маркерам (§6.10):
+  `/poll` (голосование, свой вариант, закрыть), `/poker_table`,
+  `/dota_call` (ready-лист по WS `dota_ready_update`, запуск
+  `steam://rungameid/570`, золотая при `comp_max_level ≥ 10`
+  отправителя), `/quest_card` (`QuestCardMsg`: цвета на 4 комбинации
+  тема × своё/чужое; тайные — золотые), `/reminder`, `/call_record`.
+  Плеер голосовых `VoicePlayer.tsx` (voice_*.m4a и любое аудио по
+  расширению; `duration=Infinity` у стримящегося m4a → «–:––»), видео
+  `VideoPlayer.tsx` (`<video controls preload=metadata>`, ≤420×320,
+  одно играет разом). Шапка: «Столы» (`onOpenPoker`), мьют, поиск,
+  звонок; плашка созвона «В созвоне: …» с «Войти» / «Перейти сюда»
+  (`takeOverCall`: сперва `call_end` своему другому устройству, ждёт
+  состав без себя до 3 с, потом `joinOngoingCall`). Системные уведомления
+  и звук — **только для открытого чата** (ChatArea существует на чат);
+  в режиме канала не-создатель видит плашку вместо composer'а.
+- **`Sidebar.tsx`** — список чатов (группы сверху, значок стола `cards`
+  по `GET /api/poker/active`, unread, превью последнего сообщения через
+  `markers.ts`), поиск, создание ЛС/группы, заявки на регистрацию для
+  админа (`new_pending_user`), меню настроек: тема (discord / neo, цвета
+  neo), обновления, выход; бейдж/трей.
+- **`MemberList.tsx`** (состав, выход из группы — перезагружает
+  страницу), **`GroupInfoPage.tsx`** (описание, админы, тумблер
+  Гандолиума, аватар; Escape не закрывает), **`ProfilePage.tsx`** (свой и
+  чужой профиль; секция DOTA 2 — привязка/обновить/отвязать, медаль
+  `DotaRankBadge`; косметика; в своём — «НАШЁЛ БАГ» (`BugReportSection`:
+  textarea + «ОТПРАВИТЬ ЛОГИ»), «МОБИЛЬНАЯ ВЕРСИЯ» — QR на `${BASE_URL}/apk`
+  с подписью из `/apk/info` и QR на `${BASE_URL}/app/`; админ-чистка
+  сообщений до даты).
+- **`CompendiumPage.tsx`** — заставка-оверлей (ролик с `?v=<отпечаток>`,
+  чек-бокс «отключить заставку» хранит `{"v": intro_version}` — новый
+  ролик снимает флаг, громкость `gandolium.introVolume` по умолчанию
+  0,5), шапка уровня/газа («МАКС · 30» на потолке; в октябре
+  `HalloweenDecor`), `PrizePanel`/`PrizePoolModal` (админу — розыгрыш и
+  пул), вкладки ЗАДАНИЯ / СЕЗОН / СТАВКИ (`BetsTab`, ва-банк через
+  `window.confirm`) / ТРОФЕИ / БИНГО (`BingoTab.tsx`, сетка 5 колонок) /
+  КОСМЕТИКА (`CosmeticsTab`, замки по уровню, превью рубашек
+  `CardBack.tsx`) / АРХИВ; рефетч по WS `/quest_card` и в полночь МСК.
+- **`Poker.tsx`** — лобби и стол: форма настроек с пресетами
+  (Быстрый / Обычный / Марафон), режим «За газ», места по овалу,
+  рубашки соперников (`CardView back=`), `ActionBar` с % банка
+  (10/15/25/50/75, рейз до `current_bet + pct×(банк после колла)`),
+  Докупиться / История / Сыграть ещё, баннеры паузы докупки и финала,
+  звуки; `PokerAssistPanel.tsx` + `pokerAssist.ts` (шпаргалка комбинаций,
+  pot odds, ауты 4-и-2, оценка Чена; копия логики в мобилке — править
+  обе).
+- **`VideoCall.tsx`** — UI звонка: сетка плиток, свободный режим,
+  мьют/камера (по умолчанию выкл, `gandola-cam-default`), смена
+  микрофона (`switchMicrophone`: «По умолчанию» = `audio:true`, новый
+  трек ждём до 4 с, `micEpoch` перезапускает анализатор «говорю»),
+  шаринг экрана (с системным звуком на Windows), громкость на участника,
+  свёрнутая плашка (`callMiniPos`), ободок «говорит».
+- Прочее: `FormattedText.tsx` (markdown-lite + спойлеры + ссылки),
+  `Emoji.tsx`/`EmojiPicker.tsx`, `cosmetics.tsx` (`nameColor`,
+  `CompBadge`, `CompStar`, `titleOf`, `glowStyle`, `bubbleStyle`,
+  `frameStyle` — всё из `comp_*` юзера), `DotaRankBadge.tsx` (медали по
+  `rank_tier//10`, звёзды `%10`), `HalloweenDecor.tsx` (SVG-паутина
+  кодом), `Icon.tsx` + `icons.ts` (~70 линейных иконок; **кнопки и
+  служебные значки — только они**, никаких системных эмодзи в кнопках;
+  `<Gas>` = эмодзи ⛽ через шрифт — хозяин настоял), `ErrorBoundary.tsx`.
+
+### 8.5 Сервисы (`services/`)
+
+- **`api.ts`** — axios + все типы ответов; группы `authApi`, `userApi`,
+  `chatApi`, `notesApi`, `pollsApi`, `pinsApi`, `dotaApi`, `pokerApi`,
+  `compendiumApi` (пути — как в §6.6); перехватчик ошибок пишет в буфер
+  репорта `api METHOD path → status detail`.
+- **`ws.ts`** — один сокет, реконнект с бэкоффом, ping/качество, массив
+  хендлеров на тип (`on/off`), синтетика `_ws_open`; `disconnect()` на
+  «Выйти» **стирает все хендлеры** (`handlers.clear()`) — любой сервис-
+  синглтон обязан перевешивать подписки при каждом `init()` (ловушка
+  №20). В PR #86: `_detachAndClose` (хендлеры старого сокета снимаются до
+  close — иначе его `onclose` ставил реконнект и при быстром повторном
+  входе жило два сокета), сторож pong (пинг 5 с, три без ответа →
+  переподключение; лечит зомби-сокет после сна ноутбука/смены Wi-Fi),
+  `_kick` на `online`/`visibilitychange`, код закрытия в лог (1006 —
+  сеть, 4001 — токен).
+- **`webrtc.ts`** — звонки (детали в §10): `peers`,
+  `screenSendingPeers`, `screenReceivingPeers` на simple-peer, ICE: STUN
+  Google ×2 + Cloudflare, TURN `2.26.117.77:3478` (UDP; в PR #86 ещё
+  `?transport=tcp`), публичный openrelay как ненадёжный фолбэк; очередь
+  сигналов по ключу `${uid}:${purpose}:${role}` с chat_id; tie-break;
+  пересборка висящего инициаторского peer через 5 с; уступка при глейре;
+  ICE-restart инициатором с дебаунсом 2 с; `getConnectionQuality`. На
+  `main` `init()` под гардом `_initialized` → после «Выйти → Войти»
+  подписки мертвы (звонки не доходят); в PR #86 `init()` перевешивает
+  `off`+`on` каждый раз, плюс логи типов кандидатов и выбранного пути.
+- **`presence.ts`** — перевешивает хендлер `dota_presence` при каждом
+  коннекте, хартбит `dota_client_presence` 60 с.
+- **`theme.ts`** — `discord` | `neo` (класс на body + CSS-переменные;
+  neo с кастомными bg/accent, моношрифт, нулевые радиусы; ветки `isNeo` в
+  компонентах; после переключения остаётся старый `--accent-text`).
+- **`markers.ts`** — превью маркеров и файлов для сайдбара и
+  уведомлений (`filePreview`: «🎤 Голосовое», «🖼 Фото», «🎬 Видео»);
+  **строки превью не трогать** — они же уходят в системные уведомления.
+- **`logbuffer.ts`** — кольцо 1200 строк консоли + необработанных
+  ошибок, `bugReportMeta()`; `logEvent` зовут ws.ts (open/close/error,
+  каждый тип события кроме ping/pong/typing) и перехватчик axios.
+- **`sounds.ts`** (WebAudio: уведомление, рингтон), **`changelog.ts`**
+  (`APP_VERSION`, `CHANGELOG`), в PR #86 — **`notify.ts`** (реестр
+  `Notification` по chat_id, `closeChatNotifications` по WS
+  `message_read` своего юзера).
+
+### 8.6 Ключи localStorage
+
+`token` (или в sessionStorage), `gandola-theme`, `gandola-neo-colors`,
+`gandola-last-version`, `gandola-poker-chat-column`, `mutedChats`,
+`showFormatBar`, `gandola-cam-default`, `callMiniPos`, `poker.oddsHelper`,
+`gandolium.introOff`, `gandolium.introVersion`, `gandolium.introVolume`;
+`gandola-mode` — удаляется (наследие).
+
+### 8.7 Известные странности
+
+- Большинство компонентов строят URL медиа как `VITE_API_URL ||
+  "http://localhost:8000"` (ChatArea, Sidebar, Poker, CompendiumPage,
+  MemberList, GroupInfoPage, VideoCall) — https-фолбэк есть только в
+  `api.ts`, `ws.ts` и ProfilePage; при пустом `VITE_API_URL` картинки не
+  откроются, хотя API заработает.
+- Уведомление и звук о новом сообщении приходят только для открытого
+  чата (нет глобального слушателя `message` для уведомлений).
+- CHANGELOG пропускает 2.3.13. Проверка типов `npx tsc -p tsconfig.json`
+  шумит предсуществующими ошибками `import.meta.env`/VideoCall — не
+  чинить, правда — `npx vite build`.
 
 <!-- SECTION:9-mobile -->
 ## 9. Мобильное приложение и PWA
 
-_(раздел заполняется)_
+Код: `mobile/`. Одна кодовая база на нативный Android (APK через EAS
+Build) и веб-PWA (`expo export -p web`, раздаётся сервером по `/app/`;
+iPhone — «Добавить на экран Домой», браузер на компе — широкий режим).
+Стек: Expo SDK 57, React Native 0.86 (только новая архитектура), React
+19, react-navigation 7, reanimated 4, react-native-webrtc 124,
+@notifee/react-native 9, react-native-incall-manager, expo-audio /
+expo-video / expo-camera / expo-image-picker / expo-document-picker /
+expo-file-system / expo-media-library / expo-notifications /
+expo-updates / expo-secure-store, шрифты Inter и JetBrains Mono.
+Версия `0.9.2`, `versionCode 11`, `runtimeVersion "9"` (`app.json`).
+iOS-натива нет.
+
+### 9.1 Конфигурация и сборка
+
+- `app.json`: `slug gandolachat`, пакет `com.gandola.chat`, тёмная тема,
+  `usesCleartextTraffic`, 20 разрешений Android (камера, микрофон,
+  Bluetooth(+CONNECT — без него BT-гарнитуры нет в списке), точные
+  будильники для напоминаний, `USE_FULL_SCREEN_INTENT`,
+  `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, `POST_NOTIFICATIONS`,
+  `FOREGROUND_SERVICE` + `_MICROPHONE/_CAMERA/_MEDIA_PROJECTION`),
+  веб-секция (`startUrl`/`scope` `/app/`, `experiments.baseUrl "/app"`),
+  плагины по порядку: `./plugins/withCallForegroundServiceType`,
+  expo-font, expo-secure-store, expo-build-properties, expo-image-picker,
+  `@config-plugins/react-native-webrtc`,
+  `./plugins/withWebRTCMediaProjection`, expo-audio, expo-camera,
+  expo-media-library, expo-notifications (иконка, цвет `#c6ff3d`, канал
+  `default`); `extra.apiUrl/wsUrl` (прод), `extra.eas.projectId`,
+  `updates.url` (`u.expo.dev/<projectId>`, `fallbackToCacheTimeout 3000`).
+  **Любая правка `app.json`/`package.json`/`eas.json` в `main` = сборка
+  нового APK** (workflow по путям).
+- `app.config.js` оборачивает `app.json`: `googleServicesFile` из
+  `$GOOGLE_SERVICES_JSON` (EAS file-env) или `./google-services.json`
+  (gitignored), `extra.apiUrl/wsUrl` из `$APP_API_URL/$APP_WS_URL`.
+- `src/services/config.ts`: на вебе адрес API — same-origin
+  (`https:` → `wss:`), на нативе — `expoConfig.extra`, фолбэк
+  `http://localhost:8000`.
+- `eas.json`: `appVersionSource: local`; профили `development`
+  (dev-client), **`preview`** (APK, канал `preview` — им собирает CI и
+  он же прод-канал OTA), `production` (не используется).
+- Плагины (`plugins/`): `withCallForegroundServiceType.js` — тип
+  foreground-сервиса notifee `microphone|camera` через `tools:replace`
+  (библиотечный `shortService` система убивает через несколько минут —
+  ANR посреди разговора); `withWebRTCMediaProjection.js` —
+  `enableMediaProjectionService = true` в `MainApplication.onCreate` и
+  `res/drawable/ic_notification.xml` (без него краш при старте шаринга
+  экрана). Оба — чистые функции, проверяются node-скриптом без prebuild.
+- `metro.config.js` на платформе web подменяет нативные модули
+  заглушками из `web-stubs/`: `react-native-webrtc` → браузерный WebRTC
+  (`RTCView` = `<video>`; звонки в PWA работают), `@notifee/react-native`
+  → no-op (нет `AndroidForegroundServiceType` — `startCallForegroundService`
+  на вебе кидает, ловится, пишет warning), `react-native-incall-manager`
+  → no-op (кнопка динамика скрыта), `expo-media-library` → заглушка
+  (с SDK 54 его индекс требует натив при импорте — белый экран PWA).
+- `scripts/patch-webrtc-types.js` (postinstall): докладывает недостающие
+  d.ts rn-webrtc для tsc. `scripts/postbuild-web.js`: префиксует пути
+  `/app/…` в `dist/` (идемпотентно) и инжектит статический PWA-head
+  (manifest, apple-теги, title «Gandola», theme-color) — рантайм-инжект
+  гонялся с iOS «Добавить на экран». `scripts/generate_ring.py` —
+  `assets/ring.wav` (рингтон как на десктопе).
+- `public/`: `manifest.webmanifest` (`/app/`, standalone), `sw.js` (без
+  кэша нарочно; `push` → `showNotification` с `tag chat-<id>`;
+  `notificationclick` → фокус окна и `/app/?chat=<id>` — **параметр
+  `?chat=` никто не читает**, тап по Web Push открывает приложение без
+  перехода в чат; в PR #86 — тихий пуш `{type:"read"}` закрывает
+  уведомления чата), иконки (на хеллоуин — тыква).
+- `npx expo install` в контейнере агента не работает (прокси);
+  матрица версий — `npm pack expo@57` → `bundledNativeModules.json`.
+
+### 9.2 OTA и APK
+
+- OTA: push в `main` с правками `mobile/src/**`, `App.tsx`, `index.ts`,
+  `assets/**` → `mobile-ota.yml` → `eas update --branch preview`.
+  Телефон проверяет на старте (ждёт до 3 с), ставит при следующем
+  запуске; «Проверить сейчас» на экране «Обновления» — `checkForUpdateAsync`
+  + `fetchUpdateAsync` → `reloadAsync`. Долетает только до сборок с тем
+  же `runtimeVersion`. Правки `plugins/`, `metro.config.js`,
+  `web-stubs/`, `scripts/`, `app.config.js` **не триггерят** ни OTA, ни
+  APK.
+- APK: `mobile-release.yml` (§12) → релиз `mobile-latest` → зеркало на
+  VPS (`/apk`, `/apk/info`). `components/UpdateNagModal.tsx` сравнивает
+  `build` из `/apk/info` с `Constants.nativeBuildVersion` и показывает
+  «Обнови меня до x.x.x» в 1-й, 4-й, 7-й… заход (заход = холодный старт
+  или возврат из фона после ≥2 ч; счётчик `gandola.updateNag` на каждую
+  сборку зеркала; молчит, пока не закрыто «Что нового»; в PWA нет).
+- «Что нового» (`components/WhatsNewModal.tsx`) — по `CHANGELOG_ID`
+  (дата батча) в `src/changelog.ts`, ключ `gandola.changelogSeen`;
+  версия для OTA не годится (не меняется).
+- PWA OTA не использует: обновляется при перезагрузке страницы
+  (`sw.js` ничего не кэширует).
+
+### 9.3 Запуск и каркас
+
+- `index.ts` → `registerRootComponent(App)`. Импорт-эффекты:
+  `setNotificationHandler`, `initDotaPresence()`, синглтоны `wsService` и
+  `webrtcService`. На уровне модуля `App.tsx`:
+  `registerCallForegroundRunner()` (система может поднять сервис раньше
+  любого компонента — без обработчика ANR через 5 с) и
+  `installLogBuffer()`.
+- `App.tsx`: шрифты → `SystemUI.setBackgroundColorAsync("#0a0a0a")`,
+  `initWebPwa()` (meta viewport, регистрация `/app/sw.js`); дерево
+  `GestureHandlerRootView > SafeAreaProvider > ThemeProvider > AuthProvider
+  > CallProvider > { KeyboardInset > RootNavigator; WhatsNewModal;
+  UpdateNagModal }`.
+- `components/KeyboardInset.tsx` — эмуляция adjustResize: в edge-to-edge
+  на RN 0.86 штатный `KeyboardAvoidingView` **бесполезен** (ловушка №17);
+  высота из `useAnimatedKeyboard` (reanimated) минус `insets.bottom`,
+  всё приложение ужимается над клавиатурой.
+- `navigation/RootNavigator.tsx`: `null` до готовности AuthContext; тема
+  навигатора обязана содержать `fonts` (RN7); `onReady` →
+  `initNotificationTapHandler()` + `flushPendingLink()`; `linking` нет
+  (схема `gandolachat://` не используется). Стек: `Auth` (Login,
+  Register) без токена, иначе `Main` → `MainTabs` (кастомный
+  `BottomTabs`: ЧАТЫ / ⛽ ГАНДОЛИУМ / Я). `Chats`-стек: ChatsList, Search,
+  NewChat, NewGroup, Chat, GroupChat, ChatInfo, MessageSearch,
+  OtherProfile, Poker, MediaViewer (modal), Camera (fullScreenModal);
+  `Compendium` — один экран; `Profile`-стек: MyProfile, Settings,
+  Updates. Параметры чата (`ChatParams`): `chatId: string`, `name`,
+  `userId?` (собеседник ЛС; `null` читается как группа), `avatarUrl?`,
+  `isGroup?`, `allowAllWrite?`, `createdBy?`, `isNotes?`,
+  `scrollToMessageId?`/`scrollToTick?`. В RN7 `navigate` не возвращается
+  к экрану глубже в стеке — вложенные params несут `pop: true`, поиск
+  ходит `popTo`.
+- `navigation/navigationRef.ts`: `navigateToChat`, `pendingLink` —
+  переход из пуша, пришедший до монтирования контейнера (холодный старт),
+  выполняется в `flushPendingLink()`.
+- **Широкий экран** (`useIsWide`, ≥900px): `MainTabs` рисует ряд —
+  слева `ChatsSidebar` (340px, `ChatsListPane`, подсветка открытого чата
+  по маршруту), справа табы; оба ребёнка с ключами — смена ширины не
+  перемонтирует навигатор. На узком `ChatsList` = `ChatsListPane`, на
+  широком — заглушка «выбери чат слева».
+
+### 9.4 Экраны (`src/screens/`)
+
+- **auth/** `LoginScreen` (`auth.signIn`; чек-бокс «запомнить меня»
+  косметический — токен хранится всегда; футер `v{APP_VERSION}`),
+  `RegisterScreen` (экран «ждите одобрения»).
+- **chats/** `ChatsListPane` (AppBar «N / M онлайн», 📝 Заметки через
+  `notesApi.open` (404 = «сервер не обновлён»), 🔍 Search, шестерёнка
+  **переключает тему**, фильтры Все/Группы/ЛС, pull-to-refresh, FAB →
+  NewChat), `SearchScreen` (фильтр списка чатов по имени/последнему
+  сообщению), `NewChatScreen` (поиск юзеров с дебаунсом 300 мс →
+  `createDm`), `NewGroupScreen` (имя ≤100, тумблер «все пишут», до 6
+  участников + создатель), `GroupChatScreen` (обёртка над ChatScreen),
+  **`ChatScreen`** (~2400 строк, см. 9.5), `ChatInfoScreen` (аватар/имя/
+  описание/админы — создателю; добавить/кикнуть — админам; статистика,
+  участники с онлайном, выйти, удалить), `MessageSearchScreen` (**не
+  работает**: зовёт несуществующий `chatApi.searchMessages`, результаты
+  всегда пустые), `PokerScreen` (лобби с пресетами и режимом «за газ»,
+  стол — овал с местами-коробками, радиус от реального размера стола
+  (`onLayout`), рубашки соперников, `ActionBar` с % банка, история,
+  докупка, таймер паузы докупки, вибрация на свой ход) + `PokerAssist`
+  (шпаргалка + «Шансы», ключ `poker.oddsHelper`).
+- **extras/** `CameraScreen` (expo-camera, фото → `camera_<ts>.jpg`),
+  `MediaViewerScreen` (фото contain или `FullScreenVideo` expo-video с
+  нативными контролами и fullscreen; «Сохранить» в футере под
+  контентом — оверлей накрывал дорожку перемотки; натив —
+  `File.downloadFileAsync` + `MediaLibrary.Asset.create`, веб —
+  `window.open`).
+- **compendium/** `CompendiumScreen` (me/season/prize, архив лениво;
+  рефетч по WS `/quest_card`; шапка с уровнем и `HalloweenDecor`; вкладки
+  ЗАДАНИЯ / СЕЗОН (🎮 у играющих сейчас, тап — чужие трофеи) / СТАВКИ
+  (`BetsTab`, ва-банк через Alert / `window.confirm` в PWA) / ТРОФЕИ /
+  БИНГО (`BingoGrid.tsx`, 4 колонки) / КОСМЕТИКА (`CosmeticsTab`, замки
+  по уровню) / АРХИВ).
+- **profile/** `MyProfileScreen` (аватар, ник/статус/about, `DotaSection`
+  — привязка/обновить/отвязать + тумблер невидимки, смена пароля,
+  `WebPushRow` только на вебе (нужен жест), строки: тема, Настройки,
+  Обновления с бейджем, Нашёл баг (`BugReportModal`), ВЫЙТИ),
+  `OtherProfileScreen`, `SettingsScreen` (тема; админу — заявки и чистка
+  сообщений старше 30/90/180 дней), `UpdatesScreen` (версия / сборка /
+  runtime / канал, «Проверить сейчас»: OTA и APK независимо; в PWA —
+  «обновляется сама» и список изменений).
+
+### 9.5 ChatScreen подробно
+
+- **Дозаполнение params**: если из пуша/поиска пришли неполные параметры
+  (нет `avatarUrl`, собеседник отсутствует или равен себе, у группы нет
+  `allowAllWrite`/`createdBy`) — берёт карточку чата из `chatApi.list()`
+  и `setParams` (собеседник = участник ≠ я). Это лечит и старые серверы,
+  где `peer_user_id` в пуше был своим id.
+- Канал: `isGroup && allowAllWrite === false && createdBy !== me` →
+  вместо composer'а плашка.
+- Шапка: назад; аватар+имя → ChatInfo / OtherProfile (в Заметках ничего);
+  подзаголовок «печатает…» / онлайн / был(а); 🔍 MessageSearch; 🔔/🔕
+  мьют (`mutedChats`, клиентский — сервер пушит всё равно, фильтр в
+  обработчике уведомлений); 🎴 Poker; 📞 — развернуть свой звонок /
+  `joinOngoing`, если в чате идёт созвон / `startCall` (ЛС).
+- Плашка «В созвоне: имена» из `activeCalls` CallContext; закрепы
+  (`pinsApi.list` + WS `chat_pins`, первый закреп в плашке, тап — Alert
+  со списком).
+- Лента: подгрузка старых у верха с `maintainVisibleContentPosition`,
+  автоскролл вниз на новое; карточки по маркерам: `/poker_table`,
+  `/reminder` (только в Заметках), `/call_record`, `/poll`
+  (`PollCardMobile`), `/quest_card` (`QuestCardMobile`: week_recap,
+  bet_result, season_final, quest/anti/team, rampage/fullstack, тайные —
+  золотые); `/dota_call` **картой не рендерится** (текст). Вложения по
+  расширению: аудио → `VoiceMessage`, видео → `VideoMessage` (плашка ▶,
+  тап → MediaViewer; инлайн-плеер нарочно нет — нативные контролы не
+  выживают под родительским Pressable), картинки → пузырь → MediaViewer,
+  прочее — «📎 имя» без открытия; `media_group_id` визуально не
+  группируется.
+- Жесты: двойной тап = ❤️ (тоггл), долгое нажатие — нижний шит с
+  реакциями 👍❤️😂🔥😮😢 и Ответить / Переслать / Закрепить / Копировать /
+  Изменить / Удалить (свои), свайп влево — ответить, тап по чипу реакции —
+  тоггл.
+- WS: `message {chat_id, content, reply_to_id, _temp_id}`, `edit_message`,
+  `delete_message`, `forward_message` (выбор чата), `reaction` /
+  `remove_reaction`, `typing` не чаще 2,5 с, `mark_read` последнего
+  сообщения (повтор на `_ws_open`); `message_read` собеседника →
+  галочки на своих пузырях; присутствие в ЛС — `getOnlineUsers` +
+  `last_seen` + `user_online/offline`.
+- Черновики (`gandola.draft.<chatId>`, дебаунс 500 мс), прыжок к
+  сообщению из поиска (до 5 пачек истории, подсветка 1,8 с).
+- Скрепка: Фото/видео (ImagePicker images+videos, до 10, ролики >50 МБ
+  отсеиваются по `fileSize`), Камера, Файл (DocumentPicker), Опрос
+  (вопрос ≤300, 2–12 вариантов, `allow_multi`, `allow_add`; не в
+  Заметках). Пачка файлов уходит последовательно с общим
+  `media_group_id`, подпись только на первом. **Загрузка — только
+  `XMLHttpRequest`** (`api.ts uploadFile`): глобальный `fetch` в SDK 54+
+  подменён и не понимает RN-часть `{uri, name, type}` (ловушка №16);
+  3 попытки с бэкоффом только на «Network request failed».
+- Голосовые (`services/voiceRecorder.ts`): перед записью
+  `unloadAllVoicePlayers()`, свежий `AudioRecorder` на каждую запись
+  (упавший `prepare` портит объект навсегда), ретрай после
+  `resetAudioSubsystem()`, busy-флаг со сторожком 6 с, клипы <800 мс
+  выбрасываются, файл `voice_<ts>.m4a`.
+- Заметки: ⏰ → `ReminderSheet` (пресеты +30 мин / +1 ч / +3 ч / завтра
+  10:00 или день + ЧЧ:ММ, без нативных пикеров) → `notesApi.createReminder`
+  + `scheduleLocalReminder`; карточка с отменой.
+
+### 9.6 Сервисы (`src/services/`)
+
+- **`api.ts`** — axios (`baseURL: API_URL`, таймаут 15 с); перехватчик
+  запросов читает `gandola.token` из хранилища на каждый вызов;
+  перехватчик ответов пишет в буфер репорта; `apiErrorMessage(err)`.
+  Группы `authApi`, `userApi`, `chatApi`, `pokerApi`, `notesApi`,
+  `pollsApi`, `pinsApi`, `compendiumApi` (пути — §6.6). Аватары — через
+  `fetch` multipart (мелкие), файлы чата — XHR.
+- **`ws.ts`** — `wsService`: `connect(token)`, пинг 5 с, 3 пропущенных
+  понга → close → реконнект (бэкофф `min(1000·2^n, 30000)`), качество
+  good/ok/bad по RTT, мгновенный реконнект на AppState active /
+  visibilitychange / online / focus (иначе после разворота телефона сокет
+  «полумёртв»), синтетика `_ws_open`, `send` возвращает boolean и логирует
+  `DROPPED`; `disconnect()` стирает все хендлеры — `webrtc.init` и
+  `initDotaPresence` перевешивают свои.
+- **`webrtc.ts`** — `webrtcService` на голом `RTCPeerConnection`
+  (детали в §10).
+- **`CallContext.tsx`** — `useCall()`: `inCall`, `callChatId`,
+  `activeCalls`, `startCall`, `joinOngoing`, `expand`; входящий только на
+  `offer` и только если меня нет в составе этого звонка (другое
+  устройство); гаснет через 20 с локально; рингтон `ring.wav` раз в 5 с
+  + вибрация, у звонящего — гудки до входа первого; `accept` — ансвер на
+  ожидающий оффер или `joinOngoing` + сторожок 12 с (пуш о звонке
+  пришёл, а оффер за время сна телефона пропал); `reject` → `call_end
+  {declined: true}` + `discardPending`; foreground-сервис notifee (тип
+  MICROPHONE всегда, CAMERA только при включённой камере — иначе система
+  отбирает камеру у свёрнутого приложения) переобъявляется на каждый
+  тумблер камеры; keep-awake; на возврат из фона `recover("foreground")` и
+  перезапуск мёртвой камеры через 600 мс; `InCallManager.start` только
+  после подключения первого участника (иначе глушит рингтон);
+  `forceSpeaker(on ? true : null)` — `null` = маршрут по умолчанию,
+  гарнитура выигрывает (`false` в библиотеке = принудительный EARPIECE);
+  включение своей камеры уводит на громкую связь, если кнопку не трогали;
+  громкость на участника через `track._setVolume` (0..3, натив), ключи
+  `gandola.callVolumes` / `gandola.callSpeaker`. UI: мини-бар свёрнутого
+  звонка **в потоке** над навигатором, Modal входящего, Modal звонка
+  («назад» сворачивает, не кладёт трубку; плитки экранов сверху, сетка
+  1–6, превью себя, кнопки мик/динамик/камера/флип/экран/отбой); на вебе
+  невидимые `RTCView` держат звук при свёрнутом звонке.
+- **`AuthContext.tsx`** — старт: токен → `/me` → свежий токен, WS,
+  `initDotaPresence`, регистрация пушей, ресинк напоминаний. **Токен
+  стирается только на 401/403**; сетевые/5xx ошибки — WS подключается
+  со старым токеном, `/me` ретраится через 3/5/10/20/30 с (ловушка №10).
+  `signOut` снимает пуш-токен и `wsService.disconnect()`.
+- **`notifications.ts`** — обработчик показа (напоминания всегда;
+  замьюченные чаты — нет; при активном приложении — ничего), каналы
+  Android `default` / `messages` (HIGH) / `calls` (MAX, bypassDnd),
+  `registerForPushNotifications` (натив — Expo-токен → `POST
+  /push-token`; веб — тихая переподписка Web Push), в PR #86 —
+  `dismissChatNotifications` / `pruneReadNotifications`.
+  **`notificationTapHandler.ts`** — тап по пушу (`type message` →
+  `navigateToChat`, `type call` → ещё `raiseInvite` в CallContext);
+  холодный старт через `getLastNotificationResponseAsync`.
+  **`webPush.ts`** — `webPushState/Enable/Disable/ResubscribeSilent`
+  (включение только из жеста). **`reminders.ts`** — локальные
+  уведомления `reminder-<id>`, ресинк по AppState/`_ws_open` раз в 60 с.
+- **`updates.ts`** (OTA/APK, бейдж, `gandola.updates.lastCheck`),
+  **`logBuffer.ts`** (кольцо 1200 строк + `ErrorUtils`; `bugReportMeta`),
+  **`callAudio.ts`**, **`callForegroundService.ts`**, **`mutedChats.ts`**,
+  **`drafts.ts`**, **`secureStorage.ts`** (expo-secure-store на нативе,
+  `localStorage` на вебе; AsyncStorage нет), **`useChats.ts`** (список
+  чатов: `allSettled` list + unread + online; тихий рефетч на `new_chat` /
+  `message` / `chat_updated` / `chat_deleted` / `_ws_open`; `markerPreview`
+  и `filePreview` для превью последнего сообщения), **`useMessages.ts`**
+  (страницы по 50, патчи по WS), **`dotaPresence.ts`**,
+  **`pokerAssist.ts`** (копия десктопного), `mockData.ts` (мёртвый).
+- Темы (`src/theme/`): `neo` (лайм `#c6ff3d` на `#0a0a0a`, JetBrains
+  Mono, радиус 0, сканлайны) и `discord` (`#5865f2` на `#36393f`, Inter);
+  ключ `gandola.themeId`.
+
+### 9.7 Ключи хранилища
+
+`gandola.token`, `gandola.themeId`, `gandola.mutedChats`,
+`gandola.draft.<chatId>`, `gandola.callVolumes`, `gandola.callSpeaker`,
+`gandola.changelogSeen`, `gandola.updateNag`, `gandola.updates.lastCheck`,
+`poker.oddsHelper`; плюс запланированные локальные уведомления
+`reminder-<id>`, PushSubscription браузера, кэш expo-updates.
+
+### 9.8 Известные пробелы
+
+- Поиск по сообщениям на мобилке не работает (`chatApi.searchMessages`
+  отсутствует; ещё `theme.colors.bgHover` не существует).
+- Тап по Web Push в PWA не открывает чат (`?chat=` не читается).
+- `/dota_call` не карточка; чужие файлы (не фото/видео/аудио) не
+  открываются; `ChatRow.muted`/`lastStatus` не заполняются — значки 🔕 и
+  ✓ в списке не показываются; бейдж у `BottomTabs` не ставится.
+- `mobile/README.md` устарел (описывает «скелет первого этапа»; актуальны
+  только EAS/OTA-разделы). Актуальный источник — этот документ.
 
 <!-- SECTION:10-calls -->
 ## 10. Звонки: сквозная картина
 
-_(раздел заполняется)_
+Звонок — WebRTC **mesh**: каждый участник держит P2P-соединение с каждым
+(до 7). Сервер медиа не касается: он только пересылает сигналы
+(`call_signal`), ведёт состав (`call_active`), шлёт пуши и пишет
+`/call_record`. Код: сервер `ws/handler.py` + `ws/manager.py`, десктоп
+`services/webrtc.ts` (simple-peer) + `VideoCall.tsx` + `Main.tsx`,
+мобилка `services/webrtc.ts` (голый `RTCPeerConnection`) +
+`CallContext.tsx`.
+
+### 10.1 Сигналинг
+
+- Сообщение `call_signal {chat_id, target_user_id, signal, purpose:
+  "webcam"|"screen", role?: "sender"|"receiver"}`; `signal` в диалекте
+  simple-peer: `{type: "offer"|"answer", sdp}`, `{type: "candidate",
+  candidate: {candidate, sdpMLineIndex, sdpMid}}`, `{renegotiate: true}`,
+  `{transceiverRequest}`. Сервер пересылает `send_to_user(target)` на все
+  сокеты адресата. Лог `[ws][call_signal] forward … (sockets=N)`:
+  `sockets=0` = у адресата нет живого сокета (главный кандидат при
+  «звонок не доходит до одного друга»).
+- **Состав** (`manager.active_calls` + `call_sockets`): ключуется
+  user_id, но привязан к сокету, чтобы выход устройства (дисконнект,
+  `call_end`) выводил именно это устройство. `call_active {chat_id,
+  user_ids}` бродкастится всем чатам (и ЛС) при **смене состава**, после
+  каждого `call_end`/дисконнекта/таймаута (пустой список = звонок
+  кончился) и снимком каждому новому сокету. Клиенты сбрасывают реестр на
+  `_ws_open` под свежий снимок.
+- **Кто офферит**: позвонивший — своему адресату; при входе в идущий
+  звонок (`call_join`) или появлении нового участника в `call_active`
+  недостающие пары собирают клиенты по **tie-break: меньший user_id
+  офферит**. Глейр (два оффера навстречу): побеждает меньший id, второй
+  откатывается (мобилка `rollback`, десктоп уступает responder'ом).
+  Повторный join уже участвующего юзера игнорируется — mesh по user_id,
+  **вторым устройством в тот же звонок войти нельзя** (десктоп
+  «Перейти сюда» сперва выкидывает своё другое устройство через
+  `call_end`).
+- **Первый сигнал в чате** создаёт `call_meta {initiator, started,
+  answered}`, шлёт пуш «Входящий звонок» (канал `calls`, `tag
+  call-{chat}`) и ставит `_missed_call_timeout(chat_id, meta)` на 60 с:
+  никто не ответил → `call_end {timeout: true}` участникам, состав
+  чистится, пустой `call_active`, запись `/call_record cancelled|0|n|
+  initiator`. Таймер привязан к **своей** записи по identity — до 02.10
+  таймер первого звонка через минуту закрывал следующий звонок в том же
+  чате. `call_end {timeout:true}` клиент трактует как «сервер закрыл
+  звонок целиком» и сворачивает всё.
+- Другим сокетам того, кто послал первый сигнал, летит `call_taken
+  {chat_id}` — его другие устройства гасят входящий и молчат до
+  `call_end`. `call_end` рассылается чату без сокетов отправителя плюс
+  адресно его же другим устройствам.
+- Клиенты **звонят только на `signal.type === "offer"`**; подавление
+  «я уже в этом звонке где-то» — по членству в реестре `call_active`
+  (самоочищается; отдельный набор протухал навсегда). Баннер входящего
+  живёт 20 с и гаснет локально (без `decline`); гаснет по `call_end`
+  только от себя или от звонящего (выход третьего не глушит).
+- Сигналы до принятия копятся в очереди с chat_id (`pending`), флаш
+  применяет только сигналы текущего чата и только если среди них есть
+  оффер; «Отклонить» и пустой `call_active` сбрасывают очередь
+  (`discardPending`) — иначе после отклонения отвечали мёртвому офферу, а
+  чужой чат получал фантомный входящий.
+
+### 10.2 Медиа и живучесть
+
+- Старт всегда **аудио**; камера по умолчанию выключена. Видео-линия
+  есть всегда: мобилка при создании peer'а добавляет `addTransceiver
+  ("video", {direction:"sendrecv", streams:[localStream]})` — `streams`
+  обязателен (даёт msid; без него десктопный simple-peer не видит
+  дорожку вовсе), десктоп — аналогично в simple-peer. Включение камеры =
+  `replaceTrack` (+ `_renegotiate`, если `currentDirection` у слота
+  null); выключение — `replaceTrack(null)` + stop (гаснет индикатор);
+  `signal.renegotiate` от десктопного респондера → мобилка добавляет
+  recvonly-транссивер и офферит.
+- ICE-серверы: STUN Google ×2 (+ Cloudflare на десктопе), **свой coturn
+  `turn:2.26.117.77:3478`** по UDP (в PR #86 — и `?transport=tcp` для
+  сетей, где режут UDP; на VPS нужен ufw 3478/tcp и отсутствие `no-tcp`
+  в turnserver.conf), публичный openrelay как фолбэк. Учётка
+  статическая. Диагностика (PR #86): в логах `signal out/IN` тип
+  кандидата host/srflx/relay + udp/tcp, на ICE connected — выбранный
+  путь `[WebRTC] webcam path to N: local=… ↔ remote=…` (ни одного relay
+  у человека = TURN ему недоступен).
+- Восстановление: мобилка — роли из tie-break (`initiators`), на
+  `disconnected` через 2 с ICE-restart инициатором, на `failed` — сразу
+  + сторож 20 с (инициатор) / 30 с (респондер) → свежий peer; десктопный
+  simple-peer на `failed` уничтожает себя и принимает новый оффер как
+  обычный входящий. Сигналы одного собеседника применяются строго по
+  очереди (`chains`); исходящие при закрытом сокете — в `outbox` (≤60),
+  доотправка на `_ws_open` + `recover()`. Наш инициаторский peer без SDP
+  другой стороны через 5 с после `call_active` пересобирается по
+  tie-break'у (висяк прозвона). На десктопе close/error старого peer'а
+  игнорируются, если слот уже занят новым (simple-peer шлёт close
+  микротаской после замены).
+- Экран: отдельный peer на каждого участника с `purpose: "screen"`;
+  шарящий — всегда инициатор (`role: "sender"`), приёмная сторона
+  отвечает с `role: "receiver"`; опоздавшему участнику экранный peer
+  открывается при создании webcam-peer'а; `screen_share_status
+  {sharing}` гасит плитку сразу. Десктоп шарит через `desktopCapturer`
+  (с системным звуком на Windows), телефон — `getDisplayMedia` с
+  `resolutionScale 0.6` (Android 14+ требует foreground-сервис
+  mediaProjection — см. плагин), PWA в десктопном браузере — тоже
+  `getDisplayMedia`.
+- Мобильный фон: foreground-сервис notifee типа `microphone|camera`
+  (манифест через плагин + типы в рантайме, обе части обязательны — иначе
+  ANR «short service did not stop» и система отбирает камеру у свёрнутого
+  приложения), keep-awake, восстановление `recover("foreground")` и
+  перезапуск мёртвой камеры на возврате. Звук: `InCallManager` только
+  на активном звонке; громкая связь ↔ динамик; персональная громкость
+  `track._setVolume`.
+- Мультиустройство: один юзер может быть и на компе, и на телефоне;
+  входящий показывают оба, ответивший «забирает» звонок (`call_taken`);
+  умерший телефон выходит из состава по дисконнекту сокета.
+
+### 10.3 Запись звонка
+
+По завершении сервер постит `/call_record kind|dur|n|initiator`
+(`completed` / `missed` / `declined` / `cancelled`), клиенты рисуют
+карточку «Звонок» с длительностью и числом участников.
+
+### 10.4 Что уже ломалось (кратко; подробности в §14 и `CLAUDE.md`)
+
+- «Вечное ожидание подключения» — порты coturn vs ufw не совпадали.
+- Умерший телефон висел в составе до конца звонка (чистка была только при
+  полном оффлайне юзера).
+- Таймер «не взяли» закрывал чужой следующий звонок (привязка по chat_id).
+- После «Выйти → Войти» на десктопе звонки мертвы в обе стороны
+  (`webrtc.init` под гардом, WS-хендлеры стёрты) — PR #86.
+- Два сокета после быстрого перелогина — каждое событие дважды, оффер
+  применялся дважды — PR #86.
+- Зомби-сокет после сна ноутбука: сервер выкинул, клиент «всё нормально»,
+  человек у всех оффлайн — сторож pong в PR #86.
+- Включённая на телефоне камера на компе чёрная — не было msid у
+  видеодорожки.
+- Висяк «Присоединиться» — инициаторский peer без ансвера, пересборка
+  через 5 с.
 
 <!-- SECTION:11-notifications -->
 ## 11. Уведомления: сквозная картина
 
-_(раздел заполняется)_
+Три канала: **WS-события** для живых клиентов (десктоп и открытая
+мобилка показывают уведомления сами), **Expo Push** для нативного
+Android (`push_tokens`), **Web Push** для PWA/iPhone
+(`web_push_subscriptions`, VAPID). `push.send_push(db, user_ids, title,
+body, data, …)` бьёт в оба пуш-канала разом; `webpush.py` —
+pywebpush в тредпуле, VAPID-ключи генерятся сами в `uploads/vapid/`,
+мёртвые подписки (404/410) вычищаются.
+
+### 11.1 Что и когда шлёт сервер
+
+| Событие | Кому | Канал/тег | Троттлинг |
+|---|---|---|---|
+| Текст, файл, опрос в чате | участники без живого сокета в чате (оффлайн или в другом чате) | `messages`, `tag chat-{id}` | **15 с на чат** (`_recent_push`; пачка фото = один пуш) |
+| `/dota_call` | все участники | `tag dota-{id}` | нет |
+| Входящий звонок | участники чата кроме звонящего | `calls` (MAX, bypassDnd), `tag call-{id}` | нет |
+| Карточки Гандолиума | все участники компендиум-чатов, включая отправителя | `tag compendium-{id}` | только громкие: rampage / fullstack / week_recap / season_final |
+| Итог ставки | ставивший | `{type:"bet"}` | нет |
+| Ва-банк | остальные участники компендиум-чатов ставящего | `tag allin-{id}` | нет |
+| Баг-репорт | получатель | `tag bug-{id}` | нет |
+| Напоминание | владелец Заметок | только Web Push, `tag reminder-{rid}`; натив планирует локально | нет |
+| Тихий `{type:"read", chat_id}` (PR #86) | читатель на других устройствах | Web Push без title/body | один раз после пуша типа message, не позже 12 ч |
+
+Данные пуша `message`/`call` несут `chat_id`, `chat_name` (для ЛС — имя
+отправителя/звонящего, иначе тап открывал чат «Чат»), `is_group`,
+`peer_user_id` = **отправитель/звонящий** (собеседник для получателя; до
+22.09 три из четырёх мест клали id самого получателя, и деп-линк
+открывал ЛС «с самим собой»), `message_id` / `from_user_id`.
+
+### 11.2 Клиенты
+
+- **Десктоп**: системные `Notification` + звук — только для открытого
+  чата (ChatArea); остальное — бейдж в сайдбаре/трее. Мьют чата —
+  `mutedChats` в localStorage.
+- **Мобилка натив**: `setNotificationHandler` решает показывать ли —
+  напоминания всегда, замьюченные чаты нет, при активном приложении
+  ничего (живой экран сам обновится). Каналы `default` / `messages` /
+  `calls`. Тап: `notificationTapHandler` → `navigateToChat` (+ плашка
+  входящего для `type call`, потому что оффер за время сна телефона
+  пропал — «Принять» идёт через `call_join`). Холодный старт из пуша →
+  `pendingLink` до готовности навигатора.
+- **PWA**: `sw.js` показывает уведомление с `tag chat-<id>` (схлопывает
+  серию из одного чата); включение — кнопка «Уведомления» в профиле
+  (iOS требует жест), на старте тихая переподписка. Тап открывает
+  `/app/?chat=<id>` — чат при этом **не** открывается (параметр не
+  читается).
+
+### 11.3 Сквозное гашение (PR #86)
+
+«Прочитал на компе — на телефоне уведомление пропадает»:
+
+1. Живые устройства гасят сами по WS `message_read` своего юзера (он
+   летит всем сокетам читателя, без `exclude_user`): десктоп —
+   `services/notify.ts` (`closeChatNotifications` из Main.tsx), мобилка —
+   `notifications.ts dismissChatNotifications` (натив —
+   `getPresentedNotificationsAsync` + `dismissNotificationAsync` по
+   `data.chat_id`, тип `call` не трогаем; веб —
+   `serviceWorker.ready → getNotifications()`), плюс
+   `pruneReadNotifications` по `GET /chats/unread/counts` при каждом
+   рефетче списка (холодный старт, `_ws_open`) — снимает уведомления
+   чатов, прочитанных пока приложения не было.
+2. PWA/iPhone с закрытой страницей — сервер: `push.send_read_sync` из
+   `mark_read` шлёт тихий Web Push `{type:"read", chat_id}`, `sw.js`
+   закрывает уведомления этого чата и ничего не показывает (Chrome
+   изредка рисует «сайт обновлён в фоне» — принято). Чтобы не слать на
+   каждый `mark_read`, `_note_pushed` помнит `(user, chat) → время`
+   последнего пуша типа `message`; тихий пуш уходит один раз после него и
+   не позже `READ_SYNC_WINDOW_SEC` (12 ч).
+3. Убитое нативное приложение: data-only Expo-пуш без expo-task-manager
+   (нативный модуль = новый APK) не обрабатывается — уведомление
+   пропадёт при следующем запуске (прунинг). Осознанно.
+
+### 11.4 Прочее
+
+- `read_receipts` + `message_read` дают и кросс-девайс прочитанность
+  (клиенты гасят свой unread), и галочки у собеседника.
+- `new_pending_user` — админам в реальном времени (заявки в Sidebar и в
+  настройках мобилки).
+- «Что нового» — не пуш, а локальное окно по версии (десктоп) /
+  `CHANGELOG_ID` (мобилка).
 
 <!-- SECTION:12-ci -->
 ## 12. Сборка, CI/CD
 
-_(раздел заполняется)_
+Три workflow в `.github/workflows/`. Отменить или перезапустить прогон
+из сессии агента нельзя (403 на Actions у интеграции) — только хозяин
+руками; логи задачи API отдаёт только после её завершения.
+
+### 12.1 `release.yml` — десктоп
+
+- Триггер: push тега `v*`. `permissions: contents: write`.
+- `build-linux` (ubuntu, checkout@v4, Node 20): `npm ci && npm run dist` в
+  `client/` с `GH_TOKEN`, `VITE_API_URL`, `VITE_WS_URL` из секретов →
+  electron-builder **создаёт черновик** релиза с AppImage, deb,
+  `latest-linux.yml`.
+- `build-windows` (`needs: build-linux`, windows-latest): докладывает
+  `GandolaChat-Setup-x.y.z.exe`, `.blockmap`, `latest.yml` в тот же
+  черновик. Последовательно нарочно — параллельные джобы гонялись за
+  черновиком (v2.1.8).
+- Хозяин жмёт Publish; electron-updater у людей читает `latest*.yml`.
+  Комплект — 6 файлов. В плохой вечер выгрузка ассетов идёт по 6–9 минут
+  на файл — «сделал 2 файла и встал» это не поломка (ловушка №15);
+  «Cancel» → «Re-run all jobs» доложит недостающее, черновик и тег не
+  удалять.
+
+### 12.2 `mobile-release.yml` — APK
+
+- Триггеры: тег `mobile-v*`; push в `main` с изменением
+  `mobile/app.json`, `mobile/package.json`, `mobile/eas.json` (фильтр на
+  `google-services.json` никогда не сработает — файл gitignored);
+  `workflow_dispatch` с `publish` (bool, дефолт false).
+- `build-android` (ubuntu, 180 мин, checkout@v5, Node 22): `npm install`,
+  `eas-cli`, `eas build --profile preview --platform android
+  --non-interactive --json` (ждёт облачную сборку, ~1 час), jq →
+  `applicationArchiveUrl`, curl → `gandolachat.apk`; сводка прогона с
+  версией/versionCode/runtime и ссылкой EAS (там же QR для установки);
+  артефакт `gandolachat-apk` 14 дней.
+- Publish (только при push/теге или `publish=true`): `gh release delete
+  mobile-latest --cleanup-tag` → `gh release create mobile-latest
+  gandolachat.apk --prerelease --title "GandolaChat Android ${VERSION}
+  (сборка ${VCODE})"`. Prerelease — чтобы десктоп оставался «Latest».
+  Формат названия парсит `apk_mirror._parse_release_name` — не менять.
+  Постоянная ссылка `releases/download/mobile-latest/gandolachat.apk`;
+  людям раздаётся с VPS через `/apk` (GitHub-CDN в РФ душится).
+- Секреты: `EXPO_TOKEN`, `github.token`. На стороне EAS: file-env
+  `GOOGLE_SERVICES_JSON`, опционально `APP_API_URL`/`APP_WS_URL`.
+- Тестовая сборка с ветки без публикации: Run workflow → ветка,
+  `publish=false` → APK артефактом + ссылка EAS. Так хозяин проверяет
+  натив на телефоне до мержа; мерж в `main` = публикация в `mobile-latest`,
+  куда смотрит «обнови меня» у всех.
+
+### 12.3 `mobile-ota.yml` — OTA
+
+- Триггеры: push в `main` с изменением `mobile/src/**`, `mobile/App.tsx`,
+  `mobile/index.ts`, `mobile/assets/**`; `workflow_dispatch` с `branch`
+  (preview | production, дефолт preview) и `message`.
+- Job (ubuntu, checkout@v4 `fetch-depth: 0`, Node 20): `npm install`,
+  `eas-cli`, `eas update --branch $BRANCH --message "<input или тема
+  последнего коммита>" --non-interactive`. Секрет `EXPO_TOKEN`.
+- JS-правки на тестовую сборку без нового APK: Run workflow → git-ветка
+  PR, EAS branch `preview` → получают только сборки с тем же
+  runtimeVersion (тестовая); ставится при следующем запуске (открыть
+  дважды).
+- «preview» здесь и есть прод-канал: и тестовые сборки, и публикуемый
+  APK собраны профилем `preview`, OTA с `main` уходит в EAS-ветку
+  `preview`. Профиль/ветка `production` из `eas.json` не используются.
+
+### 12.4 Сервер и PWA — без CI
+
+Сервер деплоится руками на VPS (`git pull && docker compose build server
+&& docker compose up -d server`), PWA — командой из таблицы §5.
+`docker-compose.dev.yml` — оверрайд для разработки: `uvicorn --reload` и
+bind-mount `./server:/app` (`docker compose -f docker-compose.yml -f
+docker-compose.dev.yml up`).
+
+### 12.5 Dockerfile сервера
+
+Multi-stage: `postgres:16-bookworm AS pgtools` → `/pgtools` (pg_dump,
+pg_restore + библиотеки по ldd, без libc) копируется в
+`python:3.12-slim-bookworm` в `/opt/pgtools` с обёртками в
+`/usr/local/bin`; `RUN pg_dump --version && pg_restore --version` —
+образ не соберётся с битым бинарником. **Обе стадии прибиты к bookworm и
+меняются только парой** (ловушка №13). `COPY . .`, `PYTHONUNBUFFERED=1`,
+CMD uvicorn на 8000.
 
 <!-- SECTION:13-testing -->
 ## 13. Локальная проверка и тесты
 
-_(раздел заполняется)_
+**В репозитории автотестов нет.** Все тесты и сквозные сценарии,
+упомянутые в `CLAUDE.md`, живут в scratchpad агента (вне репо) и
+пропадают с пересозданием контейнера — их пишут заново под задачу. Если
+понадобится постоянный набор — заводить `server/tests/` (pytest на живом
+Postgres) и `scratchpad/pw/*.js` → `e2e/`; пока это не сделано.
+
+### 13.1 Сервер
+
+- Окружение: `cd server && python -m venv venv && venv/bin/pip install -r
+  requirements.txt`; быстрая проверка синтаксиса `python -m compileall
+  app/`.
+- **Живой Postgres** в контейнере агента (`/usr/lib/postgresql/16/bin`):
+  ```
+  su nobody -s /bin/sh -c "initdb -D /tmp/gandola-pgtest/data --auth=trust -U gandola"
+  su nobody -s /bin/sh -c "setsid nohup pg_ctl -D /tmp/gandola-pgtest/data -o '-p 5433 -k /tmp/gandola-pgtest' -l /tmp/gandola-pgtest/log start"
+  createdb -h localhost -p 5433 -U gandola gandola
+  ```
+  (без `-k` сокет лезет в `/var/run/postgresql` и падает по правам;
+  перед повторным стартом удалить `postmaster.pid` и `.s.PGSQL.5433*`).
+- Env для тестов: `DATABASE_URL=postgresql+asyncpg://gandola:gandola@
+  localhost:5433/gandola SECRET_KEY=test-secret UPLOAD_DIR=/tmp/
+  gandola-uploads-test`; миграции `python -m alembic upgrade head` из
+  `server/` (там `alembic.ini`); тесты запускать **из `server/`**.
+- Приёмы: HTTP — fastapi `TestClient` + `create_access_token(user_id)`
+  (login не нужен); WS — `c.websocket_connect(f"/ws?token=…")`, читать
+  исходящие удобно прямо из `ws._send_queue.get(timeout=…)` (потоки на
+  `receive_json` виснут); БД внутри TestClient-теста — через
+  `c.portal.call(coro)`; после любого `asyncio.run` перед TestClient —
+  `await engine.dispose()` (иначе asyncpg «another operation is in
+  progress»). Поллер компендиума — monkeypatch `app.opendota.*` фейками
+  и дёргать джобы напрямую; движок заданий тестируется без БД
+  (`SimpleNamespace`-строки + `UserCtx`).
+- Смоук «как в октябре»: uvicorn с подменой `current_season → "2026-10"`,
+  сид пользователей (`seed_pwa.py`: gandola-админ, Костян, Марк, пароль
+  `pass1234`), сид привязок/профилей/косметики.
+- Глушить сервер: `for p in $(pgrep -f "python -m uvicorn app.main:app");
+  do [ "$p" != "$$" ] && kill "$p"; done` — `pkill -f` с той же строкой в
+  команде убивает собственную оболочку (ловушка №18).
+
+### 13.2 Десктоп
+
+- `cd client && npm install && npx vite build` — правда о типах и сборке
+  (`npx tsc -p tsconfig.json` шумит предсуществующими ошибками — не
+  чинить, фильтровать).
+- Рендерер в браузере против локального сервера:
+  `VITE_API_URL=http://127.0.0.1:8000 VITE_WS_URL=ws://127.0.0.1:8000
+  ./node_modules/.bin/vite build` (**в foreground и через локальный
+  бинарник**: фоновый bash теряет `cd`, а `npx vite` из чужого каталога
+  скачивает vite 8 и падает на «Cannot resolve entry module index.html»),
+  потом `python3 -m http.server 5174` из `client/dist/renderer`. Всё
+  электронное — через `window.electron?.`-гарды, в браузере работает.
+
+### 13.3 Мобилка и PWA
+
+- `cd mobile && npm install` (postinstall патчит типы rn-webrtc) → `npx
+  tsc --noEmit` (шум: TS1323 и две старые ошибки MessageSearchScreen — не
+  чинить).
+- Веб-бандл: `EXPO_OFFLINE=1 CI=1 npx expo export -p web --output-dir
+  dist --clear && node scripts/postbuild-web.js`; симлинк `server/web →
+  mobile/dist` (gitignored) **до** старта uvicorn (`/app` монтируется на
+  старте, иначе 404). Белый экран = смотреть `pageerror` в консоли
+  (модуль без веб-реализации → стаб в `metro.config.js`).
+- Натив без Android SDK: `npx expo prebuild --platform android
+  --no-install --template <tgz>` (шаблон — `npm pack
+  expo-template-bare-minimum@sdk-57`; `google-services.json` — пустышка)
+  → проверить манифест / `MainApplication.kt` / res, потом `rm -rf
+  android google-services.json`. Плагины — чистые функции, гоняются
+  node-скриптом.
+- Что не ловится ничем, кроме телефона: подмена глобального `fetch`,
+  нативные модули при импорте на вебе, SurfaceView поверх оверлеев,
+  нативные контролы под Pressable (ловушка №16). Поэтому нативный батч
+  идёт тестовой сборкой (`publish=false`) и правится по находкам хозяина.
+
+### 13.4 Сквозные сценарии (Playwright)
+
+Playwright из глобальных модулей (`NODE_PATH=$(npm root -g)`), Chromium
+предустановлен. Типовые сценарии, которые уже писались и стоит
+повторять при правках:
+
+- Звонок PWA ↔ десктоп с камерой: Chromium с
+  `--use-fake-device-for-media-stream --use-fake-ui-for-media-stream`
+  (фейковая камера — зелёный «пакман»), телефон звонит, десктоп принимает
+  (сперва закрыть «Понятно» у «Что нового» — оно накрывает баннер),
+  телефон включает камеру → на десктопе `[data-tile-id="remote-<id>"]
+  video` с `videoWidth > 0`; обратный сценарий — десктоп включает камеру
+  позже. Селекторы: мобилка — `aria-label` кнопок (Позвонить / Принять /
+  Отклонить / Микрофон / Камера / Показ экрана / Завершить), десктоп —
+  `title` кнопок («Звонок», «Включить камеру», «Завершить звонок»).
+- Звонок после «Выйти → Войти» на десктопе (два контекста; успех —
+  `[WebRTC] webcam CONNECTED to peer` у обоих; перелогин без `page.goto`,
+  иначе перезагрузка JS прячет баг).
+- Скриншоты PWA 400×800 и десктопа: Гандолиум в октябре, БИНГО, косметика,
+  стол покера («встать» посреди турнира: место пропадает, в API
+  `is_active=false`), просмотр видео (в headless Chromium нет H.264 —
+  серый ролик это не баг), заставка со сбросом флага (ролик подменяется
+  WebM с канваса).
+- В PWA кнопка входа ищется по `/ВОЙТИ/` (neo-скобки); из Гандолиума на
+  десктопе выходить Escape'ом («✕» в тайтлбаре закрывает окно).
 
 ## 14. Ловушки, на которые уже наступали
 
