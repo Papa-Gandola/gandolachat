@@ -50,6 +50,56 @@ def _get_client() -> httpx.AsyncClient:
     return _client
 
 
+# Сквозное гашение уведомлений (просьба хозяина 03.10): прочитал чат на одном
+# устройстве — на остальных уведомление о новом сообщении должно пропасть.
+# Пока приложение живо (в т.ч. в фоне с живым сокетом), устройства гасят
+# сами по WS message_read. А вот PWA/айфон с закрытой страницей достаёт
+# только Web Push: шлём ему ТИХИЙ пуш {type:"read", chat_id} — service
+# worker закрывает уведомления этого чата и ничего не показывает. Expo
+# (нативный Android) таким не кормим: data-only пуш без expo-task-manager
+# (= нативный модуль = новый APK) убитым приложением не обрабатывается, а
+# живое гасит по WS. Чтобы не слать «read» на КАЖДЫЙ mark_read (он летит
+# при каждом открытии чата), помним, кому и в какой чат недавно уходил пуш
+# о сообщении, и шлём тихий пуш только после него, один раз.
+READ_SYNC_WINDOW_SEC = 12 * 3600
+_recent_push: dict[tuple[int, int], float] = {}
+
+
+def _note_pushed(user_ids: list[int], data: dict | None) -> None:
+    d = data or {}
+    chat_id = d.get("chat_id")
+    if d.get("type") != "message" or not chat_id:
+        return
+    now = _time.time()
+    for uid in user_ids:
+        _recent_push[(uid, int(chat_id))] = now
+    if len(_recent_push) > 5000:
+        for key, at in list(_recent_push.items()):
+            if now - at > READ_SYNC_WINDOW_SEC:
+                _recent_push.pop(key, None)
+
+
+async def send_read_sync(db: AsyncSession, user_id: int, chat_id: int) -> bool:
+    """Юзер прочитал чат (mark_read с любого устройства) → тихий Web Push
+    «прочитано» его же подпискам, если туда недавно уходил пуш о сообщении.
+    Возвращает True, если пуш отправлен."""
+    key = (user_id, int(chat_id))
+    at = _recent_push.pop(key, None)
+    if at is None or _time.time() - at > READ_SYNC_WINDOW_SEC:
+        return False
+    try:
+        from app.webpush import send_web_push
+        await send_web_push(
+            db, [user_id], "", "",
+            data={"type": "read", "chat_id": int(chat_id)},
+            tag=f"chat-{chat_id}",
+        )
+    except Exception as e:
+        print(f"[push][read-sync] failed: {type(e).__name__}: {e}")
+        return False
+    return True
+
+
 async def send_push(
     db: AsyncSession,
     user_ids: Iterable[int],
@@ -66,6 +116,7 @@ async def send_push(
     uids = list({uid for uid in user_ids if uid is not None})
     if not uids:
         return
+    _note_pushed(uids, data)  # для тихого «прочитано» (send_read_sync)
 
     result = await db.execute(
         select(PushToken.token).where(PushToken.user_id.in_(uids))

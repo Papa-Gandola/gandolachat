@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChatOut, MessageOut, UserOut, chatApi, dotaApi, notesApi , pollsApi, pinsApi, PollOut, PinOut } from "../services/api";
 import { wsService } from "../services/ws";
+import { showChatNotification } from "../services/notify";
 import { playMessageSound } from "../services/sounds";
 import EmojiPicker from "./EmojiPicker";
 import FormattedText from "./FormattedText";
@@ -865,22 +866,12 @@ export default function ChatArea({ chat, currentUser, onStartCall, activeCallUse
   }
 
   function showNotification(title: string, body: string) {
-    const build = () => {
-      const n = new Notification(title, { body });
-      n.onclick = () => {
-        (window as any).electron?.focus?.();
-        window.dispatchEvent(new CustomEvent("switch-chat", { detail: { chatId: chat.id } }));
-        n.close();
-      };
-      return n;
-    };
-    if (Notification.permission === "granted") {
-      build();
-    } else if (Notification.permission !== "denied") {
-      Notification.requestPermission().then((p) => {
-        if (p === "granted") build();
-      });
-    }
+    // Через реестр services/notify.ts — чтобы погасить по message_read с
+    // другого устройства (телефон прочитал → уведомление на компе исчезает)
+    showChatNotification(chat.id, title, body, () => {
+      (window as any).electron?.focus?.();
+      window.dispatchEvent(new CustomEvent("switch-chat", { detail: { chatId: chat.id } }));
+    });
   }
 
   function getChatTitle() {

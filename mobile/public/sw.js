@@ -27,6 +27,20 @@ self.addEventListener("push", (event) => {
   const title = payload.title || "GandolaChat";
   const body = payload.body || "";
   const data = payload.data || {};
+  // «Прочитано на другом устройстве» (03.10): тихий пуш {type:"read"} без
+  // текста — закрываем уведомления этого чата (по data.chat_id, не по tag:
+  // у баг-репортов свой tag) и ничего не показываем. Chrome на «тихий»
+  // пуш может изредка нарисовать «сайт обновлён в фоне» — терпимо.
+  if (data.type === "read" && data.chat_id != null) {
+    event.waitUntil(
+      self.registration.getNotifications().then((list) => {
+        for (const n of list) {
+          if (String((n.data || {}).chat_id) === String(data.chat_id)) n.close();
+        }
+      }),
+    );
+    return;
+  }
   const tag = payload.tag || (data.chat_id ? `chat-${data.chat_id}` : undefined);
   event.waitUntil(
     self.registration.showNotification(title, {

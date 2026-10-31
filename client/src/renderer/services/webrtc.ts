@@ -11,6 +11,26 @@ type OnStreamCallback = (userId: number, stream: MediaStream) => void;
 type OnPeerLeftCallback = (userId: number) => void;
 type OnCallEndedCallback = () => void;
 
+// Тип ICE-кандидата из строки SDP: «host» (своя сеть), «srflx» (за NAT,
+// через STUN), «relay» (через TURN). В баг-репортах по ним видно, есть ли
+// у человека вообще путь наружу и каким он пошёл.
+function candKind(c: unknown): string {
+  const s = typeof c === "string" ? c : (c as { candidate?: string } | null)?.candidate;
+  if (!s) return "?";
+  const typ = /\btyp (\w+)/.exec(s)?.[1] ?? "?";
+  const proto = /^candidate:\S+ \d+ (udp|tcp)\b/i.exec(s)?.[1]?.toLowerCase() ?? "";
+  return proto ? `${typ}/${proto}` : typ;
+}
+
+export function signalKind(sig: any): string {
+  if (!sig) return "?";
+  if (sig.type) return String(sig.type);
+  if (sig.candidate) return `candidate ${candKind(sig.candidate)}`;
+  if (sig.renegotiate) return "renegotiate";
+  if (sig.transceiverRequest) return "transceiverRequest";
+  return "?";
+}
+
 class WebRTCService {
   private peers: Map<number, SimplePeer.Instance> = new Map();
   // Separate outgoing/incoming screen peers per remote user.
@@ -49,15 +69,27 @@ class WebRTCService {
 
   init(myUserId: number) {
     this.myUserId = myUserId;
-    if (this._initialized) return;
-    this._initialized = true;
+    // WS-подписки перевешиваем при КАЖДОМ init() (off перед on —
+    // идемпотентно): wsService.disconnect() на «Выйти» стирает ВСЕ хендлеры
+    // разом, а Main при следующем входе зовёт init() снова. Раньше гард
+    // _initialized пропускал повтор, и после «Выйти → Войти» без перезапуска
+    // сервис звонков был глухим: ансвер собеседника и чужие офферы доходили
+    // до ws.ts, но не сюда — звонки в обе стороны висели в «подключении»
+    // (баг-репорт хозяина 02.10; тот же класс бага, что presence.ts и
+    // webrtc.init на мобилке).
+    wsService.off("call_signal", this._handleSignal);
     wsService.on("call_signal", this._handleSignal);
+    wsService.off("call_end", this._handleCallEnd);
     wsService.on("call_end", this._handleCallEnd);
     // Group calls: server broadcasts the participant list on every
     // call_signal. Use it to ensure every pair of participants has a peer
     // connection, not just (caller, callee). Without this, in a 3-way call
     // the two callees can't see/hear each other — only the initiator.
+    wsService.off("call_active", this._handleCallActive);
     wsService.on("call_active", this._handleCallActive);
+    // Дальше — однократное на жизнь окна (слушатель window, не WS).
+    if (this._initialized) return;
+    this._initialized = true;
     // When the OS reports network back (VPN flip, WiFi switch), force-restart ICE
     // on every active peer instead of waiting for the per-peer disconnect debounce.
     window.addEventListener("online", () => {
@@ -235,6 +267,15 @@ class WebRTCService {
             username: "gandola",
             credential: "gandolapass",
           },
+          // Тот же coturn по TCP — для сетей, где UDP наружу режут (часть
+          // мобильных операторов, офисные/гостевые Wi-Fi). Если ufw на VPS
+          // не пускает 3478/tcp, кандидат просто не соберётся — хуже не
+          // станет (02.10, «звонок не доходит до одного друга»).
+          {
+            urls: "turn:2.26.117.77:3478?transport=tcp",
+            username: "gandola",
+            credential: "gandolapass",
+          },
           {
             urls: "turn:openrelay.metered.ca:80",
             username: "openrelayproject",
@@ -247,7 +288,7 @@ class WebRTCService {
     const peer = new SimplePeer(peerOpts);
 
     peer.on("signal", (signal) => {
-      console.log(`[WebRTC] ${purpose} signal out →`, targetUserId, initiator ? "(I am initiator)" : "(I am responder)");
+      console.log(`[WebRTC] ${purpose} signal out →`, targetUserId, initiator ? "(I am initiator)" : "(I am responder)", signalKind(signal));
       wsService.send({
         type: "call_signal",
         chat_id: this.currentChatId,
@@ -303,6 +344,7 @@ class WebRTCService {
       pc2.addEventListener("iceconnectionstatechange", () => {
         const st = pc2.iceConnectionState;
         console.log(`[WebRTC] ${purpose} ICE ${targetUserId}: ${st}`);
+        if (st === "connected" || st === "completed") void this._logSelectedPath(pc2, targetUserId, purpose);
         if (st === "disconnected" || st === "failed") tryRestart(`ice=${st}`);
       });
     }
@@ -356,13 +398,38 @@ class WebRTCService {
     }
   }
 
+  // Каким путём пошло соединение — напрямую (host/srflx) или через TURN
+  // (relay), udp или tcp. Пишется в консоль → в баг-репорт; по нему видно,
+  // работает ли TURN у конкретного человека.
+  private async _logSelectedPath(pc: RTCPeerConnection, targetUserId: number, purpose: string) {
+    try {
+      const stats = await pc.getStats();
+      const byId = new Map<string, any>();
+      stats.forEach((r: any) => byId.set(r.id, r));
+      let pair: any = null;
+      stats.forEach((r: any) => {
+        if (r.type === "transport" && r.selectedCandidatePairId) pair = byId.get(r.selectedCandidatePairId) ?? pair;
+      });
+      if (!pair) {
+        stats.forEach((r: any) => {
+          if (r.type === "candidate-pair" && r.state === "succeeded" && (r.nominated || !pair)) pair = r;
+        });
+      }
+      if (!pair) return;
+      const loc = byId.get(pair.localCandidateId);
+      const rem = byId.get(pair.remoteCandidateId);
+      const fmt = (c: any) => c ? `${c.candidateType ?? "?"}/${(c.protocol ?? "?").toLowerCase()}${c.relayProtocol ? `(turn-${c.relayProtocol})` : ""}` : "?";
+      console.log(`[WebRTC] ${purpose} path to ${targetUserId}: local=${fmt(loc)} ↔ remote=${fmt(rem)}`);
+    } catch {}
+  }
+
   private _handleSignal = (data: any) => {
     const fromId = data.from_user_id;
     const purpose: "webcam" | "screen" = data.purpose === "screen" ? "screen" : "webcam";
     const remoteRole: "sender" | "receiver" | undefined = data.role;
     const sig = data.signal;
     const sigType: string | undefined = sig?.type;
-    console.log(`[WebRTC] signal IN ←`, fromId, `purpose=${data.purpose ?? "<missing>"} role=${remoteRole ?? "-"} sig=${sigType ?? "candidate"}`);
+    console.log(`[WebRTC] signal IN ←`, fromId, `purpose=${data.purpose ?? "<missing>"} role=${remoteRole ?? "-"} sig=${signalKind(sig)}`);
 
     // Queue pre-join signals under a key that also distinguishes role, so
     // flush later routes them correctly.

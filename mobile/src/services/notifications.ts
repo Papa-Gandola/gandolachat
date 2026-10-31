@@ -158,3 +158,68 @@ export async function unregisterCurrentPushToken(): Promise<void> {
     currentToken = null;
   }
 }
+
+// ---------- сквозное гашение уведомлений (просьба хозяина 03.10) ----------
+// Прочитал чат на компе (или здесь же) — уведомление о нём в шторке должно
+// пропасть. Пока приложение живо (и в фоне, с живым WS), гасим по
+// message_read своего юзера (useChats.onReadSync); после холодного старта —
+// прунинг по непрочитанным (useChats.doRefresh на старте и на _ws_open).
+// Убитое приложение без expo-task-manager (= нативный модуль = новый APK)
+// достать нечем — уведомление пропадёт при следующем открытии. В вебе
+// (PWA) уведомления живут у service worker'а: закрываем через
+// registration.getNotifications(); с закрытой страницей их гасит сам SW по
+// тихому пушу {type:"read"} от сервера (push.send_read_sync).
+type PushData = { chat_id?: unknown; type?: string };
+
+async function webNotifications(): Promise<Array<{ data?: PushData; close: () => void }>> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sw = (globalThis as any).navigator?.serviceWorker;
+  if (!sw) return [];
+  const reg = await sw.ready;
+  return (await reg?.getNotifications?.()) ?? [];
+}
+
+function sameChat(d: PushData | undefined, chatId: number): boolean {
+  return !!d && d.type !== "call" && d.chat_id != null && String(d.chat_id) === String(chatId);
+}
+
+export async function dismissChatNotifications(chatId: number): Promise<void> {
+  if (!Number.isFinite(chatId)) return;
+  try {
+    if (Platform.OS === "web") {
+      for (const n of await webNotifications()) {
+        if (sameChat(n.data, chatId)) n.close();
+      }
+      return;
+    }
+    for (const n of await Notifications.getPresentedNotificationsAsync()) {
+      if (sameChat(n.request?.content?.data as PushData | undefined, chatId)) {
+        await Notifications.dismissNotificationAsync(n.request.identifier);
+      }
+    }
+  } catch (e) {
+    console.warn("[push] dismiss failed", e);
+  }
+}
+
+/** Снять уведомления чатов, в которых непрочитанных уже нет (список
+ *  `unread` — ответ /api/chats/unread, ключи — id чатов строками). */
+export async function pruneReadNotifications(unread: Record<string, number>): Promise<void> {
+  const isRead = (d: PushData | undefined) =>
+    !!d && d.type !== "call" && d.chat_id != null && !((unread[String(d.chat_id)] ?? 0) > 0);
+  try {
+    if (Platform.OS === "web") {
+      for (const n of await webNotifications()) {
+        if (isRead(n.data)) n.close();
+      }
+      return;
+    }
+    for (const n of await Notifications.getPresentedNotificationsAsync()) {
+      if (isRead(n.request?.content?.data as PushData | undefined)) {
+        await Notifications.dismissNotificationAsync(n.request.identifier);
+      }
+    }
+  } catch (e) {
+    console.warn("[push] prune failed", e);
+  }
+}
