@@ -22,9 +22,9 @@ from app.compendium.engine import (
     LEVEL_CAP, NEW_CURVE_FROM,
 )
 from app.compendium.quests import (
-    BY_ID, QUESTS, daily_rotation, weekly_rotation,
+    BY_ID, QUESTS, ACTIVE_QUESTS, daily_rotation, weekly_rotation,
 )
-from app.compendium.halloween import quest_name, theme_for
+from app.compendium.themes import quest_name, theme_for, abstinence_stats
 from app.compendium import poller
 
 router = APIRouter(prefix="/api/compendium", tags=["compendium"])
@@ -154,7 +154,9 @@ def _cosmetics_dict(user: User, earned: list[str], podium: dict | None = None) -
     }
 
 
-SECRET_QUESTS = sorted((q for q in QUESTS if q.category == "secret"), key=lambda q: q.num)
+# Бинго — по ЖИВЫМ пасхалкам (20 клеток): снятые с ротаций (хеллоуинские с
+# ноября 2026) в сетку не входят, их выполнения остаются на полке трофеев.
+SECRET_QUESTS = sorted((q for q in ACTIVE_QUESTS if q.category == "secret"), key=lambda q: q.num)
 
 
 async def _bingo(db: AsyncSession, user_id: int, season: str) -> list[dict]:
@@ -243,7 +245,7 @@ async def my_compendium(
     weekly_pool = _pool(WEEKLY_POOL, weekly_active, this_week)
 
     season_quests = []
-    for q in QUESTS:
+    for q in ACTIVE_QUESTS:
         if q.category != "season":
             continue
         done = (q.id, season) in keys
@@ -257,7 +259,7 @@ async def my_compendium(
 
     team = [
         _quest_dict(q, done=(q.id, season) in keys, season=season)
-        for q in QUESTS if q.category == "team"
+        for q in ACTIVE_QUESTS if q.category == "team"
     ]
 
     comp_res = await db.execute(
@@ -272,7 +274,7 @@ async def my_compendium(
     # «done» — только по ТЕКУЩЕМУ сезону (прошлогодний «Донор крови» не в счёт).
     anti = [
         _quest_dict(q, done=q.id in season_qids, season=season)
-        for q in QUESTS if q.category == "anti"
+        for q in ACTIVE_QUESTS if q.category == "anti"
     ]
 
     trophies = []
@@ -304,10 +306,14 @@ async def my_compendium(
         "linked": True,
         "cosmetics": _cosmetics_dict(current_user, earned, await _podium_frames(db, current_user.id)),
         "season": season,
-        # Тема сезона (октябрь — "halloween": паутина в шапке) и отпечаток
-        # ролика-заставки (сменился — заставку показать заново)
+        # Тема сезона (октябрь — "halloween": паутина в шапке; ноябрь —
+        # "nonut": счётчик воздержания) и отпечаток ролика-заставки
+        # (сменился — заставку показать заново)
         "theme": theme_for(season),
         "intro_version": intro_version(),
+        # «Недрочабрь»: дни с последнего срыва (10+ смертей) и календарь
+        # срывов. Считается всегда, клиенты рисуют при theme == "nonut".
+        "abstinence": abstinence_stats(ctx.rows, now),
         "gas": gas,
         "level": level_for_gas(gas, season),
         "level_progress": lp_cur,
