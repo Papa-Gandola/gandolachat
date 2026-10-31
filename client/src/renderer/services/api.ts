@@ -233,14 +233,26 @@ export interface SeasonArchive {
   rows: SeasonArchiveRow[];
 }
 
+export interface AbstinenceStats {
+  days: number;
+  slips: number[];
+  today: number;
+  days_in_month: number;
+  games: number;
+}
+
 export interface CompendiumMe {
   linked: boolean;
   cosmetics?: CompendiumCosmetics;
   season: string;
-  // Тема сезона ("halloween" в октябре) и отпечаток ролика-заставки:
-  // сменился → заставку показать заново, даже кто её отключал
+  // Тема сезона ("halloween" в октябре, "nonut" — «Недрочабрь» в ноябре) и
+  // отпечаток ролика-заставки: сменился → заставку показать заново, даже
+  // кто её отключал
   theme?: string | null;
   intro_version?: string;
+  // «Недрочабрь»: дни с последнего срыва (катка с 10+ смертями) и календарь
+  // срывов — рисуется при theme === "nonut" (components/NonutDecor.tsx)
+  abstinence?: AbstinenceStats;
   gas?: number;
   level?: number;
   level_progress?: number;

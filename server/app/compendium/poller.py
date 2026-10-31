@@ -31,7 +31,7 @@ from app.compendium.engine import (
     season_of, day_key_of, week_key_of, current_season, level_for_gas, level_for_cosmetics, to_msk, MSK,
 )
 from app.compendium.quests import BY_ID, QUESTS
-from app.compendium.halloween import quest_name
+from app.compendium.themes import quest_name
 from app.ws.manager import manager
 
 QUEST_CARD_MARKER = "/quest_card"

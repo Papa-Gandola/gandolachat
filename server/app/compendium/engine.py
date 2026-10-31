@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from app.compendium.quests import (
-    BY_ID, QUESTS, GAS_PER_LEVEL, UNDEAD_HEROES,
+    BY_ID, QUESTS, ACTIVE_QUESTS, GAS_PER_LEVEL, UNDEAD_HEROES,
     daily_rotation, weekly_rotation,
 )
 
@@ -178,6 +178,27 @@ class UserCtx:
         """Победы подряд на нежити («Тыквенный король»)."""
         return self._streak(m, lambda r: r.is_win and r.hero_id in UNDEAD_HEROES)
 
+    # --- «Недрочабрь» (ноябрь 2026): серии без фида ---
+    def low_death_streak_ending_at(self, m, max_deaths: int) -> int:
+        """Катки подряд не больше чем с max_deaths смертями («Сухая неделя»)."""
+        return self._streak(m, lambda r: r.deaths <= max_deaths)
+
+    def low_death_win_streak_ending_at(self, m, max_deaths: int) -> int:
+        """Победы подряд, в каждой не больше max_deaths смертей («Три раза
+        подряд», «Железная выдержка»)."""
+        return self._streak(m, lambda r: r.is_win and r.deaths <= max_deaths)
+
+    def season_low_death_streak(self, max_deaths: int) -> int:
+        """Текущая серия каток сезона не больше чем с max_deaths смертями —
+        прогресс марафона «Двадцать без рук» (после срыва начинается заново)."""
+        n = 0
+        for r in reversed(self.rows):
+            if r.deaths <= max_deaths:
+                n += 1
+            else:
+                break
+        return n
+
     def lose_streak_before(self, m) -> int:
         """Сколько поражений подряд было ПЕРЕД этой каткой («Восставший»:
         победа сразу после серии поражений)."""
@@ -261,7 +282,7 @@ def evaluate_match(m, ctx: UserCtx) -> list[Completion]:
     active: list = []
     active += [BY_ID[qid] for qid in daily_rotation(day_key_of(m.started_at))]
     active += [BY_ID[qid] for qid in weekly_rotation(week_key_of(m.started_at))]
-    active += [q for q in QUESTS if q.category in ("season", "anti", "secret") and q.check]
+    active += [q for q in ACTIVE_QUESTS if q.category in ("season", "anti", "secret") and q.check]
 
     out: list[Completion] = []
     for q in active:
@@ -280,7 +301,7 @@ def evaluate_match(m, ctx: UserCtx) -> list[Completion]:
 
     # Марафоны с прогрессом — после матчевых (Стахановец видит свежие ежедневки)
     ctx._daily_done += sum(1 for c in out if BY_ID[c.quest_id].category == "daily")
-    for q in QUESTS:
+    for q in ACTIVE_QUESTS:
         if q.progress is None:
             continue
         if (q.id, season) in ctx.completion_keys:
@@ -298,7 +319,7 @@ def evaluate_match(m, ctx: UserCtx) -> list[Completion]:
 def evaluate_team(tc: TeamCtx) -> list[Completion]:
     """Командные задания для одного участника сформировавшейся группы."""
     out: list[Completion] = []
-    for q in QUESTS:
+    for q in ACTIVE_QUESTS:
         if q.team_check is None:
             continue
         pk = tc.m.season  # командные — раз в сезон

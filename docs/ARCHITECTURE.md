@@ -134,7 +134,7 @@ gandolachat/
 │       ├── auth.py         # bcrypt + JWT
 │       ├── api/            # REST: auth, users, chats, dota, poker, polls, compendium, bugreport
 │       ├── ws/             # manager.py (сокеты, составы звонков), handler.py (события)
-│       ├── compendium/     # Гандолиум: quests, engine, poller, bets, weekly, finale, prizes, halloween
+│       ├── compendium/     # Гандолиум: quests, engine, poller, bets, weekly, finale, prizes, themes
 │       ├── poker_engine.py, poker_game.py  # покер: оценка комбинаций, турнир
 │       ├── push.py, webpush.py             # Expo и Web Push
 │       ├── notes.py        # Заметки и напоминания
@@ -632,7 +632,7 @@ drop_call_socket`, `broadcast_to_chat(chat_id, msg, exclude_user)`
 ## 7. Гандолиум (компендиум Dota 2)
 
 Код: `server/app/compendium/` (`quests.py`, `engine.py`, `poller.py`,
-`bets.py`, `weekly.py`, `finale.py`, `prizes.py`, `halloween.py`),
+`bets.py`, `weekly.py`, `finale.py`, `prizes.py`, `themes.py`),
 API — `server/app/api/compendium.py`, клиент OpenDota —
 `server/app/opendota.py`. Клиентские экраны: десктоп
 `CompendiumPage.tsx`, мобилка `screens/compendium/*`.
@@ -706,21 +706,28 @@ API — `server/app/api/compendium.py`, клиент OpenDota —
 
 Класс `Quest`: `id, num, category, name, desc, gas, needs_parse,
 check(m, ctx) -> bool, progress(ctx) -> (current, target),
-team_check(tc) -> bool, repeat = "period", special, title`.
+team_check(tc) -> bool, repeat = "period", special, title, retired`.
 `needs_parse` — только UI-пометка 📼 («ждёт разбора реплея»), движок по
 нему ничего не гейтит: парс-поля у неразобранного матча просто нули.
+`retired = True` — задание снято с ротаций (с 01.11.2026 — 11
+хеллоуинских: d71, d73, w85, w86, w87, s92, s93, x102, x103, x105, x106):
+его нет в пулах, активных списках движка (`ACTIVE_QUESTS`), бинго и
+`/me`, но оно остаётся в `BY_ID` — полки трофеев и титулы живут.
+**Строки из `QUESTS` не удалять**, только `retired`.
 
-Пулы: daily 27, weekly 22, season 15, team 8, anti 16, secret 20 — всего
-108. Ротация: `daily_rotation(day_key)` =
+Пулы (живые): daily 27, weekly 22, season 15, team 8, anti 16, secret 20
+— всего 108 (в `QUESTS` 119 с retired). Ротация: `daily_rotation(day_key)` =
 `sorted(random.Random(f"gandolium:daily:{day_key}").sample(DAILY_POOL, 5))`,
 `weekly_rotation(week_key)` аналогично с 7 активными. Строковый сид
 детерминирован, рестарт сервера ротацию не меняет; движок берёт
-день/неделю **матча**, `/me` — сегодняшние. Сезонные, анти, тайные и
-командные активны всегда.
+день/неделю **матча**, `/me` — сегодняшние. Смена состава пула (retired,
+новые) перетасовывает ротацию дня деплоя один раз. Сезонные, анти, тайные
+и командные активны всегда.
 
 Хелперы детекции: `kda = (K+A)/max(D,1)`; саппорт = `is_parsed и
 wards_placed >= 5`; кор = `last_hits >= 120`; `_night` = час МСК 0–5;
-`_halloween_night` = 31 октября после 18:00 МСК; `is_undead` = герой из
+`_halloween_night` = 31 октября после 18:00 МСК; `_msk_date_is(m, month,
+day)` — катка в конкретный день по МСК; `is_undead` = герой из
 `UNDEAD_HEROES` (21 герой: Pudge 14, Lich 31, Necrophos 36, Undying 85,
 Wraith King 42, Lifestealer 54, Death Prophet 43, Night Stalker 60,
 Abaddon 102, Visage 92, Spectre 67, Shadow Fiend 11, Doom 69, Bane 3,
@@ -829,7 +836,33 @@ Winter Wyvern за сезон); x102 Хеллоуин 66/нед (победа в
 Титулы (носятся в косметике с уровня 4; «Чемпион <месяца>» — с любого):
 Доминатор, Восходящий, Фулл-стак, 💀 Дно недели, Курьер, Гринч,
 Проклятый, Якорь сезона, Рампага, Безупречный, Кальянщик, Некромант,
-Виверна, Жесть, Ливер, Тильт, Восставший из фида, Тыквенный король.
+Виверна, Жесть, Ливер, Тильт, Восставший из фида, Тыквенный король,
+Терпила.
+
+**Ноябрь-2026, «Недрочабрь» (109–119; хозяин утвердил 31.10).** Вместо
+11 хеллоуинских, помеченных `retired` (в списках выше: d71 Нежить, d73
+Полуночник, w85 Некромант, w86 Экзорцист, w87 Голова с плеч, s92
+Тыквенный марафон, s93 Ночной дозор, x102 Хеллоуин, x103 Число зверя,
+x105 Ночной кошмар, x106 Тыквенный король), ровно столько же новых с
+условиями про воздержание — не фидить, терпеть до конца, не срываться.
+Названия у них ноябрьские сразу, шкурок нет:
+- ежедневки: d109 Не пролил ни капли 25 (победа, 0 смертей); d110
+  Держался до конца 20 (победа 45+ мин, ≤2 смерти);
+- недельные: w111 Сухая неделя 70 (5 каток подряд ≤3 смертей,
+  `ctx.low_death_streak_ending_at(m, 3)`); w112 Три раза подряд 70 (3
+  победы подряд, в каждой ≤3 смертей, `low_death_win_streak_ending_at`);
+  w113 Только смотрел 60 📼 (победа на саппорте, 0 убийств, 15+ ассистов);
+- сезонные: s114 Двадцать без рук 250 (марафон: 20 каток подряд ≤5
+  смертей; `progress` = текущая серия `ctx.season_low_death_streak(5)`,
+  после срыва начинается заново); s115 Месяц воздержания 200 (15 побед за
+  сезон с ≤3 смертями);
+- тайные: x116 Первая ночь 66 (победа 1 ноября по МСК, раз за сезон);
+  x117 Освобождение 100 (победа 30 ноября после 20:00 МСК); x118
+  Железная выдержка 150/нед (5 побед подряд ≤2 смертей, титул «Терпила»);
+  x119 «69» 69/матч (6 убийств и 9 ассистов).
+Ротация дня деплоя перетасовалась один раз (состав пула изменился). В
+бинго — 20 живых тайных: открытые хеллоуинские пасхалки из сетки
+пропали, но остались на полке трофеев и в титулах.
 
 ### 7.3 Движок (`engine.py`)
 
@@ -1012,22 +1045,36 @@ username, names, who, items, special?:"fullstack"}` (фулл-стак — пу�
   прошлый сезон — все), hints_total, next_hint_day, title, winner (после
   раскрытия), last:{season, title, winner}|null}`. Дарит хозяин руками.
 
-### 7.7 Хеллоуин (`halloween.py`)
+### 7.7 Сезонные темы (`themes.py`)
 
-`theme_for(season)` = `"halloween"` для месяца 10 любого года (само
-включается и выключается); `quest_name(q, season)` подменяет названия ~40
-заданий «шкурками» (`SKINS`: d01 «Тёмная победа», d13 «Глаза в темноте»,
-w20 «Оборотень», s31 «Бессонный», t42 «Шабаш», a50 «Курьер ада» и т.д.) —
-описания, предикаты, id и титулы те же, выполнения хранятся по id.
-`theme` отдаётся в `/me` и в карточке финала; клиенты рисуют
-паутину/паука/🎃 в шапке. Тематические задания на нежить и ночь живут в
-`quests.py` круглый год.
+`theme_for(season)` по месяцу сезона (`THEME_BY_MONTH`): 10 →
+`"halloween"`, 11 → `"nonut"` («Недрочабрь»), иначе `None`; включается и
+выключается само каждый год. `quest_name(q, season)` подменяет названия
+«шкурками» (`SKINS[тема]`): октябрь — `HALLOWEEN_SKINS` (~40 названий:
+d01 «Тёмная победа», t42 «Шабаш»…), ноябрь — `NONUT_SKINS` (~86 названий в
+стиле «В», пошлые — выбор хозяина 31.10: d01 «Дала», d10 «Секс-машина»,
+w21 «Тройничок», t43 «Оргия», a54 «Дрочил, пока базу сносили», x59
+«Пятерых за раз»…). Именные ачивки друзей (w17, d74, w84, s91, d82, x101),
+a95 и d81 не переименовываются. Описания, предикаты, id и титулы те же,
+выполнения хранятся по id. `theme` отдаётся в `/me` и в карточке финала;
+клиенты рисуют по нему декор: октябрь — паутина/паук/🎃, ноябрь — 🍆 и
+блок «Держишься N дней» (см. ниже). Тематические задания с собственными
+условиями живут в `quests.py` круглый год; хеллоуинские с ноября-2026
+`retired`.
+
+**Счётчик воздержания** (`abstinence_stats(rows, now)`, в `/me` как
+`abstinence`): срыв = катка с `SLIP_DEATHS = 10`+ смертями; `days` — дни
+по МСК с последнего срыва текущего месяца (без срывов — номер сегодняшнего
+дня, 1 ноября = 1); `slips` — номера дней месяца со срывом (клиенты
+рисуют ✕ в календаре), `today`, `days_in_month`, `games`. Считается
+всегда, клиенты показывают при `theme == "nonut"` (десктоп
+`components/NonutDecor.tsx`, мобилка `components/NonutDecor.tsx`).
 
 ### 7.8 API (`api/compendium.py`, префикс `/api/compendium`, JWT)
 
 - `GET /me`: непривязанному — `{linked:false, season, theme,
   intro_version}`; привязанному — `{linked, cosmetics, season, theme,
-  intro_version, gas, level, level_progress, level_target, level_cap`
+  intro_version, abstinence (см. 7.7), gas, level, level_progress, level_target, level_cap`
   (30 для сезонов с октября-2026, иначе `null` — клиенты пишут «МАКС» по
   `level >= level_cap`)`, matches, wins, rank_tier, leaderboard_rank,
   daily[5], weekly[7], daily_pool[27], weekly_pool[22], season_quests[15]

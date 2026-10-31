@@ -100,12 +100,21 @@ export interface SeasonArchive {
   rows: SeasonArchiveRow[];
 }
 
+export interface AbstinenceStats {
+  days: number;           // дней с последнего срыва (без срывов — с 1-го числа)
+  slips: number[];        // номера дней месяца со срывом (10+ смертей за катку)
+  today: number;
+  days_in_month: number;
+  games: number;
+}
+
 export interface CompendiumMe {
   linked: boolean;
   cosmetics?: CompendiumCosmetics;
   season: string;
-  theme?: string | null;       // "halloween" в октябре — паутина в шапке
+  theme?: string | null;       // "halloween" в октябре — паутина; "nonut" в ноябре — счётчик воздержания
   intro_version?: string;
+  abstinence?: AbstinenceStats; // «Недрочабрь», рисуется при theme === "nonut"
   gas?: number;
   level?: number;
   level_progress?: number;

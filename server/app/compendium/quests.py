@@ -1,5 +1,6 @@
 """Гандолиум: все задания сезона — 70 по утверждённой концепции + 38
-октябрьского пополнения (хеллоуин, именные, штрафные анти; 30.09).
+октябрьского пополнения (хеллоуин, именные, штрафные анти; 30.09) + 11
+ноябрьских («Недрочабрь», 31.10) вместо 11 хеллоуинских (те — retired).
 
 Каждое задание — предикат над строкой DotaMatch (`m`) и контекстом игрока
 (`ctx`, см. engine.UserCtx). Категории:
@@ -13,8 +14,13 @@
             у двух самых жёстких gas < 0 — штраф (poller не уводит в минус)
   secret  — 20 пасхалок, в UI скрыты до выполнения
 
-Сезонные «шкурки» названий (октябрь — хеллоуин) — halloween.py, сами
-предикаты от них не зависят.
+`retired=True` — задание снято с ротаций (с 01.11.2026 хеллоуинские:
+нежить, ночные, «Число зверя»): в пулы, активные списки, бинго и /me не
+попадает, но остаётся в BY_ID — выполнения на полках трофеев и титулы
+никуда не деваются. Удалять строки из QUESTS нельзя — полки сломаются.
+
+Сезонные «шкурки» названий (октябрь — хеллоуин, ноябрь — «Недрочабрь») —
+themes.py, сами предикаты от них не зависят.
 
 `repeat` задаёт period_key для уникальности выполнения:
   period — дефолт: daily→дата, weekly→неделя ВНУТРИ сезона ("2026-10-W40",
@@ -91,6 +97,14 @@ def _halloween_night(m) -> bool:
     return d.month == 10 and d.day == 31 and d.hour >= 18
 
 
+def _msk_date_is(m, month: int, day: int) -> bool:
+    """Катка начата в конкретный день по МСК («Первая ночь» 1 ноября,
+    «Освобождение» 30 ноября)."""
+    from datetime import timedelta
+    d = m.started_at + timedelta(hours=3)
+    return d.month == month and d.day == day
+
+
 # ---------- role helpers (по строке DotaMatch) ----------
 def kda(m) -> float:
     return (m.kills + m.assists) / max(m.deaths, 1)
@@ -145,6 +159,7 @@ class Quest:
     repeat: str = "period"
     special: Optional[str] = None          # rampage|fullstack — особая карточка + пуш
     title: Optional[str] = None            # титул позора/славы (для полки трофеев)
+    retired: bool = False                  # снято с ротаций, но живёт в BY_ID ради полок
 
 
 QUESTS: list[Quest] = [
@@ -329,11 +344,12 @@ QUESTS: list[Quest] = [
     # =====================================================================
 
     # ================= ЕЖЕДНЕВКИ (71–82) =================
-    Quest("d71", 71, "daily", "Нежить", "Победа на герое-нежити (Pudge, Lich, Necro, WK, Undying, SF…)", 20,
+    # d71/d73 — хеллоуинские, с ноября 2026 retired (вместо них d109/d110)
+    Quest("d71", 71, "daily", "Нежить", "Победа на герое-нежити (Pudge, Lich, Necro, WK, Undying, SF…)", 20, retired=True,
           check=lambda m, ctx: m.is_win and is_undead(m)),
     Quest("d72", 72, "daily", "Чёртова дюжина", "Ровно 13 убийств за игру", 20,
           check=lambda m, ctx: m.kills == 13),
-    Quest("d73", 73, "daily", "Полуночник", "Победа в катке, начатой между полуночью и тремя ночи", 20,
+    Quest("d73", 73, "daily", "Полуночник", "Победа в катке, начатой между полуночью и тремя ночи", 20, retired=True,
           check=lambda m, ctx: m.is_win and 0 <= _hour_msk(m) < 3),
     Quest("d74", 74, "daily", "Я тебе вакцину поставлю", "Первая кровь твоя — и победа", 20,
           needs_parse=True, check=lambda m, ctx: m.is_win and m.firstblood),
@@ -359,12 +375,13 @@ QUESTS: list[Quest] = [
           check=lambda m, ctx: m.is_win and m.deaths == 0 and m.duration >= 40 * 60),
     Quest("w84", 84, "weekly", "Аня лечи меня, АНЯ!", "10 000+ лечения союзников за одну игру", 70,
           check=lambda m, ctx: m.hero_healing >= 10000),
-    Quest("w85", 85, "weekly", "Некромант", "3 победы на нежити за неделю", 70, title="Некромант",
+    # w85–w87 — хеллоуинские, с ноября 2026 retired (вместо них w111–w113)
+    Quest("w85", 85, "weekly", "Некромант", "3 победы на нежити за неделю", 70, title="Некромант", retired=True,
           check=lambda m, ctx: sum(1 for r in ctx.week_rows(m) if r.is_win and is_undead(r)) >= 3),
-    Quest("w86", 86, "weekly", "Экзорцист", "Победа против 2+ героев-нежити в составе врага", 60,
+    Quest("w86", 86, "weekly", "Экзорцист", "Победа против 2+ героев-нежити в составе врага", 60, retired=True,
           check=lambda m, ctx: m.is_win
           and sum(1 for h in _extra(m, "enemy_heroes", []) if h in UNDEAD_HEROES) >= 2),
-    Quest("w87", 87, "weekly", "Голова с плеч", "10+ убийств на герое-нежити", 60,
+    Quest("w87", 87, "weekly", "Голова с плеч", "10+ убийств на герое-нежити", 60, retired=True,
           check=lambda m, ctx: is_undead(m) and m.kills >= 10),
     Quest("w88", 88, "weekly", "Восставший", "Победа сразу после 3+ поражений подряд", 60,
           check=lambda m, ctx: m.is_win and ctx.lose_streak_before(m) >= 3),
@@ -376,9 +393,10 @@ QUESTS: list[Quest] = [
     # ================= МАРАФОНЫ СЕЗОНА (91–94) =================
     Quest("s91", 91, "season", "Ваня Виверна", "10 каток на Winter Wyvern за сезон", 200, title="Виверна",
           progress=lambda ctx: (sum(1 for r in ctx.rows if r.hero_id == HERO_WINTER_WYVERN), 10)),
-    Quest("s92", 92, "season", "Тыквенный марафон", "13 побед на нежити за сезон", 250,
+    # s92/s93 — хеллоуинские, с ноября 2026 retired (вместо них s114/s115)
+    Quest("s92", 92, "season", "Тыквенный марафон", "13 побед на нежити за сезон", 250, retired=True,
           progress=lambda ctx: (sum(1 for r in ctx.rows if r.is_win and is_undead(r)), 13)),
-    Quest("s93", 93, "season", "Ночной дозор", "10 каток, начатых после полуночи, за сезон", 150,
+    Quest("s93", 93, "season", "Ночной дозор", "10 каток, начатых после полуночи, за сезон", 150, retired=True,
           progress=lambda ctx: (sum(1 for r in ctx.rows if _night(r)), 10)),
     Quest("s94", 94, "season", "Легион", "15 каток с людьми из чата за сезон", 200,
           progress=lambda ctx: (sum(1 for r in ctx.rows if (r.team_size or 0) >= 2), 15)),
@@ -418,31 +436,76 @@ QUESTS: list[Quest] = [
     # ================= ПАСХАЛКИ (101–108) =================
     Quest("x101", 101, "secret", "Виверна, я тебя знаю", "25 каток на Winter Wyvern за сезон", 150,
           check=lambda m, ctx: sum(1 for r in ctx.season_rows_up_to(m) if r.hero_id == HERO_WINTER_WYVERN) == 25),
-    Quest("x102", 102, "secret", "Хеллоуин", "Победа вечером 31 октября (после 18:00)", 66,
+    # x102/x103/x105/x106 — хеллоуинские, с ноября 2026 retired (вместо них x116–x119)
+    Quest("x102", 102, "secret", "Хеллоуин", "Победа вечером 31 октября (после 18:00)", 66, retired=True,
           repeat="week", check=lambda m, ctx: m.is_win and _halloween_night(m)),
-    Quest("x103", 103, "secret", "Число зверя", "6 убийств, 6 смертей, 6 ассистов", 66,
+    Quest("x103", 103, "secret", "Число зверя", "6 убийств, 6 смертей, 6 ассистов", 66, retired=True,
           repeat="match", check=lambda m, ctx: m.kills == 6 and m.deaths == 6 and m.assists == 6),
     Quest("x104", 104, "secret", "Восставший из фида", "Победа с 12+ смертями", 50,
           repeat="week", title="Восставший из фида",
           check=lambda m, ctx: m.is_win and m.deaths >= 12),
-    Quest("x105", 105, "secret", "Ночной кошмар", "3 победы за одну ночь (с полуночи до шести)", 100,
+    Quest("x105", 105, "secret", "Ночной кошмар", "3 победы за одну ночь (с полуночи до шести)", 100, retired=True,
           repeat="week", check=lambda m, ctx: sum(1 for r in ctx.day_rows(m) if r.is_win and _night(r)) >= 3),
-    Quest("x106", 106, "secret", "Тыквенный король", "5 побед подряд на нежити", 150,
+    Quest("x106", 106, "secret", "Тыквенный король", "5 побед подряд на нежити", 150, retired=True,
           repeat="week", title="Тыквенный король",
           check=lambda m, ctx: m.is_win and is_undead(m) and ctx.undead_win_streak_ending_at(m) >= 5),
     Quest("x107", 107, "secret", "Кровавый след", "25+ убийств за игру", 100,
           repeat="match", check=lambda m, ctx: m.kills >= 25),
     Quest("x108", 108, "secret", "Дым и зеркала", "5+ дымов за катку", 60,
           needs_parse=True, repeat="week", check=lambda m, ctx: m.is_parsed and _extra(m, "smokes", 0) >= 5),
+
+    # =====================================================================
+    # НОЯБРЬСКОЕ ПОПОЛНЕНИЕ (109–119) — «Недрочабрь», утверждено хозяином
+    # 31.10: воздержание = не фидить, терпеть до конца, не срываться. Ровно
+    # вместо 11 хеллоуинских (retired выше): пулы остались 27/22/15/16/20.
+    # Названия — ноябрьские сразу (шкурки не нужны); в другие месяцы задания
+    # просто живут с этими же названиями, как раньше жила нежить.
+    # =====================================================================
+
+    # ================= ЕЖЕДНЕВКИ (109–110) =================
+    Quest("d109", 109, "daily", "Не пролил ни капли", "Победа без единой смерти", 25,
+          check=lambda m, ctx: m.is_win and m.deaths == 0),
+    Quest("d110", 110, "daily", "Держался до конца", "Победа в катке 45+ минут не больше чем с 2 смертями", 20,
+          check=lambda m, ctx: m.is_win and m.duration >= 45 * 60 and m.deaths <= 2),
+
+    # ================= ЕЖЕНЕДЕЛЬКИ (111–113) =================
+    Quest("w111", 111, "weekly", "Сухая неделя", "5 каток подряд не больше чем с 3 смертями", 70,
+          check=lambda m, ctx: ctx.low_death_streak_ending_at(m, 3) >= 5),
+    Quest("w112", 112, "weekly", "Три раза подряд", "3 победы подряд, в каждой не больше 3 смертей", 70,
+          check=lambda m, ctx: ctx.low_death_win_streak_ending_at(m, 3) >= 3),
+    Quest("w113", 113, "weekly", "Только смотрел", "Победа на саппорте (5+ вардов) с 0 убийств и 15+ ассистами", 60,
+          needs_parse=True,
+          check=lambda m, ctx: m.is_win and is_support_game(m) and m.kills == 0 and m.assists >= 15),
+
+    # ================= МАРАФОНЫ СЕЗОНА (114–115) =================
+    # s114 — прогресс = ТЕКУЩАЯ серия (может и уменьшаться после срыва)
+    Quest("s114", 114, "season", "Двадцать без рук", "20 каток подряд не больше чем с 5 смертями (прогресс — текущая серия)", 250,
+          progress=lambda ctx: (ctx.season_low_death_streak(5), 20)),
+    Quest("s115", 115, "season", "Месяц воздержания", "15 побед за сезон не больше чем с 3 смертями в каждой", 200,
+          progress=lambda ctx: (sum(1 for r in ctx.rows if r.is_win and r.deaths <= 3), 15)),
+
+    # ================= ПАСХАЛКИ (116–119) =================
+    Quest("x116", 116, "secret", "Первая ночь", "Победа 1 ноября", 66,
+          check=lambda m, ctx: m.is_win and _msk_date_is(m, 11, 1)),
+    Quest("x117", 117, "secret", "Освобождение", "Победа 30 ноября после 20:00", 100,
+          check=lambda m, ctx: m.is_win and _msk_date_is(m, 11, 30) and _hour_msk(m) >= 20),
+    Quest("x118", 118, "secret", "Железная выдержка", "5 побед подряд, в каждой не больше 2 смертей", 150,
+          repeat="week", title="Терпила",
+          check=lambda m, ctx: ctx.low_death_win_streak_ending_at(m, 2) >= 5),
+    Quest("x119", 119, "secret", "69", "6 убийств и 9 ассистов за игру", 69,
+          repeat="match", check=lambda m, ctx: m.kills == 6 and m.assists == 9),
 ]
 
 BY_ID: dict[str, Quest] = {q.id: q for q in QUESTS}
-DAILY_POOL = [q.id for q in QUESTS if q.category == "daily"]
-WEEKLY_POOL = [q.id for q in QUESTS if q.category == "weekly"]
-SEASON_IDS = [q.id for q in QUESTS if q.category == "season"]
-TEAM_IDS = [q.id for q in QUESTS if q.category == "team"]
-ANTI_IDS = [q.id for q in QUESTS if q.category == "anti"]
-SECRET_IDS = [q.id for q in QUESTS if q.category == "secret"]
+# Живые задания (без retired) — только они попадают в пулы, активные
+# списки движка, бинго и /me. Полки трофеев ходят через BY_ID.
+ACTIVE_QUESTS: list[Quest] = [q for q in QUESTS if not q.retired]
+DAILY_POOL = [q.id for q in ACTIVE_QUESTS if q.category == "daily"]
+WEEKLY_POOL = [q.id for q in ACTIVE_QUESTS if q.category == "weekly"]
+SEASON_IDS = [q.id for q in ACTIVE_QUESTS if q.category == "season"]
+TEAM_IDS = [q.id for q in ACTIVE_QUESTS if q.category == "team"]
+ANTI_IDS = [q.id for q in ACTIVE_QUESTS if q.category == "anti"]
+SECRET_IDS = [q.id for q in ACTIVE_QUESTS if q.category == "secret"]
 
 
 def daily_rotation(day_key: str) -> list[str]:

@@ -5,6 +5,7 @@ import { AppBar } from "../../components/AppBar";
 import { Avatar } from "../../components/Avatar";
 import { DotaRankBadge } from "../../components/DotaRankBadge";
 import { HalloweenDecor } from "../../components/HalloweenDecor";
+import { NonutDecor } from "../../components/NonutDecor";
 import { ScreenContainer } from "../../components/ScreenContainer";
 import {
   apiErrorMessage, compendiumApi, CompendiumCosmetics, CompendiumMe, CompendiumQuest,
@@ -163,11 +164,13 @@ export function CompendiumScreen() {
           </View>
         ) : (
           <>
+            {/* Ноябрь («nonut»): «Держишься N дней» + календарь срывов */}
+            {data.theme === "nonut" && data.abstinence ? <NonutDecor stats={data.abstinence} /> : null}
             {/* Шапка прогресса */}
             <View style={{ margin: 14, padding: 14, backgroundColor: theme.colors.bgElev, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.md, gap: 10 }}>
               <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "baseline" }}>
                 <Text style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: theme.colors.inkMuted, letterSpacing: 1 }}>
-                  СЕЗОН · {seasonTitle.toUpperCase()}{data.theme === "halloween" ? " 🎃" : ""}
+                  СЕЗОН · {seasonTitle.toUpperCase()}{data.theme === "halloween" ? " 🎃" : data.theme === "nonut" ? " · НЕДРОЧАБРЬ 🍆" : ""}
                 </Text>
                 <DotaRankBadge rankTier={data.rank_tier} leaderboardRank={data.leaderboard_rank} small />
               </View>

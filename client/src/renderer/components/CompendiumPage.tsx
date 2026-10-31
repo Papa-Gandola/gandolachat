@@ -8,6 +8,7 @@ import { useTheme } from "../services/theme";
 import DotaRankBadge from "./DotaRankBadge";
 import { frameClass, frameStyle, CompBadge, CompStar, glowStyle, titleOf } from "./cosmetics";
 import HalloweenDecor from "./HalloweenDecor";
+import NonutDecor from "./NonutDecor";
 import { Emoji } from "./Emoji";
 import { useDotaPlaying } from "../services/presence";
 import Icon, { Gas } from "./Icon";
@@ -299,14 +300,17 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
         </div>
       )}
       <div style={{ ...s.header, position: "relative", ...(isNeo ? { borderBottomColor: "var(--accent)" } : {}) }}>
-        {/* Октябрь: паутина по углам и паучок — тема приходит с сервера */}
+        {/* Октябрь: паутина по углам и паучок — тема приходит с сервера.
+            Ноябрь («nonut»): счётчик воздержания — отдельной панелью ниже */}
         {data?.theme === "halloween" && <HalloweenDecor />}
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, position: "relative", zIndex: 2 }}>
           <span style={{ ...s.title, ...mono, color: "var(--accent)", letterSpacing: "0.1em" }}>
             {isNeo ? "// ГАНДОЛИУМ" : <><Gas size={16} style={{ marginRight: 6 }} />ГАНДОЛИУМ</>}
           </span>
           <span style={{ ...mono, color: "var(--text-muted)", fontSize: 12 }}>
-            сезон · {seasonTitle}{data?.theme === "halloween" && <> · <Emoji e="🎃" /></>}
+            сезон · {seasonTitle}
+            {data?.theme === "halloween" && <> · <Emoji e="🎃" /></>}
+            {data?.theme === "nonut" && <> · недрочабрь <Emoji e="🍆" /></>}
           </span>
         </div>
         <button style={{ ...s.closeBtn, ...mono, position: "relative", zIndex: 2, ...(isNeo ? { color: "var(--accent)" } : {}) }} onClick={onClose}>✕</button>
@@ -336,6 +340,10 @@ export default function CompendiumPage({ currentUser, onClose, onOpenProfile }: 
 
         {data && data.linked && (
           <>
+            {/* Ноябрь: «Держишься N дней» + календарь срывов (вместо паутины октября) */}
+            {data.theme === "nonut" && data.abstinence && (
+              <NonutDecor stats={data.abstinence} isNeo={isNeo} mono={mono} panelStyle={s.panel(isNeo)} />
+            )}
             {/* --- шапка прогресса --- */}
             <div style={{ ...s.panel(isNeo), display: "flex", gap: 20, alignItems: "center", flexWrap: "wrap" }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 90 }}>
