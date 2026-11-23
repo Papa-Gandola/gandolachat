@@ -318,8 +318,13 @@ print-логи видны в `docker compose logs` с опозданием (не
   генерации. Gemini REST `v1beta/models/{m}:generateContent` с
   `x-goog-api-key`, `system_instruction`, `safetySettings` BLOCK_NONE,
   `thinkingConfig.thinkingBudget=0` для 2.5 (иначе лишние секунды). Ошибки
-  (429/квота, блок фильтром = нет candidates или пустой text, HTTP, сеть,
-  нет ключа) — КОРОТКИЙ честный ответ ботом + лог `[ai]`, молчать нельзя.
+  (429/квота, блок фильтром = нет candidates или пустой text, HTTP, сеть)
+  — одна из ЗАГОТОВЛЕННЫХ реплик в характере, рандомно (`QUOTA_LINES`/
+  `DOWN_LINES`/`FILTER_LINES`/`LIMIT_LINES`, `pick()` с `{asker}` —
+  просьба хозяина 23.11 «если лимиты кончатся или резко станет
+  недоступен — захардкодим несколько сообщений»), настоящая причина —
+  только в лог `[ai]` (404 = протух id модели → AI_MODEL); нет ключа —
+  явная строка про AI_API_KEY. Молчать нельзя.
   Документацию Gemini из контейнера не достать (ai.google.dev закрыт
   прокси; создал окружение «gandolachat» с ai.google.dev и
   generativelanguage.googleapis.com — работает только в НОВОЙ сессии на

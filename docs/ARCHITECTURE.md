@@ -605,8 +605,11 @@ drop_call_socket`, `broadcast_to_chat(chat_id, msg, exclude_user)`
   (`post_bot_message`: WS `message` + пуш с троттлингом; в группе реплаем
   на вопрос). Провайдер — Google Gemini REST `generateContent`
   (`x-goog-api-key`, `system_instruction`, `safetySettings` BLOCK_NONE,
-  `thinkingBudget: 0` для 2.5): 429 / блок фильтром / сеть / нет ключа →
-  короткий честный ответ ботом + лог `[ai]`, молчания нет. Характер —
+  `thinkingBudget: 0` для 2.5): 429 / блок фильтром / сеть / HTTP-ошибка →
+  одна из заготовленных реплик в характере, рандомно (`QUOTA_LINES`,
+  `DOWN_LINES`, `FILTER_LINES`; исчерпанный дневной лимит —
+  `LIMIT_LINES`), настоящая причина только в логе `[ai]`; нет ключа —
+  явная строка про `AI_API_KEY`. Молчания нет. Характер —
   «жёсткая прожарка, но по делу» (`SYSTEM_PROMPT`, выбор хозяина).
   Бесплатный тариф Google может использовать запросы для обучения — об
   этом сказано в приветствии бота.

@@ -22,13 +22,14 @@
 со своей сессией БД: ответ нейросети идёт секунды, WS-цикл ждать не должен.
 Ответ бота — обычное сообщение от бота (`post_bot_message`): WS `message`
 через `_message_out`, пуш участникам с обычным троттлингом. Пока думает —
-`typing` от бота. Ошибки Gemini (429 квота, блок по safety, сеть) — честный
-короткий ответ ботом + лог `[ai]`, молчать нельзя (хозяин решит, что не
-работает).
-"""
+`typing` от бота. Ошибки Gemini (429 квота, блок по safety, сеть) — одна из
+заготовленных реплик в характере (QUOTA/DOWN/FILTER/LIMIT_LINES, рандомно —
+просьба хозяина 23.11) + лог `[ai]` с настоящей причиной, молчать нельзя
+(хозяин решит, что не работает)."""
 from __future__ import annotations
 
 import asyncio
+import random
 import secrets
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -68,6 +69,44 @@ GREETING = (
 _daily: dict[tuple[int, str], int] = defaultdict(int)
 _chat_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 _bot_id: int | None = None
+
+# Заготовки на случай, когда мозг недоступен (просьба хозяина 23.11:
+# «если лимиты кончатся или он резко перестанет быть доступным — захардкодим
+# несколько сообщений, которые будут вылезать рандомно»). Выбираются
+# random.choice, {asker} — ник спросившего. Техническая причина — в лог.
+QUOTA_LINES = [
+    "{asker}, Google сказал, что на сегодня я наболтался. Бесплатный тариф, не царские хоромы. Завтра.",
+    "Квота кончилась. Вы меня задолбали вопросами настолько, что даже Google попросил перерыв.",
+    "Лимит Google исчерпан. Иди поиграй катку, может хоть там что-то получится. Завтра отвечу.",
+    "{asker}, у меня закончились бесплатные мозги на сегодня. Погугли сам, руки не отвалятся.",
+    "Всё, Google закрыл лавочку до завтра. Можете пока пообщаться друг с другом, как в 2010-м.",
+    "Квота на нуле, как твой KDA. Возвращайся завтра.",
+]
+DOWN_LINES = [
+    "{asker}, у меня мозг отвалился. Не твоими стараниями, но попробуй позже.",
+    "Google не отвечает. Видимо, у них там тоже кто-то фидит. Напиши чуть позже.",
+    "Связь с мозгом потеряна. Подожди пару минут и спроси заново, если ещё не забыл вопрос.",
+    "Сервер нейросети лёг. Я бы рад прожарить, но прожаривать сейчас нечем.",
+    "Что-то сломалось не у тебя, а у меня. Редкий случай, запомни этот день. Попробуй позже.",
+    "{asker}, Google временно недоступен. Как и твои шансы на победу сегодня. Попробуй позже.",
+]
+FILTER_LINES = [
+    "Google не разрешил мне это сказать. Даже у моей токсичности есть цензор, представь.",
+    "{asker}, фильтр Google решил, что это слишком даже для меня. Спроси иначе.",
+    "Мне заткнули рот. Не я, а Google. Переформулируй, и попробуем ещё раз.",
+    "Этот вопрос забраковал цензор. Спроси по-человечески.",
+]
+LIMIT_LINES = [
+    "{asker}, лимит {limit} вопросов в день исчерпан. Ты меня утомил, завтра продолжим.",
+    "{asker}, {limit} вопросов за день — это уже зависимость. Лимит. Завтра.",
+    "Стоп, {asker}. {limit} вопросов за сутки, все твои. Иди поспи.",
+    "{asker}, на сегодня хватит: {limit} вопросов. Остальные задай друзьям, они тоже люди.",
+]
+NO_KEY_LINE = "У меня нет ключа (AI_API_KEY не задан на сервере). Хозяин, займись."
+
+
+def pick(lines: list[str], asker: str = "") -> str:
+    return random.choice(lines).format(asker=asker or "друг", limit=settings.AI_DAILY_LIMIT)
 
 
 def bot_name() -> str:
@@ -294,45 +333,46 @@ async def gemini_generate(contents: list[dict], system: str) -> str:
             r = await client.post(url, json=body, headers={"x-goog-api-key": settings.AI_API_KEY})
     except httpx.HTTPError as e:
         print(f"[ai] network: {type(e).__name__}: {e}")
-        raise AIError("Мозг не отвечает (сеть до Google). Попробуй позже.")
+        raise AIError("down")
     if r.status_code == 429:
-        print(f"[ai] 429: {r.text[:300]}")
-        raise AIError("Google говорит, что я слишком много болтал — квота на сегодня. Попробуй позже.")
+        print(f"[ai] 429 квота: {r.text[:300]}")
+        raise AIError("quota")
     if r.status_code >= 400:
-        print(f"[ai] HTTP {r.status_code}: {r.text[:500]}")
-        raise AIError(f"Мозг отвалился (ошибка {r.status_code}). Хозяин, глянь логи.")
+        print(f"[ai] HTTP {r.status_code} (404 = модель {settings.AI_MODEL!r} не найдена, поменять AI_MODEL): {r.text[:500]}")
+        raise AIError("down")
     data = r.json()
     cands = data.get("candidates") or []
     if not cands:
         reason = (data.get("promptFeedback") or {}).get("blockReason")
         print(f"[ai] no candidates, blockReason={reason}: {str(data)[:300]}")
-        raise AIError("Google не дал мне это сказать (заблокировано фильтром). Спроси иначе.")
+        raise AIError("filter")
     cand = cands[0]
     parts = (cand.get("content") or {}).get("parts") or []
     text = "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
     if not text:
         print(f"[ai] empty text, finishReason={cand.get('finishReason')}: {str(cand)[:300]}")
-        raise AIError("Google не дал мне это сказать (фильтр). Спроси иначе.")
+        raise AIError("filter")
     usage = data.get("usageMetadata") or {}
     print(f"[ai] ok: in={usage.get('promptTokenCount')} out={usage.get('candidatesTokenCount')} finish={cand.get('finishReason')}")
     return text
 
 
 class AIError(Exception):
-    pass
+    """kind: quota | down | filter — текст ответа выбирает generate_reply."""
 
 
-async def generate_reply(contents: list[dict]) -> str:
+async def generate_reply(contents: list[dict], asker: str = "") -> str:
     if not enabled():
-        return "У меня нет ключа (AI_API_KEY не задан на сервере). Хозяин, займись."
+        return NO_KEY_LINE
     system = SYSTEM_PROMPT.format(name=bot_name())
     try:
         return await gemini_generate(contents, system)
     except AIError as e:
-        return str(e)
+        kind = str(e)
+        return pick(QUOTA_LINES if kind == "quota" else FILTER_LINES if kind == "filter" else DOWN_LINES, asker)
     except Exception as e:
         print(f"[ai] generate failed: {type(e).__name__}: {e}")
-        return "Мозг отвалился. Попробуй позже."
+        return pick(DOWN_LINES, asker)
 
 
 # ---------- вход из WS ----------
@@ -387,9 +427,7 @@ async def _respond(chat_id: int, message_id: int, sender_id: int, content: str, 
                                        reply_to_id=reply_to)
                 return
             if not _take_quota(sender_id):
-                await post_bot_message(db, bot, chat,
-                                       f"{asker.username}, лимит {settings.AI_DAILY_LIMIT} вопросов в день исчерпан. Завтра продолжим.",
-                                       reply_to_id=reply_to)
+                await post_bot_message(db, bot, chat, pick(LIMIT_LINES, asker.username), reply_to_id=reply_to)
                 return
             async with _chat_locks[chat_id]:
                 await manager.broadcast_to_chat(chat_id, {"type": "typing", "user_id": bot.id, "chat_id": chat_id})
@@ -399,7 +437,7 @@ async def _respond(chat_id: int, message_id: int, sender_id: int, content: str, 
                 else:
                     hist = await _history(db, chat_id, settings.AI_CONTEXT_MESSAGES, message_id)
                     contents = _dm_contents(hist, question, bot.id)
-                text = await generate_reply(contents)
+                text = await generate_reply(contents, asker.username)
                 await post_bot_message(db, bot, chat, text[:4000], reply_to_id=reply_to)
     except Exception as e:
         print(f"[ai] respond failed: {type(e).__name__}: {e}")
