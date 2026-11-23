@@ -48,6 +48,7 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:ge
 GROUP_CONTEXT = 20          # сообщений группы, которые бот видит по /ai
 REPLY_MAX_TOKENS = 800
 REQUEST_TIMEOUT = 60.0
+RETRY_PAUSES = (2.0, 4.0)   # паузы перед повтором на той же модели при 503/сети
 MSK = timezone(timedelta(hours=3))
 
 SYSTEM_PROMPT = """Ты — {name}, бот в закрытом мессенджере GandolaChat для компании друзей-геймеров (Dota 2, покер, Rust). Общаешься по-русски.
@@ -310,9 +311,18 @@ def _group_contents(history: list[Message], asker: str, question: str, bot_id: i
     return [{"role": "user", "parts": [{"text": text}]}]
 
 
-async def gemini_generate(contents: list[dict], system: str) -> str:
-    """Один вызов Gemini generateContent. Возвращает текст; кидает
-    AIError с человеческим текстом для ответа ботом."""
+def model_chain() -> list[str]:
+    """Основная модель + запасные из AI_MODEL_FALLBACK (через запятую),
+    без дублей и пустых."""
+    out: list[str] = []
+    for m in [settings.AI_MODEL, *settings.AI_MODEL_FALLBACK.split(",")]:
+        m = m.strip()
+        if m and m not in out:
+            out.append(m)
+    return out
+
+
+def _build_body(contents: list[dict], system: str, model: str) -> dict:
     body: dict = {
         "system_instruction": {"parts": [{"text": system}]},
         "contents": contents,
@@ -325,36 +335,80 @@ async def gemini_generate(contents: list[dict], system: str) -> str:
                       "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT")
         ],
     }
-    if settings.AI_MODEL.startswith("gemini-2.5"):
+    if model.startswith("gemini-2.5"):
         # 2.5 «думает» по умолчанию — в чате это лишние секунды и токены
         body["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}
-    url = GEMINI_URL.format(model=settings.AI_MODEL)
-    try:
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-            r = await client.post(url, json=body, headers={"x-goog-api-key": settings.AI_API_KEY})
-    except httpx.HTTPError as e:
-        print(f"[ai] network: {type(e).__name__}: {e}")
-        raise AIError("down")
-    if r.status_code == 429:
-        print(f"[ai] 429 квота: {r.text[:300]}")
-        raise AIError("quota")
-    if r.status_code >= 400:
-        print(f"[ai] HTTP {r.status_code} (404 = модель {settings.AI_MODEL!r} не найдена, поменять AI_MODEL): {r.text[:500]}")
-        raise AIError("down")
-    data = r.json()
+    return body
+
+
+async def _post(model: str, body: dict) -> httpx.Response:
+    """Сырой POST в Gemini. Отдельной функцией — тесты подменяют."""
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        return await client.post(GEMINI_URL.format(model=model), json=body,
+                                 headers={"x-goog-api-key": settings.AI_API_KEY})
+
+
+async def gemini_generate(contents: list[dict], system: str) -> str:
+    """Вызов Gemini generateContent по цепочке моделей. Возвращает текст;
+    кидает AIError, по которой generate_reply выбирает заготовку.
+
+    Бесплатный тариф в час пик отвечает 503 «high demand» (на проде 23.11
+    — три подряд), а 429 там считается на модель. Поэтому: 503/5xx и сеть
+    → пауза и ещё попытка на той же модели (RETRY_PAUSES), затем следующая
+    модель цепочки; 429 → сразу следующая модель; 4xx (404 = протух id,
+    400 = тело запроса) → следующая модель без повтора. Блок фильтром
+    (нет candidates / пустой текст) моделью не лечится — сразу «filter».
+    Если не ответил никто: все отказы были 429 → «quota», иначе «down»."""
+    kinds: list[str] = []
+    for model in model_chain():
+        body = _build_body(contents, system, model)
+        for attempt, pause in enumerate(RETRY_PAUSES + (None,)):
+            try:
+                r = await _post(model, body)
+            except httpx.HTTPError as e:
+                print(f"[ai] {model}: сеть: {type(e).__name__}: {e}")
+                kinds.append("down")
+                if pause is None:
+                    break
+                await asyncio.sleep(pause)
+                continue
+            if r.status_code == 429:
+                print(f"[ai] {model}: 429 квота/лимит: {r.text[:300]}")
+                kinds.append("quota")
+                break
+            if r.status_code >= 500:
+                print(f"[ai] {model}: HTTP {r.status_code} (перегружена, попытка {attempt + 1}): {r.text[:300]}")
+                kinds.append("down")
+                if pause is None:
+                    break
+                await asyncio.sleep(pause)
+                continue
+            if r.status_code >= 400:
+                hint = (f"404 = модель {model!r} не найдена, поменять AI_MODEL" if r.status_code == 404
+                        else "400 = Google не принял тело запроса")
+                print(f"[ai] {model}: HTTP {r.status_code} ({hint}): {r.text[:500]}")
+                kinds.append("down")
+                break
+            return _extract_text(model, r.json())
+    raise AIError("quota" if kinds and all(k == "quota" for k in kinds) else "down")
+
+
+def _extract_text(model: str, data: dict) -> str:
     cands = data.get("candidates") or []
     if not cands:
         reason = (data.get("promptFeedback") or {}).get("blockReason")
-        print(f"[ai] no candidates, blockReason={reason}: {str(data)[:300]}")
+        print(f"[ai] {model}: no candidates, blockReason={reason}: {str(data)[:300]}")
         raise AIError("filter")
     cand = cands[0]
     parts = (cand.get("content") or {}).get("parts") or []
-    text = "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
+    # «мысли» модели (thought: true) в ответ не попадают — только текст
+    text = "".join(p.get("text", "") for p in parts if isinstance(p, dict) and not p.get("thought")).strip()
     if not text:
-        print(f"[ai] empty text, finishReason={cand.get('finishReason')}: {str(cand)[:300]}")
+        print(f"[ai] {model}: empty text, finishReason={cand.get('finishReason')}: {str(cand)[:300]}")
         raise AIError("filter")
     usage = data.get("usageMetadata") or {}
-    print(f"[ai] ok: in={usage.get('promptTokenCount')} out={usage.get('candidatesTokenCount')} finish={cand.get('finishReason')}")
+    print(f"[ai] {model} ok: in={usage.get('promptTokenCount')} out={usage.get('candidatesTokenCount')} "
+          f"thoughts={usage.get('thoughtsTokenCount')} finish={cand.get('finishReason')}")
     return text
 
 

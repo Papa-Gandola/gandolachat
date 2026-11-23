@@ -301,7 +301,7 @@ print-логи видны в `docker compose logs` с опозданием (не
   в группе видит последние 20 сообщений; имя b-AI-darka). Провайдер —
   Google Gemini (бесплатный тариф AI Studio; VPS в Германии, API
   напрямую), ключ `AI_API_KEY` в `.env` (compose прокидывает `AI_API_KEY`,
-  `AI_MODEL`=gemini-2.5-flash, `AI_BOT_NAME`, `AI_DAILY_LIMIT`=60; в
+  `AI_MODEL`=gemini-3.5-flash (23.11 на проде 2.5-flash дал 404 при живом каталоге — проверять curl-ом generateContent, а не списком моделей), `AI_BOT_NAME`, `AI_DAILY_LIMIT`=60; в
   config ещё `AI_CONTEXT_MESSAGES`=30, `AI_PROVIDER`). Бот — обычный
   `users.is_bot=True` (миграция 0017), заводится при старте
   (`ensure_bot_user`: по is_bot, смена имени переименовывает, аватар «AI»
@@ -317,7 +317,17 @@ print-логи видны в `docker compose logs` с опозданием (не
   человека в памяти (`_take_quota`), лок на чат, `typing` от бота на время
   генерации. Gemini REST `v1beta/models/{m}:generateContent` с
   `x-goog-api-key`, `system_instruction`, `safetySettings` BLOCK_NONE,
-  `thinkingConfig.thinkingBudget=0` для 2.5 (иначе лишние секунды). Ошибки
+  `thinkingConfig.thinkingBudget=0` для 2.5 (иначе лишние секунды; у 3.x
+  мысли включены — `thoughtsTokenCount` в логе, части `thought: true`
+  в текст не идут). **Цепочка моделей** (`model_chain()` = `AI_MODEL` +
+  `AI_MODEL_FALLBACK` через запятую, дефолт 3.5-flash-lite,
+  3.1-flash-lite; раскатка 23.11: бесплатный тариф в час пик отвечает
+  503 «high demand», три подряд, а 429 там на КАЖДУЮ модель свой): 503/
+  5xx/сеть → паузы `RETRY_PAUSES` (2с, 4с) и повтор на той же, потом
+  следующая; 429 → сразу следующая; 404/400 → следующая без повтора;
+  фильтр → сразу «filter»; никто не ответил: все 429 → «quota», иначе
+  «down». Сырой POST — `_post(model, body)`, тест цепочки без БД —
+  scratchpad `test_ai_chain.py` (15). Ошибки
   (429/квота, блок фильтром = нет candidates или пустой text, HTTP, сеть)
   — одна из ЗАГОТОВЛЕННЫХ реплик в характере, рандомно (`QUOTA_LINES`/
   `DOWN_LINES`/`FILTER_LINES`/`LIMIT_LINES`, `pick()` с `{asker}` —

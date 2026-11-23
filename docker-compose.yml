@@ -45,7 +45,9 @@ services:
       # compose (AI_API_KEY=...). Без ключа бот есть, но отвечает «ключ не
       # настроен». Модель/имя/лимит — по желанию, дефолты в app/config.py.
       AI_API_KEY: "${AI_API_KEY:-}"
-      AI_MODEL: "${AI_MODEL:-gemini-2.5-flash}"
+      AI_MODEL: "${AI_MODEL:-gemini-3.5-flash}"
+      # Запасные модели через запятую (503 «high demand» / 429 на основной)
+      AI_MODEL_FALLBACK: "${AI_MODEL_FALLBACK:-gemini-3.5-flash-lite,gemini-3.1-flash-lite}"
       AI_BOT_NAME: "${AI_BOT_NAME:-b-AI-darka}"
       AI_DAILY_LIMIT: "${AI_DAILY_LIMIT:-60}"
     volumes:
