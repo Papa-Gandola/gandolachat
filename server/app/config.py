@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     # «ключ не настроен». Модель — строкой, чтобы менять без релиза.
     AI_PROVIDER: str = "gemini"
     AI_API_KEY: str = ""
-    AI_MODEL: str = "gemini-2.5-flash"
+    AI_MODEL: str = "gemini-3.5-flash"
     AI_BOT_NAME: str = "b-AI-darka"
     AI_DAILY_LIMIT: int = 60          # запросов в сутки (МСК) на человека
     AI_CONTEXT_MESSAGES: int = 30     # память диалога в ЛС

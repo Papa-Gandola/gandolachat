@@ -301,7 +301,7 @@ print-логи видны в `docker compose logs` с опозданием (не
   в группе видит последние 20 сообщений; имя b-AI-darka). Провайдер —
   Google Gemini (бесплатный тариф AI Studio; VPS в Германии, API
   напрямую), ключ `AI_API_KEY` в `.env` (compose прокидывает `AI_API_KEY`,
-  `AI_MODEL`=gemini-2.5-flash, `AI_BOT_NAME`, `AI_DAILY_LIMIT`=60; в
+  `AI_MODEL`=gemini-3.5-flash (23.11 на проде 2.5-flash дал 404 при живом каталоге — проверять curl-ом generateContent, а не списком моделей), `AI_BOT_NAME`, `AI_DAILY_LIMIT`=60; в
   config ещё `AI_CONTEXT_MESSAGES`=30, `AI_PROVIDER`). Бот — обычный
   `users.is_bot=True` (миграция 0017), заводится при старте
   (`ensure_bot_user`: по is_bot, смена имени переименовывает, аватар «AI»

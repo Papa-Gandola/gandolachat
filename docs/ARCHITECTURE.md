@@ -303,7 +303,7 @@ chats, poker, dota, compendium, apk_mirror, notes, polls, bugreport);
 | `DOTA_POLL_MINUTES` | 20 | интервал поллера каток |
 | `BACKUP_WEBDAV_URL/USER/PASSWORD` | None | офсайт бэкапов; пусто = только локальные дампы |
 | `BUG_REPORT_TO` | пусто | кому слать баг-репорты (compose подставляет «Papa Gandola») |
-| `AI_PROVIDER` / `AI_API_KEY` / `AI_MODEL` / `AI_BOT_NAME` / `AI_DAILY_LIMIT` / `AI_CONTEXT_MESSAGES` | gemini / пусто / gemini-2.5-flash / b-AI-darka / 60 / 30 | бот с нейросетью (`ai.py`, §6.9); без ключа бот отвечает «ключ не настроен» |
+| `AI_PROVIDER` / `AI_API_KEY` / `AI_MODEL` / `AI_BOT_NAME` / `AI_DAILY_LIMIT` / `AI_CONTEXT_MESSAGES` | gemini / пусто / gemini-3.5-flash / b-AI-darka / 60 / 30 | бот с нейросетью (`ai.py`, §6.9); без ключа бот отвечает «ключ не настроен» |
 
 `BACKUP_DIR` берётся из `os.environ` напрямую в `backups.py` (дефолт
 `/app/backups`).
