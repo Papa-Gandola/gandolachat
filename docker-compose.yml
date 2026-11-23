@@ -50,6 +50,11 @@ services:
       AI_MODEL_FALLBACK: "${AI_MODEL_FALLBACK:-gemini-3.5-flash-lite,gemini-3.1-flash-lite}"
       AI_BOT_NAME: "${AI_BOT_NAME:-b-AI-darka}"
       AI_DAILY_LIMIT: "${AI_DAILY_LIMIT:-60}"
+      # Характер бота — файл config/ai_prompt.txt рядом с compose (каталог
+      # примонтирован ниже). Правится без пересборки и без перезапуска:
+      # бот перечитывает файл на следующий вопрос. Пример и инструкция —
+      # config/ai_prompt.example.txt.
+      AI_PROMPT_FILE: /app/config/ai_prompt.txt
     volumes:
       - uploads:/app/uploads
       # Ночные дампы БД (app/backups.py). ОТДЕЛЬНЫЙ том, НЕ uploads:
@@ -58,6 +63,9 @@ services:
       # Bind-mount the web PWA bundle from the host so deploying a new build
       # is just `scp` of fresh files — no image rebuild needed.
       - ./server/web:/app/web
+      # Настройки хозяина руками (характер бота): каталог с хоста, только
+      # чтение. Файлы внутри gitignored, кроме *.example.txt.
+      - ./config:/app/config:ro
     depends_on:
       db:
         condition: service_healthy
