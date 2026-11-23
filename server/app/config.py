@@ -30,6 +30,16 @@ class Settings(BaseSettings):
     # числовые id через запятую. Пусто = всем админам. Никто из списка не
     # найден (опечатка) — лог и фолбэк на всех админов, репорт не пропадает.
     BUG_REPORT_TO: str = ""
+    # === Бот с нейросетью (app/ai.py) ===
+    # Провайдер пока один — Gemini (бесплатный тариф Google AI Studio, VPS в
+    # Германии ходит напрямую). Без AI_API_KEY бот заводится, но отвечает
+    # «ключ не настроен». Модель — строкой, чтобы менять без релиза.
+    AI_PROVIDER: str = "gemini"
+    AI_API_KEY: str = ""
+    AI_MODEL: str = "gemini-2.5-flash"
+    AI_BOT_NAME: str = "b-AI-darka"
+    AI_DAILY_LIMIT: int = 60          # запросов в сутки (МСК) на человека
+    AI_CONTEXT_MESSAGES: int = 30     # память диалога в ЛС
 
     class Config:
         env_file = ".env"

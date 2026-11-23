@@ -41,6 +41,13 @@ services:
       # игнорируется). По умолчанию — хозяину; строка BUG_REPORT_TO в .env
       # переопределяет, пустая = всем админам (см. app/api/bugreport.py).
       BUG_REPORT_TO: "${BUG_REPORT_TO-Papa Gandola}"
+      # Бот с нейросетью (app/ai.py): ключ Google AI Studio в .env рядом с
+      # compose (AI_API_KEY=...). Без ключа бот есть, но отвечает «ключ не
+      # настроен». Модель/имя/лимит — по желанию, дефолты в app/config.py.
+      AI_API_KEY: "${AI_API_KEY:-}"
+      AI_MODEL: "${AI_MODEL:-gemini-2.5-flash}"
+      AI_BOT_NAME: "${AI_BOT_NAME:-b-AI-darka}"
+      AI_DAILY_LIMIT: "${AI_DAILY_LIMIT:-60}"
     volumes:
       - uploads:/app/uploads
       # Ночные дампы БД (app/backups.py). ОТДЕЛЬНЫЙ том, НЕ uploads:

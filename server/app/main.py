@@ -65,6 +65,10 @@ async def lifespan(app: FastAPI):
 
     await asyncio.to_thread(_sync_compendium_assets)
 
+    # Бот с нейросетью: пользователь-бот + ЛС и приветствие каждому (раз)
+    from app import ai as _ai
+    await _ai.startup()
+
     from app.compendium import poller as compendium_poller
     from app import apk_mirror
 

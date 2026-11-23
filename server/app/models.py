@@ -24,6 +24,9 @@ class User(Base):
     grammar_errors: Mapped[int] = mapped_column(default=0)
     is_approved: Mapped[bool] = mapped_column(default=False)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Бот с нейросетью (app/ai.py, миграция 0017): один на инстанс, под ним
+    # никто не логинится, пуши/звонки ему не нужны.
+    is_bot: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     # === Steam / Dota link (компендиум + звание в профиле) ===

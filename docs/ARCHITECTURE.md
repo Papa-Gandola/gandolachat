@@ -162,7 +162,9 @@ gandolachat/
 
 ## 4. Прод-топология
 
-- **VPS** (~$6/мес, в РФ). Снаружи только HTTPS/WSS: хостовый **nginx +
+- **VPS** (~$6/мес, в Германии — хозяин уточнил 23.11; раньше в заметках
+  стояло «в РФ», отсюда и неверное объяснение «GitHub душится на VPS»).
+  Снаружи только HTTPS/WSS: хостовый **nginx +
   certbot** терминирует TLS для `https://2-26-117-77.sslip.io` и
   проксирует на `localhost:8000`. Порт 8000 наружу закрыт. Конфиги nginx
   и certbot живут на VPS и **в репозитории не хранятся** (проверяя
@@ -301,6 +303,7 @@ chats, poker, dota, compendium, apk_mirror, notes, polls, bugreport);
 | `DOTA_POLL_MINUTES` | 20 | интервал поллера каток |
 | `BACKUP_WEBDAV_URL/USER/PASSWORD` | None | офсайт бэкапов; пусто = только локальные дампы |
 | `BUG_REPORT_TO` | пусто | кому слать баг-репорты (compose подставляет «Papa Gandola») |
+| `AI_PROVIDER` / `AI_API_KEY` / `AI_MODEL` / `AI_BOT_NAME` / `AI_DAILY_LIMIT` / `AI_CONTEXT_MESSAGES` | gemini / пусто / gemini-2.5-flash / b-AI-darka / 60 / 30 | бот с нейросетью (`ai.py`, §6.9); без ключа бот отвечает «ключ не настроен» |
 
 `BACKUP_DIR` берётся из `os.environ` напрямую в `backups.py` (дефолт
 `/app/backups`).
@@ -319,7 +322,7 @@ identity map; перечитка — только с
 
 | Таблица | Назначение | Ключевые колонки / ограничения |
 |---|---|---|
-| `users` | пользователи | `username` unique; `password_hash` (bcrypt); `avatar_url`, `status`(50), `about`(500); `grammar_errors`, `grammar_wk_base`; `is_approved` (регистрация ждёт админа), `is_admin` (только руками в SQL); `last_seen`; Steam: `steam_id64` строкой (не влезает в JS Number), `dota_account_id` BIGINT unique, `dota_rank_tier`, `dota_leaderboard_rank`, `dota_rank_updated_at`, `dota_linked_at`, `dota_presence_visible`; косметика: `comp_max_level`, `comp_badge`, `comp_title`(40), `comp_color`(7), `comp_frame`(16), `comp_extra` JSON |
+| `users` | пользователи | `username` unique; `password_hash` (bcrypt); `avatar_url`, `status`(50), `about`(500); `grammar_errors`, `grammar_wk_base`; `is_approved` (регистрация ждёт админа), `is_admin` (только руками в SQL), `is_bot` (бот с нейросетью, один на инстанс); `last_seen`; Steam: `steam_id64` строкой (не влезает в JS Number), `dota_account_id` BIGINT unique, `dota_rank_tier`, `dota_leaderboard_rank`, `dota_rank_updated_at`, `dota_linked_at`, `dota_presence_visible`; косметика: `comp_max_level`, `comp_badge`, `comp_title`(40), `comp_color`(7), `comp_frame`(16), `comp_extra` JSON |
 | `chats` | ЛС, группы, Заметки | `name` (NULL у ЛС), `is_group`, `created_by`, `allow_all_write` (False = канал), `avatar_url`, `description`(1000), `admin_ids` — JSON-строка списка id, `compendium_enabled`, `is_notes`; частичный unique `uq_chats_notes_owner` (одни Заметки на юзера) |
 | `chat_members` | состав чата | `(chat_id, user_id)` PK, `joined_at` |
 | `messages` | сообщения | `chat_id`, `sender_id`, `content` Text (NULL у чисто файловых), `file_url`, `file_name`, `is_edited`, `reply_to_id` (SET NULL), `created_at` index, `expires_at` (не используется), `media_group_id` (альбом до 10 файлов) |
@@ -356,7 +359,8 @@ unique на `dota_account_id`; 0006 web_push_subscriptions; 0007
 закрепы; 0013 настройки покерного стола и режим «за газ»; 0014 призы;
 0015 `uq_poker_seat_user` с дедупом; 0016 `users.comp_extra` + срез
 `comp_max_level` до 12 (октябрь-2026: новая шкала, «сороковые» сентября не
-должны получить косметику 13–30 даром).
+должны получить косметику 13–30 даром); 0017 `users.is_bot` (бот с
+нейросетью).
 
 ### 6.5 Аутентификация (`auth.py`, `api/auth.py`)
 
@@ -573,7 +577,7 @@ drop_call_socket`, `broadcast_to_chat(chat_id, msg, exclude_user)`
 - **`apk_mirror.py`** — зеркало APK: качает `gandolachat.apk` из релиза
   `mobile-latest` в `uploads/apk/` (сравнение по `updated_at` в
   `meta.json`, `.part` + atomic rename, докачка через Range, 12 попыток,
-  выход сразу по счётчику байт — GitHub-CDN в РФ душат). `_parse_release_name`
+  выход сразу по счётчику байт — закачка с GitHub рвётся даже из Германии). `_parse_release_name`
   разбирает «GandolaChat Android 0.9.2 (сборка 11)» — формат имени релиза
   в Actions менять нельзя.
 - **`backups.py`** — `pg_dump -Fc` (бинарник скопирован из образа
@@ -586,6 +590,26 @@ drop_call_socket`, `broadcast_to_chat(chat_id, msg, exclude_user)`
   `backups/uploads-sync.json`. Восстановление: `pg_restore --clean
   --if-exists -h db -U gandola -d gandolachat` (затирает базу).
 - **`disk.py`** — лог места при старте.
+- **`ai.py`** — бот с нейросетью «b-AI-darka» (просьба хозяина 23.11):
+  пользователь `is_bot` заводится при старте (`ensure_bot_user`; смена
+  `AI_BOT_NAME` переименовывает, аватар «AI» рисуется pillow), каждому
+  одобренному юзеру открывается ЛС с ботом и он один раз здоровается
+  (`greet_everyone`, идемпотентно). Хук `on_user_message` из
+  `handle_message` после бродкаста → задача `_respond` со своей сессией:
+  ЛС с ботом — всегда (память `AI_CONTEXT_MESSAGES` сообщений как
+  чередование user/model), группа — только `/ai текст` (пустой `/ai` →
+  подсказка) или реплай на сообщение бота (контекст — последние 20
+  сообщений группы одним ходом «ник: текст»; карточки-маркеры и файлы
+  пропускаются). Лимит `AI_DAILY_LIMIT` в сутки МСК на человека в памяти;
+  на время генерации бот шлёт `typing`; ответ — обычное сообщение бота
+  (`post_bot_message`: WS `message` + пуш с троттлингом; в группе реплаем
+  на вопрос). Провайдер — Google Gemini REST `generateContent`
+  (`x-goog-api-key`, `system_instruction`, `safetySettings` BLOCK_NONE,
+  `thinkingBudget: 0` для 2.5): 429 / блок фильтром / сеть / нет ключа →
+  короткий честный ответ ботом + лог `[ai]`, молчания нет. Характер —
+  «жёсткая прожарка, но по делу» (`SYSTEM_PROMPT`, выбор хозяина).
+  Бесплатный тариф Google может использовать запросы для обучения — об
+  этом сказано в приветствии бота.
 - **`schemas.py`** — Pydantic-модели ответов (`UserOut`, `MeOut`,
   `ChatOut`, `MessageOut`, `PokerTableOut`/`PokerSeatOut`, …).
 
@@ -1961,7 +1985,7 @@ pywebpush в тредпуле, VAPID-ключи генерятся сами в `
   (сборка ${VCODE})"`. Prerelease — чтобы десктоп оставался «Latest».
   Формат названия парсит `apk_mirror._parse_release_name` — не менять.
   Постоянная ссылка `releases/download/mobile-latest/gandolachat.apk`;
-  людям раздаётся с VPS через `/apk` (GitHub-CDN в РФ душится).
+  людям раздаётся с VPS через `/apk` (GitHub-CDN у российских провайдеров душится).
 - Секреты: `EXPO_TOKEN`, `github.token`. На стороне EAS: file-env
   `GOOGLE_SERVICES_JSON`, опционально `APP_API_URL`/`APP_WS_URL`.
 - Тестовая сборка с ветки без публикации: Run workflow → ветка,
