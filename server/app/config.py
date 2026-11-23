@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     # на основной бот идёт по этому списку и только потом отшучивается.
     AI_MODEL_FALLBACK: str = "gemini-3.5-flash-lite,gemini-3.1-flash-lite"
     AI_BOT_NAME: str = "b-AI-darka"
+    # Файл с ХАРАКТЕРОМ бота (переопределяет DEFAULT_CHARACTER в ai.py; шапка,
+    # формат и факты о чате остаются из кода). Читается на каждый вопрос с
+    # кэшем по mtime — правка применяется без перезапуска. В compose это
+    # /app/config/ai_prompt.txt = config/ai_prompt.txt рядом с compose
+    # (каталог config примонтирован). Нет файла / пустой — дефолт из кода.
+    AI_PROMPT_FILE: str = "config/ai_prompt.txt"
     AI_DAILY_LIMIT: int = 60          # запросов в сутки (МСК) на человека
     AI_CONTEXT_MESSAGES: int = 30     # память диалога в ЛС
 
