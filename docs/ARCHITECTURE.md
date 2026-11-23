@@ -303,7 +303,7 @@ chats, poker, dota, compendium, apk_mirror, notes, polls, bugreport);
 | `DOTA_POLL_MINUTES` | 20 | интервал поллера каток |
 | `BACKUP_WEBDAV_URL/USER/PASSWORD` | None | офсайт бэкапов; пусто = только локальные дампы |
 | `BUG_REPORT_TO` | пусто | кому слать баг-репорты (compose подставляет «Papa Gandola») |
-| `AI_PROVIDER` / `AI_API_KEY` / `AI_MODEL` / `AI_BOT_NAME` / `AI_DAILY_LIMIT` / `AI_CONTEXT_MESSAGES` | gemini / пусто / gemini-3.5-flash / b-AI-darka / 60 / 30 | бот с нейросетью (`ai.py`, §6.9); без ключа бот отвечает «ключ не настроен» |
+| `AI_PROVIDER` / `AI_API_KEY` / `AI_MODEL` / `AI_MODEL_FALLBACK` / `AI_BOT_NAME` / `AI_DAILY_LIMIT` / `AI_CONTEXT_MESSAGES` | gemini / пусто / gemini-3.5-flash / gemini-3.5-flash-lite,gemini-3.1-flash-lite / b-AI-darka / 60 / 30 | бот с нейросетью (`ai.py`, §6.9); без ключа бот отвечает «ключ не настроен»; запасные модели — при 503/429 на основной |
 
 `BACKUP_DIR` берётся из `os.environ` напрямую в `backups.py` (дефолт
 `/app/backups`).
@@ -605,8 +605,15 @@ drop_call_socket`, `broadcast_to_chat(chat_id, msg, exclude_user)`
   (`post_bot_message`: WS `message` + пуш с троттлингом; в группе реплаем
   на вопрос). Провайдер — Google Gemini REST `generateContent`
   (`x-goog-api-key`, `system_instruction`, `safetySettings` BLOCK_NONE,
-  `thinkingBudget: 0` для 2.5): 429 / блок фильтром / сеть / HTTP-ошибка →
-  одна из заготовленных реплик в характере, рандомно (`QUOTA_LINES`,
+  `thinkingBudget: 0` для 2.5; части ответа с `thought: true` в текст не
+  идут). **Цепочка моделей** `model_chain()` = `AI_MODEL` + запасные из
+  `AI_MODEL_FALLBACK` (через запятую): бесплатный тариф в час пик отвечает
+  503 «high demand», а 429 там на каждую модель свой — 503/5xx/сеть →
+  паузы `RETRY_PAUSES` (2с, 4с) и повтор на той же модели, потом следующая;
+  429 → сразу следующая; 404/400 → следующая без повтора; блок фильтром
+  → сразу «filter». Никто не ответил: все отказы 429 → «quota», иначе
+  «down». Сырой POST — `_post(model, body)` (тесты подменяют). Итог
+  → одна из заготовленных реплик в характере, рандомно (`QUOTA_LINES`,
   `DOWN_LINES`, `FILTER_LINES`; исчерпанный дневной лимит —
   `LIMIT_LINES`), настоящая причина только в логе `[ai]`; нет ключа —
   явная строка про `AI_API_KEY`. Молчания нет. Характер —
