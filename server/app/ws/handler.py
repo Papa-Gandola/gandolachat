@@ -719,6 +719,13 @@ async def handle_message(data: dict, sender_id: int, db: AsyncSession):
     }
     await manager.broadcast_to_chat(chat_id, payload)
 
+    # Бот с нейросетью (app/ai.py): ЛС с ботом или /ai в группе — ответ
+    # отдельной задачей, WS-цикл не ждёт
+    try:
+        from app import ai as _ai
+        _ai.on_user_message(chat_id, msg.id, sender_id, content, reply_to_id)
+    except Exception as _ai_err:
+        print(f"[ai] hook failed: {type(_ai_err).__name__}: {_ai_err}")
     # Push notification to every chat member except the sender. Cuts long
     # messages so the OS doesn't render an awkward ellipsis halfway.
     # Wrapped: push is best-effort, must never break message sending.

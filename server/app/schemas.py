@@ -20,6 +20,7 @@ class UserOut(BaseModel):
     about: str | None = None
     grammar_errors: int = 0
     is_admin: bool = False
+    is_bot: bool = False   # бот с нейросетью (app/ai.py) — клиенты могут рисовать 🤖
     last_seen: datetime | None = None
     # Steam / Dota (компендиум): steam_id64 — строкой, число не влезает в JS number
     steam_id64: str | None = None
