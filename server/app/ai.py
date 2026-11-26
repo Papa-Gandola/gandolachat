@@ -49,7 +49,11 @@ from app.ws.manager import manager
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 GROUP_CONTEXT = 20          # сообщений группы, которые бот видит по /ai
-REPLY_MAX_TOKENS = 800
+# Потолок ТОКЕНОВ НА ОТВЕТ — у Gemini 2.5/3.x он общий с «размышлениями»
+# (thoughts): с 800 модель думала на несколько сотен, а текст обрывался на
+# полуслове (хозяин 26.11 «часто не дописывает»). 2500 хватает и подумать, и
+# на длинный ответ со списком/кодом; обычный ответ в чате — 1–4 предложения.
+REPLY_MAX_TOKENS = 2500
 REQUEST_TIMEOUT = 60.0
 RETRY_PAUSES = (2.0, 4.0)   # паузы перед повтором на той же модели при 503/сети
 MSK = timezone(timedelta(hours=3))
@@ -393,10 +397,30 @@ def _build_body(contents: list[dict], system: str, model: str) -> dict:
                       "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT")
         ],
     }
-    if model.startswith("gemini-2.5"):
-        # 2.5 «думает» по умолчанию — в чате это лишние секунды и токены
-        body["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}
+    tc = _thinking_config(model)
+    if tc:
+        body["generationConfig"]["thinkingConfig"] = tc
     return body
+
+
+# Модели, которым thinkingConfig не понравился (400): дальше шлём без него.
+_plain_models: set[str] = set()
+
+
+def _thinking_config(model: str) -> dict | None:
+    """Чем короче «размышления», тем быстрее ответ и тем больше потолка
+    остаётся на текст. 2.5 — выключаем совсем (thinkingBudget 0), 3.x —
+    минимальный уровень (thinkingLevel low; 0 там не принимается). Если
+    Google ответит 400 на сам thinkingConfig, модель попадает в
+    _plain_models и дальше идёт без него (с большим REPLY_MAX_TOKENS это
+    тоже живёт, просто медленнее)."""
+    if model in _plain_models:
+        return None
+    if model.startswith("gemini-2.5"):
+        return {"thinkingBudget": 0}
+    if model.startswith("gemini-3"):
+        return {"thinkingLevel": "low"}
+    return None
 
 
 async def _post(model: str, body: dict) -> httpx.Response:
@@ -442,6 +466,12 @@ async def gemini_generate(contents: list[dict], system: str) -> str:
                 await asyncio.sleep(pause)
                 continue
             if r.status_code >= 400:
+                if r.status_code == 400 and "thinkingConfig" in body["generationConfig"] and model not in _plain_models:
+                    # Скорее всего не принят thinkingConfig — та же модель ещё раз без него
+                    _plain_models.add(model)
+                    body = _build_body(contents, system, model)
+                    print(f"[ai] {model}: 400 с thinkingConfig — повтор без него: {r.text[:300]}")
+                    continue
                 hint = (f"404 = модель {model!r} не найдена, поменять AI_MODEL" if r.status_code == 404
                         else "400 = Google не принял тело запроса")
                 print(f"[ai] {model}: HTTP {r.status_code} ({hint}): {r.text[:500]}")
@@ -467,6 +497,9 @@ def _extract_text(model: str, data: dict) -> str:
     usage = data.get("usageMetadata") or {}
     print(f"[ai] {model} ok: in={usage.get('promptTokenCount')} out={usage.get('candidatesTokenCount')} "
           f"thoughts={usage.get('thoughtsTokenCount')} finish={cand.get('finishReason')}")
+    if cand.get("finishReason") == "MAX_TOKENS":
+        # упёрлись в REPLY_MAX_TOKENS — честно показать, что это обрыв
+        text += " …"
     return text
 
 
