@@ -35,6 +35,8 @@ mobile/google-services.plist
 # PWA-бандл на VPS (bind-mount в docker compose) и локальный симлинк на mobile/dist
 server/web
 
-# Настройки хозяина руками на VPS (характер бота и т.п.) — примеры в репо, сами файлы нет
+# config/ — файлы, которые хозяин правит прямо в GitHub (характер бота) и
+# подтягивает на VPS git pull-ом. Всё остальное в каталоге — локальное.
 config/*
+!config/ai_prompt.txt
 !config/*.example.txt

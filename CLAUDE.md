@@ -307,8 +307,10 @@ print-логи видны в `docker compose logs` с опозданием (не
   `PROMPT_FACTS` (`system_prompt()`); характер — из файла
   `AI_PROMPT_FILE` (compose: `/app/config/ai_prompt.txt` = `config/
   ai_prompt.txt` рядом с compose, каталог `./config` примонтирован `:ro`;
-  в репо только `config/ai_prompt.example.txt` с инструкцией и дефолтом,
-  остальное в `config/` gitignored), `character_text()` читает его на
+  **файл В РЕПО** — хозяин правит его прямо в GitHub (карандаш → commit в
+  main), на VPS `git pull`, руками на VPS НЕ править (конфликт pull);
+  инструкция в шапке файла; вопрос хозяина 26.11 «могу прямо в GitHub?»;
+  раньше был gitignored + example), `character_text()` читает его на
   КАЖДЫЙ вопрос с кэшем по mtime — правка без пересборки и перезапуска;
   строки с `#` — комментарии, пустой/нет файла → `DEFAULT_CHARACTER` из
   кода; `{name}` подставляется replace-ом (в тексте хозяина любые скобки).

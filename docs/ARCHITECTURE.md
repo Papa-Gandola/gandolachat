@@ -625,8 +625,9 @@ drop_call_socket`, `broadcast_to_chat(chat_id, msg, exclude_user)`
   + характер + `PROMPT_FORMAT` + `PROMPT_FACTS`; характер хозяин
   переопределяет файлом `AI_PROMPT_FILE` (в compose
   `/app/config/ai_prompt.txt`, то есть `config/ai_prompt.txt` рядом с
-  compose — каталог `./config` примонтирован только на чтение; пример и
-  инструкция `config/ai_prompt.example.txt`, сам файл gitignored).
+  compose — каталог `./config` примонтирован только на чтение; файл лежит
+  в репо: хозяин правит его прямо в GitHub, на VPS `git pull`, руками на
+  VPS не править; инструкция в шапке файла).
   `character_text()` читает файл на каждый вопрос с кэшем по mtime —
   правка применяется без пересборки и перезапуска; строки с `#` —
   комментарии; нет файла или пустой → `DEFAULT_CHARACTER` из кода.
