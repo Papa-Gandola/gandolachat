@@ -333,9 +333,14 @@ print-логи видны в `docker compose logs` с опозданием (не
   человека в памяти (`_take_quota`), лок на чат, `typing` от бота на время
   генерации. Gemini REST `v1beta/models/{m}:generateContent` с
   `x-goog-api-key`, `system_instruction`, `safetySettings` BLOCK_NONE,
-  `thinkingConfig.thinkingBudget=0` для 2.5 (иначе лишние секунды; у 3.x
-  мысли включены — `thoughtsTokenCount` в логе, части `thought: true`
-  в текст не идут). **Цепочка моделей** (`model_chain()` = `AI_MODEL` +
+  `thinkingConfig` через `_thinking_config(model)`: 2.5 — `thinkingBudget
+  0`, 3.x — `thinkingLevel low` (0 там не принимается), прочие — без;
+  400 на запрос с thinkingConfig → модель в `_plain_models` и тот же
+  запрос ещё раз без него (`thoughtsTokenCount` в логе, части
+  `thought: true` в текст не идут). **`REPLY_MAX_TOKENS`=2500 — потолок
+  ОБЩИЙ с размышлениями**: с 800 модель думала на несколько сотен и
+  обрывала текст на полуслове (хозяин 26.11 «часто не дописывает»);
+  `finishReason MAX_TOKENS` → к тексту дописывается « …». **Цепочка моделей** (`model_chain()` = `AI_MODEL` +
   `AI_MODEL_FALLBACK` через запятую, дефолт 3.5-flash-lite,
   3.1-flash-lite; раскатка 23.11: бесплатный тариф в час пик отвечает
   503 «high demand», три подряд, а 429 там на КАЖДУЮ модель свой): 503/

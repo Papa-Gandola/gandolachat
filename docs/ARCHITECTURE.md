@@ -605,8 +605,12 @@ drop_call_socket`, `broadcast_to_chat(chat_id, msg, exclude_user)`
   (`post_bot_message`: WS `message` + пуш с троттлингом; в группе реплаем
   на вопрос). Провайдер — Google Gemini REST `generateContent`
   (`x-goog-api-key`, `system_instruction`, `safetySettings` BLOCK_NONE,
-  `thinkingBudget: 0` для 2.5; части ответа с `thought: true` в текст не
-  идут). **Цепочка моделей** `model_chain()` = `AI_MODEL` + запасные из
+  `thinkingConfig` по модели: 2.5 — `thinkingBudget: 0`, 3.x —
+  `thinkingLevel: low`; 400 на него → повтор без thinkingConfig, модель
+  запоминается в `_plain_models`; части ответа с `thought: true` в текст
+  не идут). `REPLY_MAX_TOKENS` = 2500 — потолок общий с размышлениями, с
+  800 текст обрывался на полуслове; обрыв по `MAX_TOKENS` помечается
+  « …». **Цепочка моделей** `model_chain()` = `AI_MODEL` + запасные из
   `AI_MODEL_FALLBACK` (через запятую): бесплатный тариф в час пик отвечает
   503 «high demand», а 429 там на каждую модель свой — 503/5xx/сеть →
   паузы `RETRY_PAUSES` (2с, 4с) и повтор на той же модели, потом следующая;
